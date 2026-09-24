@@ -1072,7 +1072,7 @@ CREATE TABLE event_impulse_response (
   ci_low           numeric NOT NULL,
   ci_high          numeric NOT NULL,
   n_events         int NOT NULL,         -- shown wherever coef is shown. Non-negotiable.
-  pooled           boolean NOT NULL,     -- true when empirical-Bayes shrunk (§11.6)
+  pooled           boolean NOT NULL,     -- true when empirical-Bayes shrunk (§11.8)
   shrinkage        numeric,              -- 0 = raw cell estimate, 1 = fully the prior
   fitted_through   timestamptz NOT NULL,
   model_id         uuid NOT NULL REFERENCES irf_models(id),
@@ -1093,7 +1093,7 @@ CREATE TABLE irf_models (
   half_life_minutes numeric,
   cost_filter_pass boolean NOT NULL,     -- §11.5 step 4
   implied_hold_days numeric,             -- must land inside the §0.2 band
-  pre_event_flat_p numeric NOT NULL,     -- §11.8. Low p means the timestamp is lying.
+  pre_event_flat_p numeric NOT NULL,     -- §11.10. Low p means the timestamp is lying.
   placebo_percentile numeric NOT NULL,
   n_events         int NOT NULL,
   fitted_through   timestamptz NOT NULL,
@@ -1532,7 +1532,7 @@ Starting taxonomy, ordered by sample size, which is the order they should be wor
 
 The two at the top are where the statistics can actually speak: **exchange announcements** (structured, timestamped, free, and the core of the differentiation thesis) and **scheduled macro** (the only family where surprise exists as a number *before* the event, rather than being inferred afterwards).
 
-Free-text news sits at the bottom for a reason: unreliable timestamps, no deep archive, and the narrative problem of §11.8.
+Free-text news sits at the bottom for a reason: unreliable timestamps, no deep archive, and the narrative problem of §11.10.
 
 ### 11.2 Point-in-time discipline
 
@@ -1541,7 +1541,7 @@ Free-text news sits at the bottom for a reason: unreliable timestamps, no deep a
 - Source credibility is point-in-time too: a 2021 article cannot be scored with a 2026 reputation
 - **News history is not backfillable.** Feeds have no deep archive, so capture must start before it is needed — the same constraint as liquidations and open interest (§4.1)
 
-This is where a news system leaks the future most easily. §11.8 contains the test that detects it.
+This is where a news system leaks the future most easily. §11.10 contains the test that detects it.
 
 ### 11.3 Abnormal return: the benchmark
 
@@ -1580,7 +1580,7 @@ The state vector is derived from Tier 1 derivatives data already collected, so i
 
 Participation deserves the emphasis: users are not observable, and **volume is a poor proxy** because wash trading inflates it. Trade count and average trade size are far better, and both fall straight out of the trades archive at no extra cost.
 
-State enters the model as **3–5 discrete buckets**, not as continuous interactions. Sample size forbids continuous conditioning; §11.6 explains why.
+State enters the model as **3–5 discrete buckets**, not as continuous interactions. Sample size forbids continuous conditioning; §11.8 explains why.
 
 ### 11.5 The impulse response algorithm
 
@@ -1618,7 +1618,111 @@ The prior worth testing first: structural events (listing, delisting, margin cha
 
 **Step 5 — Walk-forward estimation, always.** The IRF applied at time `t` is fitted only on events with `available_at < t`, expanding window, refitted on a fixed cadence. An IRF fitted on the full sample and applied retrospectively is a textbook leak and will produce spectacular, entirely fictional results.
 
-### 11.6 Hierarchical pooling
+### 11.6 Scheduled events: anticipation, not reaction
+
+Everything above models a **shock**: information arrives at `t`, the market
+responds, the response decays. A large class of events is not shaped like that at
+all, and treating them as though they were discards most of what they offer.
+
+A token unlock, a quarterly expiry, an FOMC meeting, an ETF decision deadline, a
+protocol upgrade — for these the date is known in advance, sometimes years in
+advance. The information is not the announcement. **The information is the
+approach.** Positioning builds as the date nears, and then the date arrives and
+the uncertainty resolves.
+
+Three consequences, and each breaks an assumption made above.
+
+**Two timestamps, not one.** A scheduled event has `announced_at` — when the date
+became public — and `scheduled_for` — when it happens. §11.2's `available_at`
+covers the first and says nothing about the second, and the second is the one the
+market is looking at.
+
+**Time-to-event is the variable.** For a shock the axis is time *since*; here it
+is time *until*, and the response is a function of how close the date is. A
+feature reading "days until the next unlock in this asset" has no equivalent in
+the impulse-response machinery of §11.5.
+
+**The sign flips.** Risk appetite typically rises into a scheduled event and
+reverses at it — "buy the rumour, sell the news" names the pattern because it is
+common enough to have earned a name. A two-component exponential decay cannot
+express a build followed by a reversal; it can only describe a response that
+starts at its maximum. So the anticipation path is modelled separately:
+
+```
+E[ z(k) | scheduled event ]      for k = days until the date, k > 0
+E[ z(h) | the date passing ]     for h = hours since, using §11.5
+```
+
+and the tradeable object is usually the **discontinuity between them**, not
+either path alone.
+
+**The anticipation window is declared, never fitted.** Searching for the window
+that worked is searching for a parameter, and it is counted as one (§8.3).
+
+#### Schedules are revised, and that is a point-in-time problem
+
+The sharp version of §11.2 for this class. An unlock gets postponed, a decision
+deadline is extended, an upgrade slips. A model that uses today's schedule to
+label the past assumes the market knew a date it did not know, which is
+look-ahead bias wearing a calendar.
+
+So the schedule is versioned exactly as event content is: `schedule_revisions`
+records what the expected date was believed to be, and when that belief was
+available. A feature computing "days until the unlock" at time `t` uses the date
+that was published as of `t`, not the date it eventually happened on.
+
+This is easy to get wrong and invisible afterwards, because the labels look
+perfectly reasonable — they are simply built from a future nobody had.
+
+#### Where the sample is
+
+Same discipline as §11.1: the classes worth modelling are the ones with
+occurrences to count.
+
+| Class | Sample | Date known in advance | Mechanism |
+|---|---|---|---|
+| **Token unlocks** | hundreds, published vesting schedules | Yes, months ahead | Mechanical supply arriving |
+| Quarterly expiry | 4 a year per venue, years of them | Yes, fixed | Positioning rolls or closes |
+| Macro releases | ~70–100 per series | Yes, calendar | Consensus exists, so surprise is computable |
+| Listings | hundreds | Partially, announcement precedes listing | Access changes |
+| Halving | four, ever | Yes, by construction | No sample. Interesting, unestimable |
+
+Unlocks lead for the same reason listings led in §11.1: hundreds of occurrences,
+dates published ahead, and a mechanism that does not depend on anyone's
+interpretation — a quantity of supply arrives whether or not anybody wrote about
+it.
+
+The halving belongs in the table only to be excluded. Four occurrences cannot
+support a conditional model, and the temptation to reason about it anyway is
+exactly what §8.8 exists to resist.
+
+### 11.7 When a news item expires
+
+"How long does it last" has three distinct answers that a single decay constant
+cannot carry, and conflating them is how a model keeps trading information that
+stopped being information.
+
+**Decay** — the residual reaction shrinks with time, which is `τ_slow` in §11.5.
+Continuous, and the only one the impulse response models.
+
+**Supersession** — a later event about the same subject makes the earlier one
+stale. §11.1 already groups both under one Event ID and revises it, but a
+revision is treated there as an *update*, when often it is an *invalidation*: a
+rumoured partnership that is denied does not decay, it is cancelled. The feature
+must go to zero at the revision, not fade from it.
+
+**Resolution** — a scheduled event happens, and the anticipation it supported
+ends discontinuously whatever the outcome. Not decay, not supersession: the thing
+being anticipated no longer lies ahead.
+
+Each needs its own treatment, so `event_reactions` carries which one ended the
+signal rather than assuming time did.
+
+The practical test that separates them: **decay is a rate, the other two are
+dates.** A model with only a rate will keep a position open on an item that was
+cancelled yesterday, because its clock says there is still half-life remaining.
+
+### 11.8 Hierarchical pooling
 
 Cells are sparse and always will be. Conditioning impact on `class × state × participation` with 7 classes, 4 states and 3 participation levels gives 84 cells; at 30 events per cell that needs 2,500 events **per class**. Only listings come close.
 
@@ -1633,7 +1737,7 @@ Implementation is **empirical Bayes** (closed-form James–Stein style shrinkage
 
 `n_events` is stored alongside every coefficient and is **displayed wherever the coefficient is displayed**. A number backed by six events must never be presentable without that six being visible next to it.
 
-### 11.7 The tradeable signal
+### 11.9 The tradeable signal
 
 At prediction time, for an event observed `h_obs` ago:
 
@@ -1656,7 +1760,7 @@ AND  implied_hold(τ_slow)   ∈  [2d, 7d]     # §0.2
 
 The algorithm enforces the horizon constraint itself. A signal whose implied holding period is three hours is rejected by construction, not by discipline.
 
-### 11.8 Baselines and diagnostics
+### 11.10 Baselines and diagnostics
 
 Event studies fail in characteristic ways. Three checks, all mandatory before any IRF is usable:
 
@@ -1666,9 +1770,9 @@ Event studies fail in characteristic ways. Three checks, all mandatory before an
 
 **Shuffled class labels.** Permuting class assignments across events must collapse the IRF. If it survives, the model is fitting something that is not the event class.
 
-And the standing hazard, which no test fully removes: **the narrative fallacy.** Given any large move, financial media reliably produces an explanation. Retrospective matching of moves to headlines is overfitting with prose attached, and it is more persuasive than the numerical kind precisely because it comes with a coherent story. The residual formulation of §11.7 is the structural defence: it asks whether the reaction differed from expectation, not whether a story exists.
+And the standing hazard, which no test fully removes: **the narrative fallacy.** Given any large move, financial media reliably produces an explanation. Retrospective matching of moves to headlines is overfitting with prose attached, and it is more persuasive than the numerical kind precisely because it comes with a coherent story. The residual formulation of §11.9 is the structural defence: it asks whether the reaction differed from expectation, not whether a story exists.
 
-### 11.9 Gates
+### 11.11 Gates
 
 Before an IRF-derived feature reaches the feature engine:
 
@@ -2064,8 +2168,8 @@ Deliberately broken inputs, injected on purpose, with an expected detector for e
 | Delisted assets silently dropped from the universe | Survivorship generator comparison |
 | Fee tier set to zero | Cost sensitivity sweep flags implausible cost-free profitability |
 | `studies.executed_trials` reset mid-campaign | Monotonicity constraint at the database level |
-| Event timestamps shifted earlier by one hour | **Pre-event flatness** (§11.8): the IRF stops being flat before `h=0`. This is the canary that proves `available_at` is honest |
-| IRF fitted on the full sample, applied retrospectively | Walk-forward gate (§11.9): the full-sample IRF beats the walk-forward one implausibly |
+| Event timestamps shifted earlier by one hour | **Pre-event flatness** (§11.10): the IRF stops being flat before `h=0`. This is the canary that proves `available_at` is honest |
+| IRF fitted on the full sample, applied retrospectively | Walk-forward gate (§11.11): the full-sample IRF beats the walk-forward one implausibly |
 
 Two rules govern this set:
 
@@ -2278,7 +2382,7 @@ Split by urgency, because one part is already losing history:
 - **With 4b**: listing events are the one class with hundreds of occurrences, so
   they enter the research campaign directly rather than waiting.
 - **After 4b**: local projections, two-component decay fitting, hierarchical
-  pooling, and the §11.9 gates.
+  pooling, and the §11.11 gates.
 
 **Exit**: for at least one event class, `τ_slow` has a confidence interval
 excluding zero, pre-event flatness passes, the impulse response beats the placebo
