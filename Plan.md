@@ -104,6 +104,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 30 | Single operator collapses the roles, removing the separation of duties that stopped a threshold being lowered and used the same day. | Replaced with a temporal control: a 24h cooling-off before an approval may cite a relaxed gate, enforced in the approval path rather than the interface. See §20.3. |
 | 29 | Operator interface never specified: no screens, no auth design, and an unresolved Grafana/application boundary. | Screen inventory by phase, the boundary rule, identity as an audit-trail requirement, and mode made non-editable by construction. See §20. |
 | 28 | No limit on concurrent open positions in the enforced risk config, and no minimum position size at all. | `max_open_positions`, `max_positions_per_cluster`, `min_position_notional`; minimum viable size derived as `max(min_notional, lot_size x price)` point-in-time, and a floor added to the capital ramp. See §14.1. |
 | 27 | Price levels and multi-asset selection absent, though both are how the system is meant to be operated. | Level families with declared confirmation windows, and a hard boundary between a backtestable selection rule and picking the winner. See §6.2, §6.3. |
@@ -607,6 +608,9 @@ CREATE TABLE gate_configs (
   thresholds      jsonb NOT NULL,        -- dsr_pvalue_max, pbo_max, min_oos_trades, ...
   rationale       text NOT NULL,         -- why it changed. Required.
   changed_by      uuid REFERENCES users(id),
+  -- An approval may not cite a config younger than 24h (§20.3). With one
+  -- operator this is what replaces separation of duties: relaxing a threshold is
+  -- allowed, acting on it the same day is not.
   valid_from      timestamptz NOT NULL,
   valid_to        timestamptz
 );
@@ -1086,10 +1090,12 @@ CREATE TABLE irf_models (
 ### 5.6 Platform (3 tables)
 
 ```sql
+-- One row. Exists so approvals and the audit log have a real actor to reference,
+-- not to manage access (§20.3).
 CREATE TABLE users (
   id              uuid PRIMARY KEY,
   email           text NOT NULL UNIQUE,
-  role            text NOT NULL,         -- researcher | operator | admin
+  role            text NOT NULL DEFAULT 'admin',
   created_at      timestamptz NOT NULL DEFAULT now()
 );
 
@@ -2163,7 +2169,7 @@ Real-money trading **is** a goal, but it is the end of the ladder in §12, not a
 | Expecting income before evidence exists | §0.3 states the realistic timeline and return band up front; the capital ramp (§14.5) makes early size impossible by construction |
 | Maker strategies inflated by ignored adverse selection | Modelled explicitly in the cost model; promotion requires pessimistic-fill viability (§9.5) |
 | Losing the registry and with it every trial counter | WAL archiving plus quarterly restore drill verifying bit-identical reproduction (§16.10) |
-| Caving to "nothing clears the filters" | Versioned thresholds; changing them is an audited, reviewed event |
+| Caving to "nothing clears the filters" | Versioned thresholds with a mandatory rationale, plus a 24h cooling-off before an approval may rely on a relaxed one (§20.3) |
 | Jumping from simulator straight to live | Testnet rung mandatory in the state machine; no transition bypasses it |
 | State desynchronised from the exchange | Periodic and startup reconciliation; discrepancy → halt, never self-correction |
 | A capital tier too small to open the intended positions | L0 floored at `positions_target x min_viable`; if that exceeds the target, the strategy is declared undeployable before the ramp rather than after it fails |
@@ -2208,13 +2214,33 @@ What the interface actually does is *request* a transition. The request lands in
 
 The mode of a running strategy is therefore **displayed, never edited**, and it is displayed prominently: mistaking simulator for live is the error this design is most concerned with.
 
-### 20.3 Login, and why a single operator still needs one
+### 20.3 A single operator, and the control that replaces separation of duties
 
-Not to keep strangers off a service bound to localhost. Because `approvals.approved_by` is `NOT NULL` and §15 states that no transition is manual without a record. **Identity is a correctness requirement of the audit trail**, not a security nicety, and it stays one when the user count is one.
+The system has **one user, with the `admin` role**. No user management, no invitations, no permission matrix: a single credential from configuration, and `users` holds one row so that `approvals.approved_by` and `audit_log.actor` have something real to point at.
 
-- Sessions are short-lived; `audit_log` records actor, action and subject for every write
-- Roles from §5.6: `researcher` may read everything and request transitions; `operator` may approve up to `candidate → simulator`; `admin` may approve capital-tier advances and change `gate_configs`
-- Changing a gate threshold requires `gate_configs.rationale`, which is `NOT NULL`. The field is a text box the operator must fill, and lowering a bar is therefore always accompanied by the reason, attached to every verdict issued under it.
+Authentication stays, but its purpose changes. With one identity it is not establishing *who*; it is a deliberate act before a decision can be recorded, and it keeps the surface closed if the port ever stops being local. Sessions are short-lived and `audit_log` records actor, action and subject for every write.
+
+What matters is what is *lost* by collapsing the roles, because it is not nothing.
+
+With separate `operator` and `admin` roles, one person lowering a gate threshold and a different person approving under it was a separation of duties. With one admin, **nothing prevents lowering the bar and approving three minutes later** — and that loop is the characteristic failure of a solo quant, the one §15 calls the most common way a laboratory stops being one. A `rationale` text box does not stop it: you will write a sincere-sounding reason, because at that moment you will believe it.
+
+So the separation becomes **temporal rather than social**:
+
+**Cooling-off on gate changes.** An approval may not cite a `gate_config` whose `valid_from` is less than **24 hours** old. Lowering a threshold is permitted; acting on the lowered threshold the same day is not. The constraint is enforced in the approval path, not in the interface, so it cannot be clicked past.
+
+```sql
+-- rejected: the gate this approval relies on was relaxed too recently
+CHECK (now() - (SELECT valid_from FROM gate_configs g
+                WHERE g.id = gate_config_id) >= interval '24 hours')
+```
+
+Three supporting properties, all already in the schema:
+
+- `gate_configs.rationale` is `NOT NULL`, and every `validation_report` records the `gate_config_id` it was judged under — so a verdict always carries which bar it cleared
+- `lifecycle_transitions.evidence` snapshots the criteria as evaluated, so a later reading shows what was true at the moment, not what is true now
+- `audit_log` preserves the sequence, which is what makes "threshold lowered 14:02, approval 14:05" legible six months later
+
+The point of an approval step with one operator is not that someone else checks the work. It is that **the decision is separated in time from the result that motivated it**, and that the separation is recorded. Twenty-four hours is short enough not to obstruct real work and long enough to outlast the feeling that produced the change.
 
 ### 20.4 Screens
 
@@ -2223,6 +2249,7 @@ Ordered by the phase that needs them, so none is built before there is something
 | Screen | Shows | Writes | Phase |
 |---|---|---|---|
 | **Sign in** | — | session, `audit_log` | 4 |
+| **Audit** | Sequence of threshold changes, approvals and transitions, with elapsed time between them | — | 4 |
 | **Home** | Running runs by mode, open alerts, capital tier, blocking data-quality issues | — | 4 |
 | **Universe** | Configured assets, point-in-time `tick_size`/`lot_size`/`min_notional`, computed `min_viable` (§14.1), listing dates | deployed asset set | 4 |
 | **Strategies** | Lifecycle state, gate status per criterion, cluster membership (§13.1) | transition requests | 4 |
