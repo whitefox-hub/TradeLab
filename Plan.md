@@ -108,6 +108,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 37 | Walk-forward was specified and absent, so non-stationarity had no treatment and the only answer to "seven years is a lot" was to cut the window — which costs power without fixing the problem. | Rolling and anchored walk-forward with purge gaps, accumulating trials across windows, reporting parameter churn. On real BTCUSDT it returned −0.37 with 40% churn where a single split had shown +0.53. See §8.1. |
 | 36 | §8.6's resampling was described but absent, leaving §14.6's "a drawdown inside the validated distribution is not evidence of failure" with no distribution to consult. | Stationary bootstrap, trade-reordering drawdown distribution and price jitter. The iid alternative was measured and produces intervals narrow enough to change verdicts. See §8.6. |
 | 35 | Parameter stability was described but never implemented, though §15 lists it as a gate. | Surface analysis that promotes the neighbourhood median rather than the selection-biased peak, and chooses the centre of the best region rather than the best point. See §8.5. |
 | 34 | Overlapping labels were counted as independent observations, inflating the effective sample by up to 218× and every significance figure with it. | Concurrency-based uniqueness; the engine reports `effective_n` and the statistics take it instead of the bar count. The phase 3 exit criterion still passes, now under the stricter condition. See §7. |
@@ -1309,7 +1310,16 @@ The heart of the system. No result leaves the lab without passing through here.
 
 - Train / validation / test strictly ordered in time
 - **Frozen OOS**: defined once, up front, and touched as little as possible. Every OOS query is recorded in `oos_access_log`. An OOS you look at a hundred times stops being OOS.
-- Anchored and rolling walk-forward, with periodic retraining
+- **Anchored and rolling walk-forward**, with periodic retraining. Both are worth running: anchored asks whether more history helps, rolling asks whether old history still applies, and disagreement between them is itself a finding about stationarity.
+
+Walk-forward is what resolves the tension between sample size and regime relevance, and the instinct to resolve it by using less history is the wrong trade. Measured on this data, cutting seven years to one raises the smallest resolvable effect by **2.7×** — 0.060 to 0.161 — without addressing non-stationarity at all; it merely picks one regime instead of averaging several. Walk-forward uses the whole history while never assuming one relationship spans it.
+
+Two outputs, and the second is the one that gets overlooked:
+
+- **The concatenated out-of-sample track record.** A genuine result rather than a split someone chose.
+- **The sequence of selected parameters.** If every window picks something different, there is no stable relationship to trade. A strategy can post a respectable walk-forward return while its parameters wander, and in that case the return came from re-selecting rather than from anything the parameters describe. `parameter_churn` reports it.
+
+The trial count accumulates across windows: each spends its own, and the total deflates the final Sharpe. On the seven-year BTCUSDT run that was 3,024 trials rather than the 504 of a single window, and counting only the last would have lowered the bar by about 20%.
 
 ### 8.2 CPCV with purging and embargo
 

@@ -45,6 +45,7 @@ class StudySpec:
     costs: CostModel = BINANCE_RETAIL
     min_detectable_sharpe: float | None = None
     oos_fraction: float = 0.3
+    years: float | None = None      # None uses the whole archive
 
     @property
     def planned_trials(self) -> int:
@@ -62,17 +63,35 @@ class StudyResult:
     stability: dict = field(default_factory=dict)
     robustness: dict = field(default_factory=dict)
     pbo: float | None = None
+    # Every screened configuration. Written to Parquet, never to Postgres (§5.7),
+    # but retained so a verdict citing N trials can be checked against N rows
+    # rather than taken on trust.
+    tier_a_rows: list[dict] = field(default_factory=list)
 
     @property
     def verdict(self) -> Verdict:
         return self.gate.verdict
 
 
-def load_bars(root: Path, asset: str, timeframe: str = "1h", limit_days: int | None = None):
+def load_bars(
+    root: Path, asset: str, timeframe: str = "1h",
+    years: float | None = None, limit_days: int | None = None,
+):
     """Resample the 1m archive to the study timeframe.
 
     Derived, not stored (§5.7), and the day boundary is UTC because funding
     settles on UTC marks.
+
+    `years` trims to the most recent span. It is offered because the tension is
+    real — 2020 crypto is not the market of 2026, and a strategy validated
+    against a regime that no longer exists is validated against nothing — but it
+    is worth knowing what it costs. The detectable floor of §8.8 scales roughly
+    as 1/sqrt(n): halving the history raises the smallest resolvable effect by
+    about 40%, on a search that already came back underpowered at seven years.
+
+    Shortening the window is therefore not the way to make a study easier. The
+    resolution for non-stationarity is walk-forward (§8.1), which uses all the
+    history without ever assuming one regime spans it.
     """
     from tradelab.storage.query import aggregate_bars
 
@@ -83,6 +102,8 @@ def load_bars(root: Path, asset: str, timeframe: str = "1h", limit_days: int | N
         .drop("event_time", "available_at")
         .rename({"bucket": "event_time"})
     )
+    if years is not None:
+        limit_days = int(years * 365)
     if limit_days:
         bars = bars.tail(limit_days * _bars_per_day(timeframe))
     return bars.drop_nulls(subset=["open", "high", "low", "close"])
@@ -168,6 +189,17 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             "ci_excludes_zero": interval.excludes_zero,
         }
 
+    tier_a_rows = [
+        {
+            "period": p["period"], "entry": p["entry"],
+            "sharpe": r.sharpe, "gross_sharpe": r.gross_sharpe,
+            "n_trades": r.n_trades, "turnover": t,
+            "effective_n": r.effective_n, "max_drawdown": r.max_drawdown,
+            "config_hash": f"{spec.name}:{p['period']}:{p['entry']}",
+        }
+        for p, r, t in zip(params, results, turnover, strict=True)
+    ]
+
     return StudyResult(
         spec=spec, executed_trials=executed, n_bars=len(close), best=best,
         best_params=stability.peak_params, gate=gate, pbo=pbo.pbo,
@@ -178,6 +210,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             "plateau_width_period": plateau_width(surface, "period"),
         },
         robustness=robustness,
+        tier_a_rows=tier_a_rows,
     )
 
 
