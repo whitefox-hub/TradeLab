@@ -1,0 +1,169 @@
+# TradeLab — Plan.md §2.2
+#
+# `docker compose up` starts the research stack and CANNOT start the executor.
+# Reaching a venue requires naming a profile explicitly:
+#   docker compose --profile simulator up
+#   docker compose --profile testnet   up
+#   docker compose --profile live      up
+
+x-determinism: &determinism
+  # Float reduction order depends on thread count. Pinning these is what makes the
+  # golden run bit-identical across machines with different core counts (§2.2).
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  RAYON_NUM_THREADS: "4"
+  POLARS_MAX_THREADS: "4"
+  NUMBA_NUM_THREADS: "4"
+  TZ: "UTC"
+
+x-db: &db
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-tradelab}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_locally}
+  POSTGRES_DB: ${POSTGRES_DB:-tradelab}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tradelab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_locally}
+      POSTGRES_DB: ${POSTGRES_DB:-tradelab}
+      TZ: UTC
+    # Default 64MB causes parallel query failures that surface as unrelated errors (§2.2)
+    shm_size: 1g
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tradelab} -d ${POSTGRES_DB:-tradelab}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [lab_net]
+
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-tradelab}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_locally}
+    volumes:
+      - artifacts:/data
+    ports: ["9000:9000", "9001:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 10
+    networks: [lab_net]
+
+  migrate:
+    build: {context: ., dockerfile: docker/compute.Dockerfile}
+    image: tradelab-compute
+    environment:
+      <<: [*determinism, *db]
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [lab_net]
+    restart: "no"
+
+  runner:
+    build: {context: ., dockerfile: docker/compute.Dockerfile}
+    image: tradelab-compute
+    environment:
+      <<: [*determinism, *db]
+      TRADELAB_ARCHIVE_ROOT: /data/parquet
+    volumes:
+      # One copy per machine, memory-mapped read-only by every worker (§9.6)
+      - archive:/data/parquet:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {cpus: "4", memory: 8g}
+    networks: [lab_net]
+
+  collector:
+    build: {context: ., dockerfile: docker/compute.Dockerfile}
+    image: tradelab-compute
+    environment:
+      <<: [*determinism, *db]
+      TRADELAB_ARCHIVE_ROOT: /data/parquet
+    volumes:
+      - archive:/data/parquet          # writable: this one ingests
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [lab_net]
+
+  api:
+    build: {context: ., dockerfile: docker/api.Dockerfile}
+    image: tradelab-api
+    environment:
+      <<: *db
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [lab_net]
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      TZ: UTC
+    volumes: [grafana:/var/lib/grafana]
+    ports: ["3000:3000"]
+    networks: [lab_net]
+
+  # ---------------------------------------------------------------------------
+  # Execution. Behind profiles: a bare `docker compose up` never starts these.
+  # ---------------------------------------------------------------------------
+  executor:
+    build: {context: ., dockerfile: docker/exec.Dockerfile}
+    image: tradelab-exec
+    profiles: [simulator, testnet, live]
+    environment:
+      <<: *db
+      # Empty by default. The executor refuses to start without an explicit mode;
+      # the guard lives in application code, not in YAML interpolation, so that a
+      # bare `docker compose config` still validates.
+      TRADELAB_MODE: ${TRADELAB_MODE:-}
+    read_only: true
+    tmpfs: [/tmp]
+    secrets: [venue_key]                 # file mount, never an env var (§14.4)
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [lab_net, exec_net]
+
+  risk_engine:
+    build: {context: ., dockerfile: docker/exec.Dockerfile}
+    image: tradelab-exec
+    profiles: [simulator, testnet, live]
+    command: ["python", "-m", "tradelab.risk.engine"]
+    environment:
+      <<: *db
+    read_only: true
+    tmpfs: [/tmp]
+    # Must survive the process it polices. A kill switch that dies with its
+    # target is not a kill switch (§2.1).
+    restart: always
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [lab_net, exec_net]
+
+volumes:
+  pgdata:
+  artifacts:
+  archive:
+  grafana:
+
+networks:
+  lab_net:
+  exec_net:
+
+secrets:
+  venue_key:
+    file: ./secrets/venue_key

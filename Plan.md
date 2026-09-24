@@ -1,0 +1,2192 @@
+# TradeLab — Quantitative Research, Simulation and Trading Platform
+
+> Architecture specification. Supersedes the original brief, which is preserved verbatim in Appendix A.
+> Status: proposal, pre-implementation.
+
+---
+
+## 0. The question
+
+The entire system exists to answer one question with statistical honesty:
+
+> **Do we have sufficient evidence that this strategy works out-of-sample, across different market regimes, after discounting the number of hypotheses we have tested?**
+
+That last clause was missing from the original brief and it reshapes the whole design. If you test a million combinations, the best of them will show a spectacular Sharpe ratio **even if the data is pure noise**. A lab that does not keep count of how many hypotheses it has evaluated is not a lab: it is a false-positive generator with a lot of infrastructure around it.
+
+Design corollary: **the trial counter is a first-class citizen of the system**, on par with the data and the results.
+
+### 0.1 Time horizon — the decision that constrains everything else
+
+The brief never fixed a holding period, and almost every parameter downstream depends on it: bar resolution, label horizon, purge size, which data sources matter, the latency budget, the cost model, and above all whether an edge is verifiable at all.
+
+It is not a matter of taste. Two constraints squeeze from opposite directions and their intersection is narrow.
+
+**Constraint 1 — costs rise as the horizon shortens.** Liquid perpetual majors, retail fee tier, all-in round trip (taker fees both sides + spread + slippage) ≈ **0.12%**. Assuming a position is held continuously:
+
+| Average hold | Round trips / year | Annual cost drag | Verdict |
+|---|---|---|---|
+| 4 hours | ~1,500 | ~180% | Dead on arrival without maker fills and an exceptional edge |
+| 12 hours | ~500 | ~60% | Very demanding |
+| 1 day | ~250 | ~30% | Possible with a genuine edge |
+| 2–3 days | ~85–125 | ~10–15% | Comfortable |
+| 5 days | ~50 | ~6% | Comfortable |
+| 1 month | ~12 | ~1.4% | Costs irrelevant |
+
+**Constraint 2 — statistical power falls as the horizon lengthens.** Usable perpetuals history is roughly 2019 onward, so six to seven years. The sample that matters is **non-overlapping trades**, and crypto cross-sectional correlation (~0.7–0.8 against BTC) means 20 assets behave closer to 3–4 independent ones:
+
+| Average hold | Nominal trades, 20 assets × 6 yr | Effective independent | Verdict |
+|---|---|---|---|
+| 1 day | ~30,000 | ~5,000+ | Ample |
+| 2–3 days | ~12,000 | ~2,500 | Sufficient |
+| 1 week | ~6,000 | ~1,200 | Workable |
+| 1 month | ~1,440 | ~300, heavily overlapping | Below the §8.8 floor |
+| 3+ months | ~480 | ~100 | Unverifiable. Also mostly BTC beta in disguise |
+
+The two tables intersect at **holding periods of roughly 1 to 7 days**.
+
+### 0.2 The decision
+
+| Band | Hold | Status |
+|---|---|---|
+| Ultra-short / HFT | < 1 minute | **Excluded.** Requires colocation and competes against firms with structurally better latency. Out of scope per §19 |
+| Short / intraday | 1 min – 4 h | **Excluded as a primary target.** Cost drag of 60–180%/yr is not recoverable at retail fee tiers. Revisitable only if maker execution is proven and fee tiers improve |
+| **Medium / swing** | **1 – 7 days, centred on 2–3** | **PRIMARY TARGET** |
+| Long / position | > 3 weeks | **Excluded as a research target.** Not enough independent observations to validate; returns are dominated by BTC beta, which is obtainable by holding BTC at zero research cost |
+
+Signals are evaluated on **1h and 4h bars**, with 15m available for entry timing. Triple-barrier maximum holding (§7) is set in the 1–7 day range, which in turn fixes the purge and embargo sizes in §8.2.
+
+Why this band is also where the edge plausibly lives, not merely where the arithmetic permits it: the data this project is built around has its signal at exactly this frequency. Funding settles every 8 hours. Liquidation cascades resolve over hours. Open-interest build-ups and unwinds run over days. News reaction residuals (§11.3) decay over hours to days. None of that is visible at monthly horizons — it has already averaged out — and none of it is tradeable at second horizons without L3 microstructure and colocation. The market's own clock, for the features in this plan, runs at hours to days.
+
+Practical consequences, applied throughout: latency budget is hundreds of milliseconds, not microseconds, so no colocation and no exotic infrastructure; L2 order book drops from critical to useful (§4.5), which is what keeps storage tractable; and funding, OI, liquidations and basis move to the top of the data priority list, where they already sit in §4.1.
+
+### 0.3 What "profitable" realistically means here
+
+Stated plainly, because the number matters more than the ambition.
+
+**Expected outcome for a strategy that honestly clears §8**: out-of-sample Sharpe of 0.7–1.3, and plan for a 30–50% haircut between backtest and live. At a 15–20% annualised volatility target that is roughly **10–20% per year, with drawdowns of 15–25%**. A validated strategy showing backtested Sharpe above 2.5 at this horizon is far more likely to be a leak than a discovery, and §8 exists to catch it.
+
+**Base rate**: most hypotheses fail. Expect a low single-digit percentage of tested ideas to survive honest validation, and expect some of those to decay within a year (§14.6). This is the normal state of the field, not a sign the lab is broken.
+
+**Profit is return × capital.** A 15% year on €10,000 is €1,500. No architecture changes that. What the lab produces in its first year is not income — it is a *verified* edge and the machinery to keep finding more. That edge scales with capital up to the joint capacity ceiling (§13.5), which at this horizon and in liquid majors sits far above any realistic starting capital, so capacity will not be the binding constraint early. Capital will be.
+
+**Timeline to the first euro**: phases 0–4 are roughly 4–6 months before a strategy can even be a candidate, then 60 days of simulator and 2 weeks of testnet before real money. Anything promising profitability sooner is skipping the validation, and the strategies that skip it are the ones that lose money live while looking excellent in the backtest.
+
+This section is the honest answer to "I want profitability": the fastest route to *profit* is not the fastest route to *evidence*, and without evidence there is no profit, only variance that has not revealed itself yet.
+
+---
+
+## 1. What changed from the original brief
+
+The original brief points in the right direction. These are the gaps found and how they are closed.
+
+| # | Gap | Fix |
+|---|---|---|
+| 1 | No *multiple testing* control. It asks for "millions of combinations" and for anti-overfitting, but never connects the two. | Deflated Sharpe Ratio, PBO, Hansen SPA and Romano-Wolf. Trial count is a mandatory input. See §8. |
+| 2 | No *purging* or *embargo* in cross-validation. | CPCV with purging and embargo. A naive temporal split leaks information through overlapping labels. See §8.2. |
+| 3 | **What is being predicted** is never defined. It jumps from features straight to "rules". | Explicit labeling layer: triple barrier, meta-labeling, horizons. See §7. |
+| 4 | No *null baselines*. "Good results" is not defined against anything. | Every experiment is compared against buy & hold, matched random entry and permuted signal. See §8.4. |
+| 5 | No compute budget. A million event-driven backtests is not viable. | Multi-stage funnel with explicit cost. See §9. |
+| 6 | A single timestamp per record → silent *look-ahead bias*, especially in news and macro. | `event_time` / `ingest_time` / `available_at` on every source. See §4.3. |
+| 7 | Survivorship bias mentioned but not solved. | Point-in-time universe with listings and delistings. See §4.4. |
+| 8 | Raw order book with no volume plan. That is TB/year. | Derived features are persisted; raw is capped to a short window and few assets. See §4.5. |
+| 9 | TimescaleDB as the primary store. | Postgres for the registry, Parquet+DuckDB for the analytical archive, Timescale only for the hot window. See §3. |
+| 10 | No lifecycle and no promotion *gates*. | Strategy state machine with hard criteria. See §15. |
+| 11 | "Compare backtest vs paper" with no mechanism. | Same engine for both (nautilus_trader) plus a statistical divergence test. See §12. |
+| 12 | MVP phases without acceptance criteria. | Every phase has a verifiable exit condition. See §18. |
+| 13 | No data-leakage tests. | *Leakage canaries*: deliberately cheating features the suite must catch. See §16.5. |
+| 14 | Live trading was a non-goal; it is now the destination, but "simulator → production" is only two rungs. | Four-mode ladder: backtest → simulator → testnet → live, with a capital ramp. See §12 and §14.5. |
+| 15 | No risk controls or kill switch — mandatory the moment real money is involved. | Hard limits in an independent component, active from mode 1; state reconciliation; dead man's switch. See §14. |
+| 16 | "Tuning parameters in the simulator" re-optimises on the live period and destroys the validation. | Explicit boundary between what is tunable in operation and what forces a return to the funnel. See §12.4. |
+| 17 | Everything was single-strategy. A production book of N strategies can be one bet in disguise. | Portfolio layer: return-correlation clustering, HRP allocation, portfolio-level trial counting, joint capacity. See §13. |
+| 18 | "Sustained degradation" was undefined, so retirement decisions would be made on feeling. | Pre-registered sequential test (CUSUM/SPRT) against the validated return distribution, conditioned on regime. See §14.6. |
+| 19 | No statistical power analysis. Some edges are undetectable with 6–8 years of data regardless of compute. | Minimum detectable effect fixed before the search; searches below it are not run. See §8.8. |
+| 20 | Cost model described only by its inputs; adverse selection on maker fills omitted entirely. | Full cost model spec, versioned in `cost_models`; promotion requires viability under pessimistic fills. See §9.5. |
+| 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
+| 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
+| 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 27 | Price levels and multi-asset selection absent, though both are how the system is meant to be operated. | Level families with declared confirmation windows, and a hard boundary between a backtestable selection rule and picking the winner. See §6.2, §6.3. |
+| 26 | News handled as classification and magnitude only — no duration, no participation, no state conditioning, and no test of whether an effect outlives its trading costs. | Impulse response via local projections, two-component decay, in-house point-in-time state index, and a cost filter that rejects fast-decaying classes automatically. See §11.5. |
+| 24 | Tests were scattered and framed as ordinary software testing, which catches none of the bugs that matter here. | Seven-layer suite built on invariants, synthetic ground truth and adversarial canaries; canary catch rate replaces coverage as the release criterion. See §16.2–§16.8. |
+| 25 | Docker mentioned but not specified, although `image_digest` is already part of the reproducibility contract. | Three images split along the credential boundary, digest pinning, thread counts pinned for bit-identical results, execution behind compose profiles. See §2.2. |
+
+---
+
+## 2. Stack
+
+| Layer | Technology | Rationale |
+|---|---|---|
+| Language | Python 3.12+, deps via `uv` | The only ecosystem with the statistics this project needs |
+| Dataframes | **Polars** | Lazy, multithreaded, Parquet-native, predicate pushdown |
+| Registry / operational | **PostgreSQL 16 + pgvector** | Referential integrity plus embeddings where the joins happen |
+| Analytical archive | **Parquet (zstd, Hive) + DuckDB** | The real backtest engine; immutable and hash-versionable |
+| Hot window | **TimescaleDB** (from phase 5 only) | Live ingestion + continuous aggregates |
+| Artifacts | **MinIO** → S3 | Equity curves, blotters, feature matrices, models |
+| Orchestration and lineage | **Dagster** | Software-defined assets *are* dataset versions. Lineage comes free |
+| Backtest tier A | In-house vectorized engine (Polars/NumPy/Numba) | Cheap mass screening |
+| Tier B, simulator, testnet and live | **nautilus_trader** | Rust core, event-driven; the same code runs backtest → simulator → testnet → live |
+| Statistics | `scipy`, `statsmodels`, `arch`, `scikit-learn` | DSR, PBO, SPA, stationary bootstrap, CPCV |
+| NLP | `sentence-transformers`, HDBSCAN, LLM with strict JSON schema | Event clustering and structured extraction |
+| API / UI | FastAPI + SQLAlchemy + Alembic, React front end | Browsable registry, experiment comparison, lifecycle |
+| Dashboards | **Grafana** over Postgres | Equity, ingestion health, drift. Zero charting code |
+| Exploration | **marimo** | Reactive notebooks as plain `.py`, diffable, no hidden state |
+| Environment | Docker Compose, three images pinned by `sha256` digest | The image is an input to the result, not a deployment detail (§2.2) |
+| Tests | `pytest` + `xdist` + markers, `hypothesis`, `pytest-benchmark` | Seven-layer suite (§16.2): temporal invariants, synthetic ground truth, canaries, golden runs |
+
+**Laravel** is kept out of the core for one concrete reason: in a hybrid architecture the core domain objects (`experiment`, `dataset_version`, `feature_definition`, the parameter contract) would exist twice and would drift. In an ordinary CRUD app that is an annoying bug; here it produces an experiment that **claims** to be reproducible and is not. See Appendix B for the Laravel variant if the decision is imposed externally.
+
+### 2.1 Component map
+
+Seven services with hard boundaries. Nothing calls across a boundary except through the interfaces named here.
+
+| Service | Responsibility | Reads | Writes |
+|---|---|---|---|
+| `collectors` | One process per source. Backfill + stream + validate | Venue APIs | Parquet archive, `data_quality_issues` |
+| `feature_engine` | Materialises feature matrices per (dataset, feature_set) | Parquet, `feature_definitions` | Parquet (features), artifact store |
+| `experiment_runner` | Tier A/B/C execution, stateless workers | Parquet, registry | `experiments`, `experiment_results` |
+| `validator` | Statistics only. Never runs a backtest | `experiment_results`, `studies` | `validation_reports` |
+| `executor` | The only service that talks to a venue for trading | Live feed, registry | `runs`, `orders`, `fills` |
+| `risk_engine` | Independent veto. Cannot be bypassed by a strategy | `runs`, positions | halts, `position_reconciliations` |
+| `api` | FastAPI + UI. Read-heavy; writes only approvals | Registry | approvals, lifecycle transitions |
+
+Two boundaries matter more than the rest:
+
+- **`validator` never runs a backtest, `experiment_runner` never computes a verdict.** Keeping measurement apart from judgement is what stops "the number came out low, let me adjust how it is computed."
+- **`risk_engine` is a separate process from `executor`.** If it lived inside the strategy runtime, a bug in the strategy could disable it — and a kill switch that dies with the thing it is killing is not a kill switch.
+
+Repository layout:
+
+```
+tradelab/
+  collectors/        one module per source, all implementing Collector
+  storage/           Parquet layout, manifests, DuckDB session helpers
+  features/          registry + definitions, one file per family
+  labeling/          triple barrier, meta-labeling, sample weights
+  engines/
+    tier_a/          vectorized screening
+    tier_b/          nautilus adapters, cost models
+  validation/        CPCV, DSR, PBO, SPA, baselines, power
+  portfolio/         correlation, allocation, aggregate capacity
+  execution/         executor, venue adapters, reconciliation
+  risk/              limits, kill switch, degradation tests
+  registry/          SQLAlchemy models, Alembic migrations
+  orchestration/     Dagster assets and jobs
+  api/               FastAPI + schemas
+  research/          marimo notebooks (never imported by anything above)
+```
+
+`research/` depends on everything; nothing depends on `research/`. It is where exploration happens and where nothing is allowed to become load-bearing.
+
+### 2.2 Containerisation
+
+Docker here is not a deployment convenience. `experiments.image_digest` and `runs.image_digest` are part of the reproducibility contract (§16.1): the image is an input to the result, exactly like the dataset and the git sha. Re-running an experiment means pulling **that digest**, not rebuilding from a tag.
+
+Consequence: **every base image is pinned by `sha256` digest, never by tag.** `python:3.12-slim` moves under you; `python@sha256:...` does not. A tag in a Dockerfile silently breaks the golden run test (§16.6) months later, and the failure looks like a statistics bug.
+
+#### Images
+
+Three images, not one per service. Fewer images means fewer dependency sets to drift apart.
+
+| Image | Contents | Used by |
+|---|---|---|
+| `tradelab-compute` | Python, Polars, scipy stack, nautilus, feature and validation code | collectors, feature_engine, experiment_runner, validator, dagster |
+| `tradelab-exec` | Minimal: nautilus, venue adapters, risk engine. **No research dependencies, no notebook tooling, no LLM clients** | executor, risk_engine |
+| `tradelab-api` | FastAPI, SQLAlchemy, built front end | api |
+
+The split between `compute` and `exec` is a security boundary, not a size optimisation. §14.4 requires that LIVE credentials are reachable only by the execution process; that is enforceable only if the research image is a different image, on a different network, without those secrets mounted. A single fat image makes the requirement unenforceable no matter what the code does.
+
+#### Services
+
+```yaml
+# docker-compose.yml (condensed — the structure, not the whole file)
+services:
+  postgres:
+    image: postgres@sha256:...          # + pgvector extension
+    volumes: [pgdata:/var/lib/postgresql/data]
+    shm_size: 1g
+
+  minio:
+    image: minio/minio@sha256:...
+    volumes: [artifacts:/data]
+
+  dagster:
+    image: tradelab-compute
+    depends_on: [postgres]
+
+  runner:                                # scaled: docker compose up --scale runner=N
+    image: tradelab-compute
+    volumes:
+      - archive:/data/parquet:ro         # shared, read-only, memory-mapped (§9.6)
+    deploy: { resources: { limits: { cpus: "4", memory: 8g } } }
+    environment: *determinism
+
+  api:
+    image: tradelab-api
+    ports: ["8000:8000"]
+
+  grafana:
+    image: grafana/grafana@sha256:...
+
+  # --- execution: never started by a bare `docker compose up` ---
+  executor:
+    image: tradelab-exec
+    profiles: [simulator, testnet, live]
+    read_only: true
+    secrets: [venue_key]                 # file mount, not environment
+    networks: [exec_net]
+
+  risk_engine:
+    image: tradelab-exec
+    profiles: [simulator, testnet, live]
+    restart: always                       # separate container from executor, by design (§2.1)
+
+volumes: { pgdata: , artifacts: , archive: }
+secrets: { venue_key: { file: ./secrets/venue_key } }
+```
+
+Two safety properties come from this topology:
+
+- **`profiles` means a bare `docker compose up` cannot start the executor.** Reaching a venue requires naming the profile explicitly (`--profile testnet`). Accidentally launching live execution while developing becomes impossible rather than merely unlikely.
+- **`risk_engine` is its own container with `restart: always`.** §2.1 requires it to survive the thing it polices; a strategy bug that kills the executor leaves the risk engine up to cancel orders. A kill switch that dies with its target is not a kill switch, and a shared process cannot provide that guarantee.
+
+#### Determinism inside containers
+
+Float reduction order **can** depend on thread count, because parallel reductions combine partial sums in whatever order the threads finish. Whether it actually does is a property of the specific library and build, not a law: measured on the current stack (Polars group-by, OpenBLAS matmul), results are thread-invariant. Other builds and other libraries are not, and a GPU path almost certainly is not.
+
+The response is not to assume either way. Threads are pinned as cheap insurance, and **thread-invariance is verified by a test** that runs the golden computation at 1, 2 and 8 threads and asserts the digests agree (§16.6). If a future dependency introduces the sensitivity, it is caught the day it lands rather than months later as unexplained non-determinism in a Sharpe ratio.
+
+`PYTHONHASHSEED` is a separate matter and is not optional: set iteration order affects anything that builds a collection before reducing it.
+
+Every compute container therefore pins:
+
+```yaml
+x-determinism: &determinism
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  RAYON_NUM_THREADS: "4"      # Polars; fixed, not derived from the host
+  POLARS_MAX_THREADS: "4"
+  NUMBA_NUM_THREADS: "4"
+  TZ: "UTC"
+```
+
+Parallelism comes from running more `runner` containers, not from letting each one auto-detect cores. Throughput is identical, and a fixed thread count is one less variable when a result has to be reproduced on a different machine.
+
+`TZ: UTC` is belt-and-braces: everything is `timestamptz` already (§5), but a container that believes it is in Madrid will produce confusing logs during the one week a year it matters.
+
+#### Volumes and resources
+
+- The Parquet archive is a **named volume mounted read-only into runners**, never baked into an image and never in the container writable layer. One copy per machine, memory-mapped by every worker (§9.6).
+- Runners carry explicit CPU and memory limits. Without them a single backtest with an oversized feature matrix takes the host down, including Postgres.
+- Postgres gets `shm_size: 1g`; the default 64 MB causes parallel query failures that surface as unrelated errors.
+
+#### What Docker does not solve
+
+- **Clock.** Containers inherit the host clock. §14.2's clock-drift requirement is satisfied by `chrony` on the **host**, and the measured offset per venue is recorded in `venues.clock_offset_ms`.
+- **Latency.** Bridge networking adds tens to hundreds of microseconds. At the 1–7 day horizon fixed in §0.2 this is irrelevant by four orders of magnitude — one more thing the horizon decision buys. If it ever mattered, `network_mode: host` on the executor is the escape hatch.
+- **Backups.** A volume is not a backup. §16.10 still applies in full.
+- **Secrets.** Environment variables leak into `docker inspect`, logs and image history. Credentials are file-mounted secrets with restricted permissions, separate per mode (§14.4), and never present in the `compute` image at all.
+
+---
+
+## 3. Storage architecture
+
+Four layers with hard boundaries. No component spans two levels.
+
+### 3.1 Layer 1 — Registry (PostgreSQL + pgvector)
+
+Everything that makes the system reproducible and auditable. Modest volume, maximum integrity.
+
+Holds: experiments, strategies, hypotheses, dataset_versions, feature_definitions, runs, gates, news/events/embeddings, execution state, point-in-time universe.
+
+Rules: real foreign keys, `JSONB` with constraints for params, all `timestamptz` in UTC.
+
+### 3.2 Layer 2 — Analytical archive (Parquet + DuckDB)
+
+**The primary store for backtesting**, not a secondary dump for "raw data".
+
+```
+s3://tradelab/market/
+  trades/venue=binance/asset=BTCUSDT/year=2024/month=03/part-*.parquet
+  ohlcv/tf=1m/asset=BTCUSDT/year=2024/...
+  funding/venue=binance/asset=BTCUSDT/year=2024/...
+  book_features/asset=BTCUSDT/res=1s/year=2024/...
+```
+
+Files are **immutable**. A correction is a new file with a higher `revision`, never an `UPDATE`. Zstd compression, row groups sized for the scan pattern (~128 MB).
+
+### 3.3 Layer 3 — Hot window (TimescaleDB)
+
+From phase 5 only. Hypertables covering the last 7–30 days for live ingestion and real-time features. Continuous aggregates for bars. Retention policy that compacts to Parquet and purges.
+
+### 3.4 Layer 4 — Artifacts (MinIO/S3)
+
+Equity curves, trade blotters, materialised feature matrices, models, reports. Content-addressed by SHA-256. The database stores the pointer, never the blob.
+
+---
+
+## 4. Data
+
+### 4.1 Prioritisation
+
+The original brief lists ~18 sources. Attempting all of them at once guarantees none of them is done properly. Ordered by signal-to-cost:
+
+**Tier 1 — essential, free, phase 1**
+Multi-timeframe OHLCV · trades/ticks · funding rates · open interest · liquidations · spot-perp basis · point-in-time universe
+
+**Tier 2 — high value, moderate cost, phase 2**
+L2 order book (derived features) · CVD / order flow · cross-asset correlations · BTC dominance · daily macro (DXY, yields, SPX, NDX, VIX)
+
+**Tier 3 — expensive or of uncertain value, phase 3+**
+Structured news · on-chain · options (IV, skew) · macro calendar with consensus and surprise
+
+Rule: **a source does not enter the system until its quality test and its backfill procedure exist.** A source with silent gaps is worse than no source at all.
+
+### 4.2 Ingestion contract
+
+Every collector must implement:
+
+```python
+class Collector(Protocol):
+    def backfill(self, start: datetime, end: datetime) -> Iterator[Batch]: ...
+    def stream(self) -> AsyncIterator[Batch]: ...
+    def validate(self, batch: Batch) -> ValidationReport: ...
+    @property
+    def schema(self) -> pa.Schema: ...
+```
+
+`validate` checks, at minimum: temporal monotonicity, absence of gaps longer than the source SLA, plausible ranges (price > 0, volume ≥ 0), duplicates by natural key, and cross-consistency (e.g. sum of trades vs bar volume).
+
+Every anomaly is persisted to `data_quality_issues`; **nothing is silently corrected**.
+
+### 4.3 The three timestamps
+
+Non-negotiable rule. Every row carries:
+
+- **`event_time`** — when it happened in the world
+- **`ingest_time`** — when the system received it
+- **`available_at`** — from which instant the system could have known and used it
+
+`available_at` is the only one the backtest ever sees. For market data it is usually `event_time + latency`; for news it is publication time plus the feed delay; for macro it is the release time, and **later revisions do not rewrite the original row**, they create a new one.
+
+Without this, the news engine and macro data inject look-ahead bias that goes undetected until paper trading looks nothing like the backtest.
+
+### 4.4 Point-in-time universe
+
+Table `asset_universe(asset, venue, listed_at, delisted_at, tick_size, lot_size, min_notional, fee_tier, valid_from, valid_to)`.
+
+The backtest resolves the universe **as of the simulated date**, never the current universe. This is what kills survivorship bias: if 40 perpetuals existed in 2021 and 300 exist today, a 2021 backtest may only see 40. And the ones that died must remain in the data.
+
+Exchange parameters (tick size, minimums, fee tiers) are point-in-time too: they change, and a backtest using today's values executes orders that would have been rejected at the time.
+
+### 4.5 Order book: explicit policy
+
+L2 at 100 ms with 20 levels across 20 assets is terabytes per year and will sink the project before a single strategy is validated. Policy:
+
+- **Derived features are persisted** at fixed resolution (1s): imbalance per band, microprice, cumulative depth at ±5/±10/±25 bps, book slope, effective spread, time at best.
+- **Raw L2 is retained** only for the 2–3 primary assets and on a rolling window (e.g. 90 days), enough to calibrate the impact model and validate the derived features.
+- **Ticks, yes, in full**: far cheaper and the basis for realistic slippage.
+
+### 4.6 Backfill and live capture must be reconciled
+
+A trap that surfaces late and is usually misdiagnosed: REST backfill and the websocket stream do not return identical data. Aggregation differs, late trades get folded into earlier bars, and reconnections drop events. The consequence is specific and damaging — the backtest runs on backfilled data while the simulator runs on live-captured data, so §12.5 divergence gets contaminated by a data artifact and reads as a strategy problem.
+
+Requirements:
+
+- **The live stream is captured to the archive**, not just consumed. Live capture is a first-class data source with its own partition.
+- **Periodic comparison**: a captured window is re-backfilled days later and the two are compared bar by bar. The discrepancy is persisted as a quality metric per source, not inspected ad hoc.
+- **Where both exist, the backtest uses the live-captured version.** It is what the strategy would actually have seen.
+- A discrepancy above threshold opens a `data_quality_issues` record and blocks promotion of anything validated on that window.
+
+---
+
+## 5. Data model
+
+52 tables in Postgres, organised by domain. The count is deliberately modest because market data, feature matrices and tier A results do not live here — see §5.7.
+
+Conventions throughout: all timestamps `timestamptz` in UTC; `code_hash`/`content_hash` are SHA-256 hex; `params`-style columns are `jsonb` with CHECK constraints against a registered JSON Schema; nothing is `UPDATE`d that represents a historical fact.
+
+Tables are grouped by domain for reading, which is not creation order: nine foreign keys point forward (`studies→hypotheses`, `experiments→cost_models`, `experiments→regime_models`, `validation_reports→gate_configs`, `cost_models→venues`, `gate_configs→users`, `approvals→users`, `runs→portfolios`, `articles→events`). In Alembic those are added with `ALTER TABLE` after all tables exist, rather than reordering the schema into something nobody can navigate.
+
+### 5.1 Research registry (17 tables)
+
+```sql
+-- Exactly which data existed
+CREATE TABLE dataset_versions (
+  id              uuid PRIMARY KEY,
+  name            text NOT NULL,
+  spec            jsonb NOT NULL,        -- sources, assets, range, filters
+  manifest_uri    text NOT NULL,         -- list of Parquet files + hash of each
+  content_hash    text NOT NULL UNIQUE,  -- hash of the manifest -> dataset identity
+  row_count       bigint,
+  period_start    timestamptz NOT NULL,
+  period_end      timestamptz NOT NULL,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+-- Versioned definition of a feature (the code, not the output)
+CREATE TABLE feature_definitions (
+  id               uuid PRIMARY KEY,
+  name             text NOT NULL,
+  family           text NOT NULL,        -- momentum | volatility | orderflow | macro | news ...
+  impl_ref         text NOT NULL,        -- module:function
+  code_hash        text NOT NULL,
+  param_schema     jsonb NOT NULL,       -- JSON Schema of admissible parameters
+  lookback_bars    int NOT NULL,         -- max window -> drives purging and warmup (§8.2)
+  is_point_in_time boolean NOT NULL DEFAULT true,
+  UNIQUE (name, code_hash)
+);
+
+-- A materialised feature matrix. The heavy data is in Parquet; this is its identity.
+CREATE TABLE feature_matrices (
+  id                 uuid PRIMARY KEY,
+  dataset_version_id uuid NOT NULL REFERENCES dataset_versions(id),
+  feature_set        jsonb NOT NULL,     -- [{feature_definition_id, params}]
+  content_hash       text NOT NULL UNIQUE,
+  uri                text NOT NULL,      -- Parquet location
+  n_rows             bigint NOT NULL,
+  n_cols             int NOT NULL,
+  built_at           timestamptz NOT NULL DEFAULT now()
+);
+
+-- How the target label is built
+CREATE TABLE label_definitions (
+  id              uuid PRIMARY KEY,
+  method          text NOT NULL,         -- triple_barrier | fixed_horizon | meta
+  params          jsonb NOT NULL,        -- pt, sl, max_holding, vol_target...
+  horizon_bars    int NOT NULL,          -- with feature lookback, fixes the purge (§8.2)
+  code_hash       text NOT NULL
+);
+
+-- A strategy is a rule template, not a parameterised instance
+CREATE TABLE strategies (
+  id              uuid PRIMARY KEY,
+  name            text NOT NULL,
+  kind            text NOT NULL,         -- rule | ml | ensemble
+  impl_ref        text NOT NULL,
+  code_hash       text NOT NULL,
+  param_space     jsonb NOT NULL,        -- declared search space
+  constraints     jsonb NOT NULL,        -- forbidden combinations
+  status          text NOT NULL,         -- draft|screening|validating|candidate|simulator|testnet|live_ramp|live|halted|rejected|retired
+  UNIQUE (name, code_hash)
+);
+
+-- A search campaign. This is where the trial counter lives.
+CREATE TABLE studies (
+  id                    uuid PRIMARY KEY,
+  strategy_id           uuid NOT NULL REFERENCES strategies(id),
+  hypothesis_id         uuid REFERENCES hypotheses(id),
+  search_method         text NOT NULL,   -- grid | random | tpe | cmaes
+  planned_trials        int NOT NULL,
+  executed_trials       int NOT NULL DEFAULT 0,  -- INPUT to DSR/PBO. Never reset.
+  min_detectable_sharpe numeric NOT NULL,        -- fixed BEFORE the search (§8.8)
+  hold_days_min         numeric NOT NULL,        -- horizon constraint (§0.2)
+  hold_days_max         numeric NOT NULL,
+  compute_budget_hours  numeric NOT NULL,        -- exceeded -> halt and ask (§9.6)
+  compute_used_hours    numeric NOT NULL DEFAULT 0,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  CHECK (hold_days_min > 0 AND hold_days_max >= hold_days_min)
+);
+
+-- An experiment = one concrete configuration, evaluated
+CREATE TABLE experiments (
+  id                  uuid PRIMARY KEY,
+  study_id            uuid NOT NULL REFERENCES studies(id),
+  dataset_version_id  uuid NOT NULL REFERENCES dataset_versions(id),
+  feature_matrix_id   uuid REFERENCES feature_matrices(id),
+  label_definition_id uuid NOT NULL REFERENCES label_definitions(id),
+  params              jsonb NOT NULL,
+  universe            jsonb NOT NULL,
+  timeframe           text NOT NULL,
+  cv_scheme           jsonb NOT NULL,    -- folds, purging, embargo
+  splits              jsonb NOT NULL,    -- exact train/val/oos dates
+  tier                smallint NOT NULL, -- 1 = vectorized screening, 2 = event-driven, 3 = full walk-forward
+  cost_model_id       uuid NOT NULL REFERENCES cost_models(id),
+  regime_model_id     uuid REFERENCES regime_models(id),
+  seed                bigint NOT NULL,
+  code_version        text NOT NULL,     -- git sha
+  image_digest        text NOT NULL,     -- container digest
+  config_hash         text NOT NULL UNIQUE,  -- identity -> dedup and cache
+  realised_hold_days  numeric,           -- checked against studies bounds; out of band -> rejected
+  status              text NOT NULL,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  CHECK (tier >= 2)                      -- tier 1 results live in Parquet (§5.7)
+);
+
+-- Results: one row per (experiment, split, regime). Tier >= 2 only.
+CREATE TABLE experiment_results (
+  experiment_id   uuid NOT NULL REFERENCES experiments(id),
+  split           text NOT NULL,         -- train | val | oos | fold_k
+  regime          text NOT NULL DEFAULT 'all',
+  metrics         jsonb NOT NULL,        -- sharpe, sortino, calmar, mdd, turnover...
+  n_trades        int NOT NULL,
+  returns_uri     text,                  -- daily return series, for §13.1 correlation
+  artifacts_uri   text,                  -- equity curve, blotter
+  PRIMARY KEY (experiment_id, split, regime)
+);
+
+-- Statistical verdict, kept separate from the raw metrics
+CREATE TABLE validation_reports (
+  experiment_id      uuid PRIMARY KEY REFERENCES experiments(id),
+  trials_considered  int NOT NULL,       -- from studies.executed_trials, incl. tier A discards
+  deflated_sharpe    numeric,
+  dsr_pvalue         numeric,
+  pbo                numeric,            -- probability of backtest overfitting
+  spa_pvalue         numeric,            -- Hansen SPA vs benchmark
+  param_stability    numeric,
+  min_trl_days       numeric,            -- minimum track record length
+  regime_coverage    jsonb,
+  baselines          jsonb,              -- buy&hold / random / permuted results (§8.4)
+  cost_sensitivity   jsonb,              -- results under 1x / 2x costs, 3 fill models (§9.5)
+  capacity_ceiling   numeric,            -- §12.7
+  gate_config_id     uuid NOT NULL REFERENCES gate_configs(id),
+  verdict            text NOT NULL,      -- pass | fail | inconclusive
+  reasons            jsonb NOT NULL
+);
+
+-- Clustered MDA under purged CV. Descriptive only, never a gate (§6.1)
+CREATE TABLE feature_importance (
+  experiment_id   uuid NOT NULL REFERENCES experiments(id),
+  cluster_id      text NOT NULL,         -- correlation cluster, not a single column
+  members         jsonb NOT NULL,        -- feature_definition_ids + params in the cluster
+  mda_mean        numeric NOT NULL,
+  mda_std         numeric NOT NULL,
+  PRIMARY KEY (experiment_id, cluster_id)
+);
+
+-- Hypotheses, including AI-generated ones
+CREATE TABLE hypotheses (
+  id              uuid PRIMARY KEY,
+  origin          text NOT NULL,         -- human | ai_agent
+  agent_model     text,
+  statement       text NOT NULL,
+  rationale       text,
+  prior_belief    numeric,               -- recorded BEFORE execution
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  outcome         text                   -- confirmed | rejected | inconclusive
+);
+
+-- Every look at the frozen OOS. No delete path, by design (§8.1)
+CREATE TABLE oos_access_log (
+  id              bigserial PRIMARY KEY,
+  experiment_id   uuid REFERENCES experiments(id),
+  strategy_id     uuid REFERENCES strategies(id),
+  accessed_by     text NOT NULL,         -- human | validator | ai_agent
+  purpose         text NOT NULL,
+  accessed_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- Versioned cost assumptions. Results are never comparable across cost models (§9.5)
+CREATE TABLE cost_models (
+  id              uuid PRIMARY KEY,
+  name            text NOT NULL,
+  venue           text NOT NULL REFERENCES venues(code),
+  fill_model      text NOT NULL,         -- optimistic | realistic | pessimistic
+  params          jsonb NOT NULL,        -- fees, impact coefficients, latency, adverse selection
+  calibrated_from uuid,                  -- runs(id) whose own fills calibrated it
+  code_hash       text NOT NULL,
+  valid_from      timestamptz NOT NULL
+);
+
+-- Regime classifier versions. The regime time series itself is in Parquet (§10)
+CREATE TABLE regime_models (
+  id              uuid PRIMARY KEY,
+  name            text NOT NULL,
+  method          text NOT NULL,         -- rules | hmm | clustering
+  params          jsonb NOT NULL,
+  code_hash       text NOT NULL,
+  labels_uri      text NOT NULL,         -- Parquet: (ts, asset, regime), point-in-time
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+-- Promotion thresholds. Versioned, because lowering the bar must be auditable (§15)
+CREATE TABLE gate_configs (
+  id              uuid PRIMARY KEY,
+  transition      text NOT NULL,         -- screening->validating, validating->candidate, ...
+  thresholds      jsonb NOT NULL,        -- dsr_pvalue_max, pbo_max, min_oos_trades, ...
+  rationale       text NOT NULL,         -- why it changed. Required.
+  changed_by      uuid REFERENCES users(id),
+  valid_from      timestamptz NOT NULL,
+  valid_to        timestamptz
+);
+
+-- Every lifecycle transition. No transition exists outside this table (§15)
+CREATE TABLE lifecycle_transitions (
+  id              bigserial PRIMARY KEY,
+  strategy_id     uuid NOT NULL REFERENCES strategies(id),
+  from_state      text NOT NULL,
+  to_state        text NOT NULL,
+  gate_config_id  uuid REFERENCES gate_configs(id),
+  evidence        jsonb NOT NULL,        -- snapshot of the criteria as evaluated
+  actor           text NOT NULL,         -- system | user:<id>
+  occurred_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- Human sign-off where the state machine requires one
+CREATE TABLE approvals (
+  id              uuid PRIMARY KEY,
+  subject_kind    text NOT NULL,         -- strategy | capital_tier | gate_change
+  subject_id      uuid NOT NULL,
+  approved_by     uuid NOT NULL REFERENCES users(id),
+  decision        text NOT NULL,         -- approve | reject
+  notes           text,
+  decided_at      timestamptz NOT NULL DEFAULT now()
+);
+```
+
+### 5.2 Data and ingestion (5 tables)
+
+Metadata only. The data itself is Parquet.
+
+```sql
+CREATE TABLE venues (
+  code            text PRIMARY KEY,      -- binance, bybit, okx...
+  name            text NOT NULL,
+  kind            text NOT NULL,         -- cex | dex
+  supports_testnet boolean NOT NULL,
+  clock_offset_ms int,                   -- measured, refreshed periodically
+  notes           text
+);
+
+CREATE TABLE sources (
+  id              uuid PRIMARY KEY,
+  name            text NOT NULL,
+  venue           text REFERENCES venues(code),
+  kind            text NOT NULL,         -- ohlcv | trades | funding | oi | liquidations | book | news | macro | onchain
+  tier            smallint NOT NULL,     -- 1 | 2 | 3 per §4.1
+  sla_seconds     int NOT NULL,          -- max acceptable gap before it is an issue
+  credibility     numeric,               -- point-in-time via valid_from (§11.2)
+  valid_from      timestamptz NOT NULL,
+  valid_to        timestamptz
+);
+
+-- Point-in-time venue universe and constraints (§4.4). Blocking requirement.
+CREATE TABLE asset_universe (
+  asset           text NOT NULL,
+  venue           text NOT NULL REFERENCES venues(code),
+  listed_at       timestamptz NOT NULL,
+  delisted_at     timestamptz,
+  tick_size       numeric NOT NULL,
+  lot_size        numeric NOT NULL,
+  min_notional    numeric NOT NULL,
+  fee_tier        text NOT NULL,
+  valid_from      timestamptz NOT NULL,
+  valid_to        timestamptz,
+  PRIMARY KEY (asset, venue, valid_from)
+);
+
+CREATE TABLE ingestion_runs (
+  id              bigserial PRIMARY KEY,
+  source_id       uuid NOT NULL REFERENCES sources(id),
+  mode            text NOT NULL,         -- backfill | stream | recapture
+  period_start    timestamptz NOT NULL,
+  period_end      timestamptz,
+  watermark       timestamptz,           -- resume point
+  rows_written    bigint,
+  output_uri      text,
+  status          text NOT NULL,
+  started_at      timestamptz NOT NULL,
+  ended_at        timestamptz
+);
+
+-- Ingestion anomalies. Never silently corrected (§4.2, §4.6)
+CREATE TABLE data_quality_issues (
+  id              bigserial PRIMARY KEY,
+  source_id       uuid NOT NULL REFERENCES sources(id),
+  asset           text,
+  kind            text NOT NULL,         -- gap | duplicate | out_of_range | cross_inconsistent | backfill_mismatch
+  period_start    timestamptz NOT NULL,
+  period_end      timestamptz NOT NULL,
+  severity        text NOT NULL,         -- info | warn | blocking
+  detail          jsonb NOT NULL,
+  resolved_at     timestamptz
+);
+```
+
+### 5.3 Execution (12 tables)
+
+```sql
+-- Versioned risk limit sets. Referenced, not embedded, so a change is traceable (§14.1)
+CREATE TABLE risk_limit_configs (
+  id                     uuid PRIMARY KEY,
+  name                   text NOT NULL,
+  max_position_notional  numeric NOT NULL,
+  max_gross_exposure     numeric NOT NULL,
+  max_net_exposure       numeric NOT NULL,
+  max_leverage           numeric NOT NULL,
+  max_daily_loss         numeric NOT NULL,
+  max_drawdown_from_peak numeric NOT NULL,
+  max_orders_per_minute  int NOT NULL,
+  max_consecutive_errors int NOT NULL,
+  max_price_deviation_bps int NOT NULL,
+  valid_from             timestamptz NOT NULL
+);
+
+-- Execution in any mode: backtest, simulator, testnet or live (§12)
+CREATE TABLE runs (
+  id                  uuid PRIMARY KEY,
+  strategy_id         uuid NOT NULL REFERENCES strategies(id),
+  portfolio_id        uuid REFERENCES portfolios(id),
+  promoted_from       uuid REFERENCES experiments(id),
+  mode                text NOT NULL,     -- backtest | simulator | testnet | live
+  venue               text NOT NULL REFERENCES venues(code),
+  params              jsonb NOT NULL,    -- IMMUTABLE: changing them requires a new run (§12.4)
+  initial_capital     numeric NOT NULL,
+  base_currency       text NOT NULL,
+  risk_limit_config_id uuid NOT NULL REFERENCES risk_limit_configs(id),  -- mandatory in EVERY mode
+  cost_model_id       uuid NOT NULL REFERENCES cost_models(id),
+  capital_tier        text,              -- L0 | L1 | L2 | L3, live only
+  code_version        text NOT NULL,
+  image_digest        text NOT NULL,
+  config_hash         text NOT NULL,
+  status              text NOT NULL,     -- running | halted | stopped | completed
+  halt_reason         text,
+  started_at          timestamptz NOT NULL,
+  ended_at            timestamptz
+);
+
+-- What the strategy WANTED to do. Append-only, written before any order is sent (§14.3)
+CREATE TABLE intents (
+  id              bigserial PRIMARY KEY,
+  run_id          uuid NOT NULL REFERENCES runs(id),
+  decided_at      timestamptz NOT NULL,
+  asset           text NOT NULL,
+  target_position numeric NOT NULL,
+  reason          jsonb NOT NULL,        -- signal values that produced it
+  vetoed_by       text,                  -- risk_engine rule that blocked it, if any
+  attributed_to   uuid REFERENCES strategies(id)  -- survives venue-level netting (§13.4)
+);
+
+CREATE TABLE orders (
+  id                 uuid PRIMARY KEY,
+  run_id             uuid NOT NULL REFERENCES runs(id),
+  intent_id          bigint REFERENCES intents(id),
+  client_order_id    text NOT NULL,      -- deterministic -> idempotent retry (§14.3)
+  venue_order_id     text,
+  asset              text NOT NULL,
+  side               text NOT NULL,
+  order_type         text NOT NULL,
+  qty                numeric NOT NULL,
+  limit_price        numeric,
+  intent_ts          timestamptz NOT NULL,
+  sent_ts            timestamptz,
+  ack_ts             timestamptz,
+  status             text NOT NULL,
+  reject_reason      text,
+  UNIQUE (run_id, client_order_id)
+);
+
+CREATE TABLE fills (
+  id                 uuid PRIMARY KEY,
+  order_id           uuid NOT NULL REFERENCES orders(id),
+  fill_ts            timestamptz NOT NULL,
+  qty                numeric NOT NULL,
+  price              numeric NOT NULL,
+  expected_price     numeric NOT NULL,   -- per-trade slippage
+  fee                numeric NOT NULL,
+  liquidity          text NOT NULL       -- maker | taker
+);
+
+CREATE TABLE positions (
+  run_id          uuid NOT NULL REFERENCES runs(id),
+  asset           text NOT NULL,
+  as_of           timestamptz NOT NULL,
+  qty             numeric NOT NULL,
+  avg_entry       numeric,
+  unrealised_pnl  numeric,
+  realised_pnl    numeric,
+  funding_paid    numeric,
+  PRIMARY KEY (run_id, asset, as_of)
+);
+
+CREATE TABLE balances (
+  run_id          uuid NOT NULL REFERENCES runs(id),
+  as_of           timestamptz NOT NULL,
+  currency        text NOT NULL,
+  equity          numeric NOT NULL,
+  free            numeric NOT NULL,
+  used_margin     numeric NOT NULL,
+  PRIMARY KEY (run_id, as_of, currency)
+);
+
+-- Every time a limit fired. The risk engine writes here; nothing else does (§14.1)
+CREATE TABLE risk_events (
+  id              bigserial PRIMARY KEY,
+  run_id          uuid NOT NULL REFERENCES runs(id),
+  rule            text NOT NULL,
+  observed        numeric NOT NULL,
+  limit_value     numeric NOT NULL,
+  action          text NOT NULL,         -- veto | halt | reduce_only | kill
+  occurred_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- State vs the venue (§14.2). Distinct from `reconciliations`, which compares RETURNS.
+CREATE TABLE position_reconciliations (
+  id               bigserial PRIMARY KEY,
+  run_id           uuid NOT NULL REFERENCES runs(id),
+  checked_at       timestamptz NOT NULL,
+  asset            text NOT NULL,
+  qty_internal     numeric NOT NULL,
+  qty_venue        numeric NOT NULL,
+  balance_internal numeric,
+  balance_venue    numeric,
+  discrepancy      boolean NOT NULL,
+  action_taken     text                  -- none | halt
+);
+
+-- Daily return divergence between execution modes (§12.5)
+CREATE TABLE reconciliations (
+  run_id             uuid NOT NULL REFERENCES runs(id),
+  day                date NOT NULL,
+  ref_kind           text NOT NULL,      -- backtest | simulator
+  return_observed    numeric NOT NULL,
+  return_reference   numeric NOT NULL,
+  divergence_ci_low  numeric,
+  divergence_ci_high numeric,
+  attribution        jsonb NOT NULL,     -- {costs, timing, fills, data}
+  verdict            text NOT NULL,      -- ok | warn | breach
+  PRIMARY KEY (run_id, day, ref_kind)
+);
+
+-- Pre-registered sequential decay test (§14.6). Thresholds fixed before going live.
+CREATE TABLE decay_tests (
+  id              bigserial PRIMARY KEY,
+  run_id          uuid NOT NULL REFERENCES runs(id),
+  method          text NOT NULL,         -- cusum | sprt
+  h0_sharpe       numeric NOT NULL,      -- from validation, fixed in advance
+  statistic       numeric NOT NULL,
+  threshold_warn  numeric NOT NULL,
+  threshold_breach numeric NOT NULL,
+  regime          text NOT NULL,         -- conditioned, so a dormant regime is not decay
+  verdict         text NOT NULL,         -- ok | warn | breach | dormant
+  computed_at     timestamptz NOT NULL
+);
+
+CREATE TABLE capital_ramp_events (
+  id              bigserial PRIMARY KEY,
+  run_id          uuid NOT NULL REFERENCES runs(id),
+  from_tier       text,
+  to_tier         text NOT NULL,         -- L0 | L1 | L2 | L3
+  capital_after   numeric NOT NULL,
+  reason          text NOT NULL,         -- advance | demote_limit_breach | demote_divergence
+  approval_id     uuid REFERENCES approvals(id),
+  occurred_at     timestamptz NOT NULL DEFAULT now()
+);
+```
+
+### 5.4 Portfolio (5 tables)
+
+```sql
+CREATE TABLE portfolios (
+  id                 uuid PRIMARY KEY,
+  name               text NOT NULL,
+  base_currency      text NOT NULL,
+  allocation_method  text NOT NULL,      -- hrp | erc (§13.2)
+  max_weight_strategy numeric NOT NULL,
+  max_weight_cluster numeric NOT NULL,
+  rebalance_days     int NOT NULL,
+  promoted_count     int NOT NULL DEFAULT 0,  -- portfolio-level trial counter (§13.3)
+  capacity_joint     numeric,            -- NOT the sum of parts (§13.5)
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE portfolio_members (
+  portfolio_id    uuid NOT NULL REFERENCES portfolios(id),
+  strategy_id     uuid NOT NULL REFERENCES strategies(id),
+  cluster_id      text NOT NULL,         -- a cluster is ONE bet (§13.1)
+  added_at        timestamptz NOT NULL,
+  removed_at      timestamptz,
+  PRIMARY KEY (portfolio_id, strategy_id, added_at)
+);
+
+-- Correlation of RETURNS, per regime. Crisis correlation is the one that matters.
+CREATE TABLE strategy_correlations (
+  strategy_a      uuid NOT NULL REFERENCES strategies(id),
+  strategy_b      uuid NOT NULL REFERENCES strategies(id),
+  regime          text NOT NULL DEFAULT 'all',
+  window_days     int NOT NULL,
+  correlation     numeric NOT NULL,
+  n_obs           int NOT NULL,
+  computed_at     timestamptz NOT NULL,
+  PRIMARY KEY (strategy_a, strategy_b, regime, window_days)
+);
+
+CREATE TABLE portfolio_allocations (
+  portfolio_id    uuid NOT NULL REFERENCES portfolios(id),
+  effective_at    timestamptz NOT NULL,
+  strategy_id     uuid NOT NULL REFERENCES strategies(id),
+  weight          numeric NOT NULL,
+  cluster_weight  numeric NOT NULL,
+  turnover_cost   numeric,               -- charged to the rebalance decision (§13.2)
+  PRIMARY KEY (portfolio_id, effective_at, strategy_id)
+);
+
+CREATE TABLE portfolio_results (
+  portfolio_id      uuid NOT NULL REFERENCES portfolios(id),
+  day               date NOT NULL,
+  equity            numeric NOT NULL,
+  return_net        numeric NOT NULL,
+  drawdown          numeric NOT NULL,
+  deflated_sharpe   numeric,             -- deflated by promoted_count (§13.3)
+  PRIMARY KEY (portfolio_id, day)
+);
+```
+
+### 5.5 News, events and impact (11 tables)
+
+```sql
+CREATE TABLE entities (
+  id              uuid PRIMARY KEY,
+  kind            text NOT NULL,         -- asset | protocol | company | person | regulator
+  canonical_name  text NOT NULL,
+  aliases         jsonb NOT NULL,
+  linked_asset    text                   -- when the entity maps to a tradeable asset
+);
+
+CREATE TABLE articles (
+  id              uuid PRIMARY KEY,
+  source_id       uuid NOT NULL REFERENCES sources(id),
+  url             text,
+  dedup_hash      text NOT NULL,         -- exact-duplicate key
+  title           text NOT NULL,
+  body            text,
+  published_at    timestamptz NOT NULL,  -- event_time
+  ingested_at     timestamptz NOT NULL,
+  available_at    timestamptz NOT NULL,  -- publication + measured feed delay (§4.3)
+  embedding       vector(768),
+  event_id        uuid REFERENCES events(id),
+  UNIQUE (dedup_hash)
+);
+
+CREATE TABLE events (
+  id              uuid PRIMARY KEY,
+  event_type      text NOT NULL,         -- listing | hack | regulation | macro_release | unlock ...
+  first_seen_at   timestamptz NOT NULL,
+  latest_revision int NOT NULL DEFAULT 1,
+  cluster_method  text NOT NULL,
+  code_hash       text NOT NULL
+);
+
+-- Events accrete revisions; a backtest at t sees only revisions with available_at <= t (§11.2)
+CREATE TABLE event_revisions (
+  event_id        uuid NOT NULL REFERENCES events(id),
+  revision        int NOT NULL,
+  available_at    timestamptz NOT NULL,
+  payload         jsonb NOT NULL,        -- entities, magnitude, surprise, credibility, horizon
+  PRIMARY KEY (event_id, revision)
+);
+
+CREATE TABLE event_assets (
+  event_id        uuid NOT NULL REFERENCES events(id),
+  revision        int NOT NULL,
+  asset           text NOT NULL,
+  expected_direction smallint NOT NULL,  -- -1 | 0 | +1
+  expected_magnitude numeric,            -- in bps, model output not opinion
+  confidence      numeric,
+  PRIMARY KEY (event_id, revision, asset)
+);
+
+-- Measured reaction per event, asset and horizon. The raw material of §11.5.
+-- Horizons include NEGATIVE values: pre-event flatness is a mandatory diagnostic.
+CREATE TABLE event_reactions (
+  event_id         uuid NOT NULL REFERENCES events(id),
+  asset            text NOT NULL,
+  horizon_minutes  int NOT NULL,         -- -60 | -15 | 5 | 15 | 60 | 240 | 1440 | 4320 | 10080
+  car              numeric NOT NULL,     -- cumulative abnormal return (§11.3)
+  z                numeric NOT NULL,     -- CAR / (sigma_pre * sqrt(h)), the poolable quantity
+  benchmark_kind   text NOT NULL,        -- cross_sectional | time_series
+  beta_pre         numeric,              -- estimated on [t-30d, t-1d], embargoed
+  sigma_pre        numeric NOT NULL,
+  oi_change        numeric,
+  funding_change   numeric,
+  trade_count_z    numeric,              -- participation (§11.4)
+  avg_trade_size_z numeric,
+  PRIMARY KEY (event_id, asset, horizon_minutes)
+);
+
+-- Point-in-time market state. Built in-house so it cannot be revised (§11.4).
+CREATE TABLE market_state (
+  as_of            timestamptz NOT NULL,
+  scope            text NOT NULL,        -- 'market' or an asset symbol
+  funding_z        numeric,
+  funding_dispersion numeric,
+  basis_slope      numeric,
+  oi_to_mcap       numeric,
+  liq_asymmetry    numeric,              -- long vs short liquidated notional
+  realised_vol_z   numeric,
+  trade_count_z    numeric,
+  avg_trade_size_z numeric,
+  depth_25bps      numeric,
+  effective_spread numeric,
+  bucket           text NOT NULL,        -- 3-5 discrete states; continuous forbids conditioning
+  model_id         uuid NOT NULL REFERENCES state_models(id),
+  PRIMARY KEY (as_of, scope, model_id)
+);
+
+CREATE TABLE state_models (
+  id              uuid PRIMARY KEY,
+  name            text NOT NULL,
+  params          jsonb NOT NULL,        -- component weights, bucket boundaries
+  n_buckets       smallint NOT NULL,
+  code_hash       text NOT NULL,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  CHECK (n_buckets BETWEEN 3 AND 5)
+);
+
+-- The estimated impulse response. One row per (class, state, horizon).
+-- Fitted walk-forward: `fitted_through` is the only data it ever saw (§11.5 step 5).
+CREATE TABLE event_impulse_response (
+  id               uuid PRIMARY KEY,
+  event_class      text NOT NULL,
+  state_bucket     text NOT NULL,
+  horizon_minutes  int NOT NULL,
+  coef             numeric NOT NULL,     -- alpha(h) from the local projection
+  surprise_beta    numeric,              -- beta(h)
+  ci_low           numeric NOT NULL,
+  ci_high          numeric NOT NULL,
+  n_events         int NOT NULL,         -- shown wherever coef is shown. Non-negotiable.
+  pooled           boolean NOT NULL,     -- true when empirical-Bayes shrunk (§11.6)
+  shrinkage        numeric,              -- 0 = raw cell estimate, 1 = fully the prior
+  fitted_through   timestamptz NOT NULL,
+  model_id         uuid NOT NULL REFERENCES irf_models(id),
+  UNIQUE (model_id, event_class, state_bucket, horizon_minutes)
+);
+
+-- Decay fit and the tradeability verdict, per (class, state). §11.5 steps 3-4.
+CREATE TABLE irf_models (
+  id               uuid PRIMARY KEY,
+  event_class      text NOT NULL,
+  state_bucket     text NOT NULL,
+  amp_fast         numeric,              -- A
+  tau_fast_minutes numeric,              -- mechanical reaction, largely uncapturable
+  amp_slow         numeric,              -- B
+  tau_slow_minutes numeric,              -- the only component that survives cost drag
+  tau_slow_ci_low  numeric,
+  tau_slow_ci_high numeric,
+  half_life_minutes numeric,
+  cost_filter_pass boolean NOT NULL,     -- §11.5 step 4
+  implied_hold_days numeric,             -- must land inside the §0.2 band
+  pre_event_flat_p numeric NOT NULL,     -- §11.8. Low p means the timestamp is lying.
+  placebo_percentile numeric NOT NULL,
+  n_events         int NOT NULL,
+  fitted_through   timestamptz NOT NULL,
+  code_hash        text NOT NULL,
+  verdict          text NOT NULL         -- usable | inconclusive | rejected
+);
+```
+
+### 5.6 Platform (3 tables)
+
+```sql
+CREATE TABLE users (
+  id              uuid PRIMARY KEY,
+  email           text NOT NULL UNIQUE,
+  role            text NOT NULL,         -- researcher | operator | admin
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE audit_log (
+  id              bigserial PRIMARY KEY,
+  actor           text NOT NULL,
+  action          text NOT NULL,
+  subject_kind    text NOT NULL,
+  subject_id      text NOT NULL,
+  payload         jsonb,
+  occurred_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE alerts (
+  id              bigserial PRIMARY KEY,
+  severity        text NOT NULL,         -- info | warn | critical
+  source          text NOT NULL,         -- risk_engine | collectors | validator | executor
+  subject_id      text,
+  message         text NOT NULL,
+  acknowledged_by uuid REFERENCES users(id),
+  raised_at       timestamptz NOT NULL DEFAULT now(),
+  resolved_at     timestamptz
+);
+```
+
+### 5.7 What does not go in Postgres
+
+The table count stays around 48 because the high-volume data lives elsewhere. This boundary is a design rule, not an optimisation.
+
+| Data | Where | Why |
+|---|---|---|
+| Market time series (OHLCV, trades, funding, OI, liquidations, book features) | Parquet | Columnar scans over years, no updates, no concurrency |
+| Feature matrices | Parquet, identified by `feature_matrices` | Wide, regenerable, shared read-only by workers (§9.6) |
+| **Tier A experiment results** | **Parquet, one file per study** | See below |
+| Regime label series | Parquet, identified by `regime_models` | Time series |
+| Equity curves, trade blotters, models | Object storage, URI in the row | Blobs |
+| Hot window, last 7–30 days | TimescaleDB, from phase 5 | Live ingestion, continuous aggregates |
+
+**The tier A rule.** A screening campaign of 10⁶ trials produces roughly 5×10⁶ result rows, and tens of millions per year. Postgres would survive it and the registry would become unusable to query.
+
+So: **tier 1 results are written to Parquet, one partition per study, and only tier ≥ 2 enters Postgres** — enforced by the `CHECK (tier >= 2)` on `experiments`. Tier A is disposable mass screening; tier B is already a candidate and earns referential integrity.
+
+Two things must survive the boundary, because the statistics depend on them:
+
+- **`studies.executed_trials` counts tier A trials**, even though their rows are not in Postgres. The counter is what feeds the Deflated Sharpe (§8.3); losing tier A from the count would silently inflate every verdict.
+- **Tier A `config_hash` values are retained** in the Parquet partition, so deduplication (§9.6) still works across campaigns.
+
+This keeps the registry in the hundreds of thousands of rows rather than tens of millions, which is the difference between querying it instantly and having to think about it first.
+
+### 5.8 Details that matter
+
+- **`config_hash`** makes experiments idempotent: re-running the same configuration reuses instead of recomputing. It is what allows a large funnel without burning compute twice.
+- **`studies.executed_trials`** is monotonic and never reset. If it is reset, the multiple-testing control is lying.
+- **`studies.min_detectable_sharpe` and the hold bounds are set before the search**, not after. They are constraints on the campaign, not descriptions of it (§8.8, §0.2).
+- **`hypotheses.prior_belief`** is recorded before the result. Prevents HARKing.
+- **`runs.params` is immutable.** Tuning a signal parameter in the simulator does not edit the run: it creates a new strategy that re-enters the funnel (§12.4). This is the technical barrier against re-optimising on the live period.
+- **`orders.intent_ts` vs `sent_ts`** separates decision from execution, which is what makes divergence attributable to timing or to fills (§12.5).
+- **`intents` is written before the order is sent**, and records vetoed intents too. It is what makes per-strategy attribution survive venue-level netting (§13.4) and what lets you reconstruct why a position exists.
+- **`reconciliations` and `position_reconciliations` are different things.** The first compares *returns* between execution modes (is the backtest honest?); the second compares *state* against the venue (do I hold what I think I hold?).
+- **`gate_configs.rationale` is NOT NULL.** Lowering a threshold requires writing down why, and the reason is attached to every verdict issued under it.
+- **`oos_access_log` has no delete path.** Its only purpose is to make OOS erosion visible, and a log you can prune is a log that will be pruned exactly when it matters.
+- Heavy blobs go to object storage; Postgres stores URIs.
+
+---
+
+## 6. Feature engine
+
+A feature is **(definition, parameters)**, not a column. The definition is registered once; parameterisation is expanded at experiment time.
+
+```python
+@feature(
+    family="momentum",
+    lookback=lambda p: p["period"] + 1,
+    params={"period": IntRange(5, 60), "source": Choice("close", "vwap")},
+)
+def rsi(df: pl.LazyFrame, period: int, source: str) -> pl.Expr:
+    ...
+```
+
+Contract requirements:
+
+1. **Declare `lookback`.** It is what the system uses to compute warmup and, more importantly, the purge size in cross-validation. A feature that lies about its lookback silently breaks purging.
+2. **Strict causality.** No feature may touch rows with `available_at > t`. Verified automatically (§16.3), not by human review.
+3. **Output as a lazy Polars expression**, so the planner can fuse the computation of thousands of variants into a single pass.
+4. **Explicit normalisation**: level features (price, OI) require a declared stationarity transform — log difference, rolling z-score, or **fractional differentiation** when memory should be preserved without sacrificing stationarity.
+
+Families: momentum, trend, volatility, volume, market structure, VWAP/volume profile, order flow, OI, funding, liquidations, basis, options, macro, on-chain, news, cross-asset.
+
+**Computation**: features are materialised once per (dataset_version, feature_set) to Parquet and cached by hash. Thousands of experiments share the same matrix. Without this, 90% of compute goes into recomputing RSI.
+
+### 6.1 Feature importance and selection
+
+The registry is meant to answer "which features have the most predictive power" (Appendix A). Doing that naively produces another overfitting channel, so the method is fixed here.
+
+- **MDA, not MDI.** Mean Decrease Accuracy under purged CV: permute one feature, measure the drop. Mean Decrease Impurity is biased toward high-cardinality features and is computed in-sample.
+- **Cluster before ranking.** With hundreds of parameterised variants, RSI 13 and RSI 14 are the same feature. Correlated features split each other's importance and all of them look weak. Features are clustered by correlation distance and importance is computed **per cluster**, not per column.
+- **Selection happens inside the CV loop, never before it.** Choosing features by importance measured on the full dataset and then validating on the same data is leakage with extra steps. If selection is part of the strategy, it is refitted in every fold.
+- **Importance is descriptive, not a gate.** It guides hypothesis generation; it never promotes anything. A feature with high MDA and no strategy that survives §8 has produced exactly zero evidence.
+
+Aggregated clustered-MDA across experiments is what answers the registry question, and it is reported with the number of experiments behind it — a feature that looks strong across 4 experiments is not a finding.
+
+### 6.2 Price levels as features
+
+Support and resistance is the most overfitted idea in retail technical analysis, and not because it is false — there are real mechanisms — but because "a level" is enormously flexible. With enough candidate levels, every move has one nearby, and any move can be explained after the fact.
+
+The discipline that makes it researchable: **a level comes from a deterministic, parameterised rule that enters the funnel like any other feature.** Nothing drawn by hand, nothing chosen by eye.
+
+Five families, ordered by how defensible the mechanism is:
+
+| Family | Parameters | Mechanism |
+|---|---|---|
+| **Liquidation clusters** | leverage buckets, OI window, bin width | **Orders that must execute.** Estimated from OI and the leverage distribution, validated against observed liquidations |
+| Volume profile | lookback, bin width, HVN/LVN threshold | Where size actually traded; inventory sits there |
+| Anchored VWAP | anchor (session, week, or an event from §11) | A reference price participants actually use |
+| Prior extremes | fractal order, confirmation bars | Prior rejection; the classic, parameterised |
+| Round numbers | tick granularity, significance | Order placement clusters on round figures |
+
+Only the first corresponds to orders that exist and **will** execute regardless of what anyone believes. It is also computable from data already being captured, which is why it leads the list.
+
+**What reaches the model** is not "there is a level", which is boolean and nearly information-free, but: distance to the nearest level normalised by ATR, level density in the neighbourhood, whether price is approaching from above or below, how many times the level has been tested, and the age of the level.
+
+#### The leak that this family invites
+
+A swing high is not known when it forms. It is known `N` bars later, once the confirmation window has passed. Marking a swing high at bar `t` using bars `t+1 … t+N`, and then using "distance to swing high" as a feature *at bar t*, is look-ahead bias — and it is the single most common way a level-based backtest produces beautiful, fictional results.
+
+The machinery for this already exists and must be used without exception:
+
+- Every level feature declares `lookback_bars` **including its confirmation window** (§6). A fractal of order 5 confirmed 5 bars later declares a lookback that accounts for both.
+- Truncation invariance (§16.3) catches a violation generically: the level set computed on data truncated at `t` must equal the level set computed on full history and read at `t`.
+- A canary in §16.5 injects exactly this bug, so the detector is known to work.
+
+Volume profile and anchored VWAP have the same hazard in milder form: a profile computed over a window centred on `t` sees the future half.
+
+#### Levels and labels
+
+An option worth testing, not a default: triple-barrier barriers (§7) placed **at levels** rather than at volatility multiples. It makes the label correspond to the trade actually intended, but it changes the label definition, so it is a separate `label_definition` and a separate arm of the funnel — not a tweak to an existing one.
+
+### 6.3 Cross-sectional asset selection
+
+The requirement — configure a handful of assets and let the system decide which one currently fits the strategy best — has two readings that sound identical and are not.
+
+**Valid**: at each decision point, score every configured asset and trade the best. That is cross-sectional selection, it is standard, and **it is part of the strategy**. The scoring rule lives in `strategies.params`, is versioned, and the whole thing is backtested jointly over all the assets — never one at a time.
+
+**Invalid**: run the strategy on five assets, look at the results, keep the one that worked. That is five trials. `studies.executed_trials` increments by five, the Deflated Sharpe bar rises accordingly (§8.3), and the survivor must clear the higher bar. It feels like configuration and it is research, which is precisely why it slips through.
+
+Rule, enforced by the same mechanism as §12.4: **the asset set and the selection rule are part of the configuration hash.** Changing either creates a new experiment and increments the counter. There is no path by which asset choice escapes the trial count.
+
+#### Why five is too few to validate on
+
+Per §0.1, twenty crypto assets behave like three or four independent ones, because cross-sectional correlation against BTC runs around 0.7–0.8. **Five behave like one and a half to two.**
+
+That is very little diversification, and worse, very little statistical power — it collides directly with §8.8, which already identifies sample size as the binding constraint. A selection rule estimated on five assets is estimated on almost nothing.
+
+So:
+
+> **Validate on a wide universe. Deploy on a narrow one.**
+
+The selection rule is estimated and tested across 20–50 assets, where the statistics can speak. Deployment is then restricted to however many the operator wants to run, for entirely legitimate operational reasons: capital, liquidity, fee tiers, margin fragmentation, attention. `runs.universe` (§5.3) holds the deployed set; `experiments.universe` holds the validated one, and they are deliberately different columns.
+
+#### How the deployed set may be chosen
+
+Not by past performance. Choosing the five that did best historically reintroduces survivorship bias at the universe level — exactly what §4.4 removes at the asset level, put back one layer up.
+
+Legitimate criteria are operational and, where they reference market data, **point-in-time**: liquidity as of the decision date, not as of today; fee tier actually held; minimum notional actually in force. Selection by anything that required knowing the outcome is a trial, and is counted as one.
+
+---
+
+## 7. Labeling — the missing layer
+
+The original brief goes from features to "rules" without defining what is being predicted. This is a layer of its own, and it is versioned.
+
+**Triple barrier**: for each candidate instant, three barriers are set — take profit, stop loss and maximum horizon — **scaled by recent volatility**, not fixed. Maximum holding is bounded to the 1–7 day band fixed in §0.2, which is what makes the purge size in §8.2 tractable. The label is whichever is touched first. This is the right way to label because it bakes real risk management into the definition of the target.
+
+**Meta-labeling**: a first model decides direction; a second decides *whether to trade* that signal at all. It separates "which way" from "with what confidence", and usually improves precision without touching the primary model.
+
+**Uniqueness and sample weights**: labels with overlapping horizons are not independent observations. Concurrency is computed and samples are weighted by uniqueness; for resampling, sequential bootstrap. Ignoring this artificially inflates the effective sample size and with it every significance figure downstream.
+
+**Cost-net definition of success**: the target is always defined after fees and estimated slippage. A label based on gross return produces strategies that win on paper and lose in execution.
+
+---
+
+## 8. Validation and anti-overfitting
+
+The heart of the system. No result leaves the lab without passing through here.
+
+### 8.1 Temporal partitioning
+
+- Train / validation / test strictly ordered in time
+- **Frozen OOS**: defined once, up front, and touched as little as possible. Every OOS query is recorded in `oos_access_log`. An OOS you look at a hundred times stops being OOS.
+- Anchored and rolling walk-forward, with periodic retraining
+
+### 8.2 CPCV with purging and embargo
+
+Combinatorial Purged Cross-Validation (López de Prado):
+
+- **Purging**: training samples whose labels overlap the test period in time are removed. Without this, a label with a 24 h horizon leaks information across the split boundary.
+- **Embargo**: a window immediately after the test set is additionally dropped, to cut serial autocorrelation.
+- Purge size is derived automatically from `label_definitions.horizon_bars` and the feature set's maximum `lookback`. **It is not a hand-tuned parameter.**
+
+CPCV produces multiple backtest paths instead of one, yielding a **distribution** of Sharpe rather than a single number. That distribution is the input to PBO.
+
+### 8.3 Multiple-testing correction
+
+With N evaluated trials:
+
+- **Deflated Sharpe Ratio** — adjusts the observed Sharpe for trial count, skewness, kurtosis and sample length. Returns the probability that the true Sharpe is > 0.
+- **PBO** (Probability of Backtest Overfitting) via CSCV — the probability that the configuration chosen in-sample falls below the median out-of-sample. PBO > 0.5 means the selection process is worse than choosing at random.
+- **Hansen SPA / White's Reality Check** — tests the best model in the set against a benchmark while controlling for the full search.
+- **Romano-Wolf stepdown** — when the goal is to identify *several* surviving strategies under family-wise error control.
+- **Minimum Track Record Length** — how many observations would be needed for that Sharpe to be significant. If it exceeds the available history, the result is inconclusive no matter how high it looks.
+
+`trials_considered` comes from `studies.executed_trials`, which includes **those discarded in tier A**. Counting only the finalists is the most common way to fool yourself.
+
+### 8.4 Null baselines
+
+No result is interpreted in absolute terms. Every experiment is compared against:
+
+1. **Buy & hold** on the asset, same period, same costs
+2. **Matched random entry** — same trade count, same duration distribution, same size. Repeated 1,000+ times → empirical null distribution
+3. **Permuted signal** — signals shuffled against the price, or applied to block-permuted price series
+4. **Cost sensitivity sweep** — if the strategy dies when slippage doubles, it is not a strategy
+
+A Sharpe of 1.8 that lands in the 60th percentile of the random-entry distribution is not a signal, it is a coincidence with good presentation.
+
+### 8.5 Parameter stability
+
+The **shape of the surface** is evaluated, not just its maximum:
+
+- Performance of immediate neighbours in parameter space
+- Local flatness: gradient and curvature around the optimum
+- Ratio of the maximum to the median of its neighbourhood
+
+RSI 14 excellent with 13 and 15 disastrous → rejected. RSI 12–18 with equivalent results → accepted. Formalised as the `param_stability` metric, not as visual inspection.
+
+### 8.6 Additional robustness
+
+- Monte Carlo over trade ordering → distribution of maximum drawdown
+- Stationary bootstrap (Politis-Romano) over the return series, respecting serial dependence
+- Input perturbation (price jitter within the spread)
+- Results broken down **by regime** (§10), with a minimum trade count per regime
+- Explicit complexity penalty: number of parameters, features and rules
+
+### 8.7 Hard minimums
+
+An experiment with fewer than ~100 trades in OOS is not evaluated: it is marked `inconclusive`. No statistic can rescue a sample that small, and allowing it is the entry point for all the noise in the system.
+
+### 8.8 Statistical power: decide what you can detect before searching
+
+The uncomfortable arithmetic, stated up front because it bounds the whole project.
+
+Usable perpetual-futures history starts around 2019, so roughly six to eight years. After purging, embargo and holding out a frozen OOS, the number of genuinely independent observations is far smaller than the row count suggests — and for a strategy holding positions for hours, the effective sample is the number of **non-overlapping trades**, not the number of bars.
+
+Consequence: there is a floor below which an edge is undetectable with this dataset, no matter how much compute is spent. A strategy with a true Sharpe of 0.3 cannot be distinguished from zero with a few hundred trades; searching for it only guarantees that what surfaces is noise that happened to look like 0.3.
+
+Therefore:
+
+- **Fix the minimum detectable effect before the search begins.** Given the expected trade count and return volatility, compute the smallest Sharpe distinguishable from zero at the chosen significance level. Record it on the `study`.
+- **Do not search below it.** A search whose target is under the detection floor produces false positives by construction.
+- **MinTRL is the operational form of this** and is already in `validation_reports`: if the required track record exceeds available history, the verdict is `inconclusive`, never `pass`.
+- Higher-frequency strategies have more power per unit of calendar time, which is a reason to prefer them at this stage — not because they are better, but because they are **falsifiable** with the data on hand.
+
+This section exists to make one failure mode impossible: spending months discovering that the question was unanswerable with the available sample.
+
+---
+
+## 9. Experiment engine and compute budget
+
+### 9.1 Multi-stage funnel
+
+A million configurations under realistic event-driven simulation is not viable. Structure:
+
+| Stage | Engine | Costs | Typical volume | Unit cost |
+|---|---|---|---|---|
+| **Tier A — screening** | Vectorized (Polars/Numba) | Calibrated parametric model | 10⁴–10⁶ | ~ms |
+| **Tier B — validation** | nautilus_trader, event-driven | Real book, latency, partial fills | 10²–10³ | ~s–min |
+| **Tier C — full walk-forward** | nautilus_trader, full CPCV | Identical to B | 10¹–10² | ~min–h |
+
+Tier A filters on gross metrics and trade-count minimums. Only survivors reach B. Only those clearing B's gates reach C.
+
+**Critical**: the trial count for DSR/PBO accumulates **from tier A onwards**. The funnel saves compute; it does not grant an exemption from statistical control.
+
+### 9.2 Calibrating tier A against tier B
+
+The vectorized cost model is periodically recalibrated against event-driven results. Systematic error is monitored; if tier A consistently overestimates returns, its filtering is biased and must be readjusted. This is a lab health metric with its own dashboard.
+
+### 9.3 Search
+
+- **Grid** for small spaces and for mapping parameter surfaces (required by §8.5)
+- **Random** as the baseline — it beats grid in high dimensions
+- **TPE / CMA-ES** (Optuna) in later phases, with a caveat: adaptive search **increases** overfitting risk because it concentrates trials where noise is favourable. It demands a stricter DSR.
+- **Declarative constraints** in `strategies.constraints` to prune absurd combinations (e.g. fast EMA ≥ slow EMA) before spending compute.
+
+### 9.4 Determinism
+
+Every experiment pins: `seed`, `code_version` (git sha), `image_digest`, `dataset_version_id`. Re-running it must produce bit-identical metrics. A CI test verifies this on a known case; if it fails, there is hidden non-determinism (thread ordering, hash randomisation, float reduction) and it is a blocking bug.
+
+### 9.5 Cost and impact model
+
+Backtest realism lives almost entirely here. The model is versioned (`cost_models`) and referenced by every experiment and run, so a result can never be compared against one produced under different cost assumptions.
+
+- **Fees**: maker and taker separately, at the point-in-time tier the account actually held. Not tier 0.
+- **Spread**: taken from recorded quotes, never assumed constant.
+- **Taker slippage**: walk the recorded book depth for the order size. A parametric approximation is allowed in tier A, calibrated against tier B (§9.2).
+- **Maker queue position**: the genuinely hard part. A resting limit order fills only once the volume ahead of it trades through. Default assumption is the back of the queue; anything more optimistic must be justified against observed fills.
+- **Adverse selection on maker fills**: this is the one that quietly inflates results. Passive orders fill preferentially when the market is about to move against them, so a maker strategy evaluated without it looks far better than it is. Modelled as a conditional drift applied after each passive fill, estimated from historical data and recalibrated from own fills once live.
+- **Market impact**: square-root law on participation rate, parametric until enough own fills exist to calibrate it. Feeds §12.7 capacity directly.
+- **Funding**: applied at the venue's real marks, on mark price, not last price.
+- **Latency**: measured against the venue, applied between `intent_ts` and `sent_ts`.
+
+Every promotion report carries results under all three fill models (optimistic / realistic / pessimistic). **Promotion requires viability under `pessimistic`.** A strategy that only works under optimistic fills is a strategy that only works in the backtest.
+
+### 9.6 Scaling backtests
+
+Backtests are embarrassingly parallel across configurations, which makes scaling a matter of not wasting work rather than of distributed computing.
+
+- **Deduplicate before dispatch.** `config_hash` is checked first; already-computed configurations are never re-queued. In a grid search with overlapping sub-spaces this alone removes a large fraction of the work.
+- **Share the feature matrix, do not copy it.** Workers memory-map the Arrow/Parquet matrix read-only: one copy per machine, not per process. This is usually the difference between 4 workers and 32 on the same box.
+- **Vectorise across parameters, not just across time.** In tier A, all RSI periods are computed in one pass over the data rather than one pass per period. The cost of 40 variants should be close to the cost of one.
+- **Partition by (strategy, parameter chunk)** as Dagster assets, so a failed chunk retries alone and progress survives restarts.
+- **Per-study compute budget.** A study that exceeds its budget halts and asks rather than silently consuming the cluster. The budget is recorded next to the trial count, because both are costs of the same search.
+
+Horizontal scaling is deliberately deferred: with deduplication, shared matrices and parameter-vectorisation, a single well-specified machine covers tier A volumes well past the point where the statistical bottleneck (§8.8) binds. Add machines when measurement says to, not before.
+
+---
+
+## 10. Market regime engine
+
+A regime classifier, causal and point-in-time (it cannot use future data to label the past).
+
+Dimensions: direction (bull/bear/neutral) · structure (trending/ranging) · volatility (high/low, expanding/contracting) · risk (risk-on/risk-off, via macro correlation) · liquidity (high/low).
+
+Methods: explicit rules over realised volatility, ADX, Hurst, band width; alternatively Hidden Markov Models or clustering, **always trained only on data preceding each point**.
+
+Usage: `experiment_results` carries one row per regime. A strategy that only works in one regime is not discarded — it is annotated, and its deployment is conditioned on detecting that regime live. But it must still meet a minimum trade count within that regime.
+
+---
+
+## 11. News & Event Intelligence
+
+This is the project's central research bet, so it carries the heaviest statistical burden, not the lightest.
+
+**What is not the edge**: reading news fast, or classifying it well. LLMs commoditised both, and headline bots arbitrage the obvious events in seconds. Competing there means competing on latency, which §0.2 already ruled out.
+
+**What might be the edge**: the *shape* of the reaction — how large, how long it lasts, and how both change with market state. That is a modelling problem rather than a speed problem, it is poorly studied, and it is where a small operator with good data and honest validation can be genuinely better.
+
+The object being estimated:
+
+```
+E[ z(h) | event ] = f(class, surprise, asset) · g(state) · decay(h)
+```
+
+where `z(h)` is the volatility-normalised cumulative abnormal return at horizon `h`.
+
+### 11.1 Event construction
+
+```
+ingest → exact dedup → embed → cluster → Event ID → structured extraction → class assignment
+```
+
+**Event ID**: articles group by semantic similarity + entity overlap + temporal proximity (HDBSCAN over embeddings, windowed). A later article about an existing event **updates** it with a new revision; it never creates a second signal.
+
+**Closed taxonomy.** Event classes come from a fixed, versioned list — not free-form LLM output. Free-form classes fragment the sample into cells of three events each and make everything downstream unestimable. A new class is a deliberate schema change, not an emergent one.
+
+Starting taxonomy, ordered by sample size, which is the order they should be worked on:
+
+| Class | Expected occurrences, 6 yr | Surprise computable? |
+|---|---|---|
+| `listing` / `delisting` | hundreds across venues | Partially (pre-announcement window) |
+| `margin_change`, `funding_change` | hundreds | Yes (parameter delta) |
+| `macro_release` (CPI, FOMC, NFP) | ~70–100 per series | **Yes — actual minus consensus** |
+| `unlock` (token vesting) | hundreds, scheduled | Yes (size vs float) |
+| `regulation` | tens | No |
+| `hack` / `exploit` | tens | Partially (loss size) |
+| `partnership` / `rumour` | many, mostly noise | No |
+
+The two at the top are where the statistics can actually speak: **exchange announcements** (structured, timestamped, free, and the core of the differentiation thesis) and **scheduled macro** (the only family where surprise exists as a number *before* the event, rather than being inferred afterwards).
+
+Free-text news sits at the bottom for a reason: unreliable timestamps, no deep archive, and the narrative problem of §11.8.
+
+### 11.2 Point-in-time discipline
+
+- `available_at` = publication + **measured** feed delay, never the ingest timestamp of a backfill
+- Event state is versioned in `event_revisions`; a backtest at `t` sees only revisions with `available_at <= t`
+- Source credibility is point-in-time too: a 2021 article cannot be scored with a 2026 reputation
+- **News history is not backfillable.** Feeds have no deep archive, so capture must start before it is needed — the same constraint as liquidations and open interest (§4.1)
+
+This is where a news system leaks the future most easily. §11.8 contains the test that detects it.
+
+### 11.3 Abnormal return: the benchmark
+
+"The market moved after the news" is meaningless without a counterfactual. Two estimators, because two kinds of event need different ones:
+
+**Asset-specific events** (listing, hack, unlock) — cross-sectional benchmark:
+
+```
+ar_a(t) = r_a(t) − β_a · r_BTC(t)
+```
+
+with `β_a` estimated on a pre-event window `[t−30d, t−1d]`, embargoed so the estimation window never touches the event.
+
+**Market-wide events** (macro releases) — no cross-sectional benchmark exists, because everything moves together. The counterfactual is a time-series one: expected return given market state, estimated on non-event periods in the same state.
+
+**Volatility normalisation**, applied to both:
+
+```
+z(h) = CAR(h) / (σ_pre · √h)
+```
+
+Without it a 2% move in a quiet altcoin and a 6% move in a volatile one are not comparable, and pooling across assets produces garbage.
+
+### 11.4 Market state index
+
+Built in-house, not bought. A vendor fear-and-greed index is a black box, is partly composed of inputs already held, and can be revised — which breaks point-in-time correctness (§4.3).
+
+The state vector is derived from Tier 1 derivatives data already collected, so it is point-in-time by construction and decomposable when something behaves oddly:
+
+| Dimension | Components |
+|---|---|
+| Positioning | Funding rate z-score and cross-venue dispersion; basis slope; OI relative to market cap |
+| Stress | Liquidation asymmetry (long vs short notional); realised vol vs its own trailing distribution |
+| Participation | Trade count z-score; **average trade size** — falling size with rising count is retail inflow |
+| Liquidity | Depth within ±25 bps; effective spread |
+
+Participation deserves the emphasis: users are not observable, and **volume is a poor proxy** because wash trading inflates it. Trade count and average trade size are far better, and both fall straight out of the trades archive at no extra cost.
+
+State enters the model as **3–5 discrete buckets**, not as continuous interactions. Sample size forbids continuous conditioning; §11.6 explains why.
+
+### 11.5 The impulse response algorithm
+
+The core estimation. Per `(class, state_bucket)`:
+
+**Step 1 — Horizon grid.** `h ∈ {5m, 15m, 30m, 1h, 2h, 4h, 8h, 1d, 2d, 3d, 5d, 7d}`. It spans the §0.2 band with resolution on both sides of it, because the answer to "is this tradeable" lives at the boundary.
+
+**Step 2 — Local projections.** One regression per horizon (Jordà), rather than fitting a VAR and imposing a decay shape:
+
+```
+z_i(h) = α(h) + β(h)·surprise_i + γ(h)·log(liquidity_i) + δ(h)·participation_i + ε_i(h)
+```
+
+Local projections are used because they impose no functional form on the response and degrade gracefully when the model is misspecified — which it will be.
+
+**Step 3 — Fit the decay, in two components:**
+
+```
+IRF(h) = A·exp(−h/τ_fast) + B·exp(−h/τ_slow)
+```
+
+This decomposition is the point of the whole exercise. `τ_fast` is the mechanical reaction — real, and largely uncapturable, since it resolves before an order can be sized. `τ_slow`, if it exists, is the persistent component, and it is the only part that survives the cost arithmetic of §0.1.
+
+Half-life is `τ·ln 2`. Both components are reported with confidence intervals.
+
+**Step 4 — The decisive filter.** An event class is tradeable only if:
+
+```
+B · (1 − exp(−H/τ_slow)) > cost_round_trip ,  for some H within the §0.2 band
+```
+
+In words: the slow component must be large enough to cover a round trip **within a holding period the cost structure permits**. A class with a 2-hour half-life fails this regardless of how strong the reaction is, and it fails automatically rather than by judgement.
+
+The prior worth testing first: structural events (listing, delisting, margin change, regulation) persist for days because they change who can trade what; sentiment and rumour events decay in hours. If that holds, the monetisable subset is small and concrete — which is good news, because it bounds the search.
+
+**Step 5 — Walk-forward estimation, always.** The IRF applied at time `t` is fitted only on events with `available_at < t`, expanding window, refitted on a fixed cadence. An IRF fitted on the full sample and applied retrospectively is a textbook leak and will produce spectacular, entirely fictional results.
+
+### 11.6 Hierarchical pooling
+
+Cells are sparse and always will be. Conditioning impact on `class × state × participation` with 7 classes, 4 states and 3 participation levels gives 84 cells; at 30 events per cell that needs 2,500 events **per class**. Only listings come close.
+
+So estimates are **partially pooled**, shrinking cell estimates toward the class mean and class means toward the global mean, with shrinkage proportional to `1/n`:
+
+```
+α_{c,θ}(h) ~ Normal( α_c(h), σ²_class )
+α_c(h)     ~ Normal( α_global(h), σ²_global )
+```
+
+Implementation is **empirical Bayes** (closed-form James–Stein style shrinkage), not MCMC. It is deterministic, which §9.4 requires; a sampler introduces randomness that then has to be seeded and defended.
+
+`n_events` is stored alongside every coefficient and is **displayed wherever the coefficient is displayed**. A number backed by six events must never be presentable without that six being visible next to it.
+
+### 11.7 The tradeable signal
+
+At prediction time, for an event observed `h_obs` ago:
+
+```
+reaction_surprise   = z_observed(h_obs) − IRF_predicted(h_obs)
+expected_remaining  = IRF_predicted(H) − IRF_predicted(h_obs)
+```
+
+Two features go to the feature engine (§6):
+
+- **`reaction_surprise`** — under- or overreaction relative to what this class, in this state, normally does. Positive news that should move +2σ and moved +0.2σ is a different observation from lukewarm news that moved +4σ.
+- **`expected_remaining`** — how much of the move is still ahead, net of what already happened.
+
+The entry condition follows from the model rather than from a threshold someone chose:
+
+```
+expected_remaining · σ_pre  >  cost_round_trip + margin
+AND  implied_hold(τ_slow)   ∈  [1d, 7d]     # §0.2
+```
+
+The algorithm enforces the horizon constraint itself. A signal whose implied holding period is three hours is rejected by construction, not by discipline.
+
+### 11.8 Baselines and diagnostics
+
+Event studies fail in characteristic ways. Three checks, all mandatory before any IRF is usable:
+
+**Pre-event flatness.** The estimated IRF must be indistinguishable from zero for `h < 0`. A non-zero pre-event drift means one of two things, and both are serious: the `available_at` timestamp is wrong, or the information reached the market before your feed. This is the single most valuable diagnostic in §11, because it directly tests the honesty of the timestamp everything else depends on.
+
+**Placebo events.** Same class, randomised timestamps, matched to the same state distribution. The IRF must be flat. Repeated 1,000 times, this gives the empirical null the real IRF must beat.
+
+**Shuffled class labels.** Permuting class assignments across events must collapse the IRF. If it survives, the model is fitting something that is not the event class.
+
+And the standing hazard, which no test fully removes: **the narrative fallacy.** Given any large move, financial media reliably produces an explanation. Retrospective matching of moves to headlines is overfitting with prose attached, and it is more persuasive than the numerical kind precisely because it comes with a coherent story. The residual formulation of §11.7 is the structural defence: it asks whether the reaction differed from expectation, not whether a story exists.
+
+### 11.9 Gates
+
+Before an IRF-derived feature reaches the feature engine:
+
+- `n_events ≥ 30` in the cell, or the estimate is pooled and flagged as such
+- Pre-event flatness passes
+- IRF beats the placebo null at the 95th percentile
+- `τ_slow` exists with a confidence interval excluding zero
+- The §11.5 step 4 cost filter passes for some horizon inside the §0.2 band
+- Walk-forward: the IRF fitted on data before `t` predicts reactions after `t` better than the unconditional mean
+
+Clearing all six produces a *feature*, not a strategy. It then enters the funnel at §9 and faces §8 like anything else. That the news engine is the centre of the project is a reason to hold it to the standard, not a reason to exempt it — narrative is exactly where conviction outruns evidence.
+
+---
+
+## 12. Execution modes: the ladder to real money
+
+The system operates in **four modes**, not two. Jumping straight from simulator to production is the most expensive mistake in projects of this kind, because "fake money" covers two distinct tests that do not substitute for each other: the **alpha** test (does the strategy make money?) and the **integration** test (can my code talk to the exchange without breaking?). A local simulator validates the first and never touches the second.
+
+### 12.1 The four rungs
+
+| Mode | Data | Execution | Money | What it proves | What it does NOT prove |
+|---|---|---|---|---|---|
+| **1. BACKTEST** | Historical | Simulated locally | Fake | That alpha exists historically | Anything about real time |
+| **2. SIMULATOR** (paper) | Live, real | Simulated locally | Fake, configurable | That alpha survives on unseen data, in real time | That the exchange accepts your orders |
+| **3. TESTNET** (sandbox) | Live, testnet | **Real**, against the exchange matching engine | Exchange fake money | That integration works: API, limits, rejections, precision, reconnection | Real impact and slippage (the testnet book is unreal) |
+| **4. LIVE** | Live, real | Real | **Real**, ramped in tiers | Everything else: real queue position, real fills, real impact | — |
+
+Why rung 3 is not optional: an entire family of failures appears only against a real exchange — rounding to `tick_size`/`lot_size`, `min_notional`, margin rejections, signature errors, rate limits, `-1021 timestamp outside recvWindow`, websocket reconnection with event loss, clock drift. None of these exist in a local simulator, and all of them show up on day one with real money if you have not hunted them down first.
+
+Why rung 2 is not optional either, given rung 3: the testnet book is empty and its prices drift away from the real market. It validates integration, **not** performance. Testnet numbers feed into no decision about the strategy.
+
+### 12.2 One engine, four adapters
+
+The strategy is written once and does not know which mode it runs in. Mode is configuration, not code.
+
+```python
+class ExecutionMode(StrEnum):
+    BACKTEST  = "backtest"
+    SIMULATOR = "simulator"
+    TESTNET   = "testnet"
+    LIVE      = "live"
+
+@dataclass(frozen=True)
+class RunConfig:
+    mode: ExecutionMode
+    strategy_id: UUID
+    params: dict                 # frozen: see §12.4
+    initial_capital: Decimal     # fake or real capital
+    base_currency: str
+    universe: list[str]
+    risk_limits: RiskLimits      # §14.1 — mandatory in EVERY mode
+    cost_model_id: UUID
+    data_feed: FeedRef
+    venue_adapter: AdapterRef
+    seed: int | None             # BACKTEST only
+    code_version: str
+    image_digest: str
+```
+
+The only thing that changes between modes is the pair (`data_feed`, `venue_adapter`). The decision code is byte-for-byte identical, and its `code_hash` is recorded on every run, so it is provable that the strategy running live is literally the one that passed validation.
+
+nautilus_trader implements exactly this pattern, which is the main reason it is in the stack.
+
+`risk_limits` are enforced **in simulator and backtest too**. If the limiter only activates in production, its first real execution is with real money — which is precisely what we want to avoid.
+
+### 12.3 Simulator configuration
+
+SIMULATOR mode parameters, all versioned alongside the run:
+
+- **`initial_capital`** — starting fake amount
+- **`sizing`** — fraction of equity per position, or fixed risk per trade as % of equity
+- **`leverage_max`**, **`positions_max`**, **`exposure_max`**
+- **`fee_tier`** — the real tier your volume would earn, not the optimistic tier 0
+- **`latency_model`** — network latency measured against the venue, not assumed
+- **`fill_model`** — `optimistic` (everything at mid), `realistic` (walks the book), `pessimistic` (worst price of the level). Defaults to `realistic`, and the promotion report includes all three.
+- **`funding`** — applied at the venue's real funding marks
+- **`reset_policy`** — whether equity resets between sessions or accumulates. Defaults to **accumulate**: a simulator that resets daily hides drawdown.
+
+**Fake capital must be the same order of magnitude as the planned real capital.** Simulating with 1,000,000 and trading with 5,000, or vice versa, invalidates the test: market impact, exchange minimum viability and strategy capacity all depend on size. If the plan is to start with €5,000, the simulator runs with €5,000.
+
+### 12.4 What can and cannot be tuned in the simulator
+
+There is a trap here worth seeing before falling into it.
+
+The requirement is to be able to "polish parameters" in the simulator. The problem: if you adjust signal parameters based on what you see in the simulator, that period stops being out-of-sample. After three or four iterations you have optimised the strategy over the last few weeks of market — overfitting exactly as in the backtest, only slower and more convincing, because it looks "live".
+
+Operational boundary:
+
+| Tunable in SIMULATOR | Must return to the funnel (§9) |
+|---|---|
+| Sizing and risk limits | Signal parameters (periods, thresholds, features) |
+| Order type (limit vs market, offset, TTL) | Entry and exit rules |
+| Cost and latency model calibration | Take profit / stop loss in the logic |
+| Re-evaluation frequency, trading hours | Feature selection |
+| Retries, timeouts, error handling | Asset universe |
+| Alerting and monitoring thresholds | Label definition |
+
+Hard rule: **touching anything in the right-hand column creates a new strategy** (new `strategy_id`, new `code_hash`) that returns to `screening` and adds its trials to the counter in §8.3. The system enforces it: a run's `params` are immutable, and modifying them produces a different run, never an edit.
+
+What is legitimate to do in the simulator with the results: **conclude the strategy does not work** and retire it. Rejecting is free; re-tuning costs the entire validation.
+
+### 12.5 Backtest ↔ simulator reconciliation
+
+Not a visual comparison — an automated daily procedure:
+
+1. The same period the simulator saw is re-backtested, using the data the simulator actually received (not the cleaner history available afterwards)
+2. Paired comparison of the return series
+3. Bootstrap over the difference series → confidence interval on the divergence
+4. **Divergence decomposition** into four buckets: costs, signal timing, fill quality, data differences
+
+The fourth point is the one that pays. Knowing *that* they diverge is useless; knowing that 80% comes from worse-than-modelled fills tells you exactly what to fix. And a large divergence is not a simulator failure — it is evidence the backtest was wrong, and it feeds back into the cost model.
+
+### 12.6 Simulation dashboard
+
+Grafana, live, over Postgres/Timescale:
+
+Equity curve vs backtest equity for the same period · current and maximum drawdown · realised / unrealised P&L · positions and exposure per asset · trades with expected vs obtained price (per-trade slippage) · cumulative fees and funding · signal→order→fill latency · rejection and error rates · rolling metrics (30d Sharpe, win rate, profit factor, turnover) · cumulative divergence vs backtest with its confidence band.
+
+Rolling metrics are **descriptive**, not decision criteria: a 30-day Sharpe has an enormous standard error and reacting to it is reacting to noise.
+
+### 12.7 Capacity
+
+Before any rung involving real money, the report must include a **capacity analysis**: the strategy is re-backtested at increasing position sizes using the impact model calibrated against the real book, locating the point where net alpha degrades below threshold.
+
+That number is the strategy's capital ceiling. Trading above it guarantees it stops working, and it is the most frequent reason a validated strategy dies on scaling.
+
+## 13. Portfolio construction and allocation
+
+Everything up to here validates one strategy at a time. Production runs several at once, and that is a different problem: **five strategies that each pass §8 independently can be the same bet wearing five hats.** Their individual validations say nothing about that, and the failure shows up as a drawdown five times deeper than any of them predicted.
+
+### 13.1 Strategy correlation
+
+Correlation is measured on **realised return series**, not on parameters, features or asset overlap. Two strategies can share no features and be perfectly correlated; two can share every feature and be uncorrelated.
+
+- Computed on OOS and simulator returns only — in-sample correlation is as meaningless as in-sample Sharpe
+- Hierarchical clustering on correlation distance; a cluster is treated as **one bet**
+- Computed **per regime as well as overall** (`strategy_correlations.regime`). Correlations converge toward 1 under stress, so the number that matters for risk is the crisis-regime correlation, not the average one
+- Recorded with `n_obs`: a correlation estimated on 20 overlapping trades is noise
+
+### 13.2 Allocation
+
+Capital is allocated **across clusters first, then within them**.
+
+Naive mean-variance optimisation is rejected: it is famously unstable when expected returns are estimated rather than known, and it concentrates capital into whichever strategy has the luckiest estimate. The default is **Hierarchical Risk Parity** or equal risk contribution across clusters — both are robust to estimation error, which is the dominant error here.
+
+- Hard cap per strategy and per cluster, independent of what the optimiser wants
+- Rebalancing on a fixed cadence, with turnover cost charged to the decision. A rebalance that costs more than the risk it reduces is not worth doing
+- A new strategy enters at the bottom of the capital ramp (§14.5) regardless of what the allocator suggests
+
+### 13.3 Portfolio-level multiple testing
+
+The trial counter does not stop at the strategy boundary. **Every strategy promoted to the portfolio is itself a trial at the portfolio level**, and a portfolio assembled from the best of N validated strategies has a selection bias of exactly the kind §8.3 exists to correct.
+
+- A portfolio-level counter mirrors `studies.executed_trials`, incremented on every promotion and every allocation change driven by performance
+- Portfolio Sharpe is deflated by that count before it is reported anywhere
+- Rule of thumb that follows: adding a marginal strategy to the portfolio has to clear a **higher** bar than the first one did, not a lower one
+
+### 13.4 Netting and attribution
+
+Two strategies may want opposite positions in the same asset. The decision is explicit: **net at the venue, attribute internally.** Netting saves fees and margin; the intent log (§14.3) preserves what each strategy wanted, so per-strategy P&L attribution survives.
+
+What is not allowed is netting silently and then reporting per-strategy results as though each traded alone — that turns attribution into fiction precisely when it is needed to decide which strategy to cut.
+
+### 13.5 Aggregate capacity
+
+Individual capacity ceilings (§12.7) **do not add up**. Two strategies trading the same asset draw on the same liquidity, and their combined order flow competes with itself.
+
+Portfolio capacity is computed jointly from the combined flow, not summed from the parts. It is recomputed whenever a strategy is added, and it caps the capital ramp: the portfolio never scales past its joint ceiling, even if every individual strategy still has room.
+
+---
+
+---
+
+## 14. Risk controls and operational safety
+
+These controls are a requirement for modes 3 and 4, and are exercised from mode 1 onward.
+
+### 14.1 Hard limits and kill switch
+
+Evaluated by a component **independent of the strategy**, able to veto any order:
+
+- `max_position_size` and `max_notional` per asset
+- `max_gross_exposure` and `max_net_exposure` for the portfolio
+- `max_leverage`
+- `max_daily_loss` → **automatic halt** and cancellation of open orders
+- `max_drawdown_from_peak` → halt, with human review required to resume
+- `max_orders_per_minute` → firebreak against order loops
+- `max_consecutive_errors` → halt
+- Price deviation: reject orders more than X bps away from mid (protects against corrupt data)
+
+**Manual kill switch**: one command and one button that cancel everything, close positions in `reduce_only` mode and leave the system halted. It must work even if the orchestrator is down — meaning it cannot depend on the same process it is trying to stop.
+
+**Dead man's switch**: if the system loses its heartbeat, the exchange cancels open orders on its own. Binance and other venues support this natively; it is always enabled in LIVE mode.
+
+### 14.2 State reconciliation with the exchange
+
+The position the system *believes* it holds and the one it *actually* holds will diverge sooner or later: fills lost to disconnection, partial liquidations, orders the exchange accepted whose acknowledgement never arrived.
+
+- Periodic reconciliation (every N seconds) of positions, open orders and balances against the venue
+- **Mandatory reconciliation at startup, before issuing the first order.** A system that restarts after a crash and trades without reconciling can double an existing position.
+- Discrepancy detected → immediate halt, never silent self-correction
+- Everything recorded in `position_reconciliations` for audit
+
+### 14.3 Idempotency and recovery
+
+- Every order carries a **deterministic `client_order_id`**, so a retry after timeout does not create a second order
+- State is persisted before sending, not after: if the process dies between send and acknowledgement, on startup it knows that order might exist and goes looking for it
+- Append-only intent log: *what the strategy wanted to do*, in addition to what was executed. This is what makes it possible to reconstruct why a position was opened
+
+### 14.4 Credentials and attack surface
+
+- **Separate API keys per mode**, never shared between testnet and live
+- Minimum permissions: trading yes, **withdrawals no**. No exceptions
+- IP whitelist at the exchange
+- Secrets outside the repository and outside the research container's environment: the lab does not need production keys
+- LIVE keys are accessible only to the execution process, not to backtest workers and not to the AI agent
+
+### 14.5 Capital ramp
+
+Going to production is not a switch, it is a ramp. Each tier requires a minimum period and metrics within band:
+
+| Tier | Capital | Minimum duration | Advancement criteria |
+|---|---|---|---|
+| L0 | 1% of target (or exchange minimum) | 2 weeks | Zero integration incidents, clean reconciliation, slippage within model |
+| L1 | 10% | 4 weeks | Divergence vs simulator not significant, drawdown within expectation |
+| L2 | 33% | 6 weeks | Same, plus ≥ 50 cumulative trades |
+| L3 | 100% | — | Formal review and recorded approval |
+
+Any limit breach, or sustained significant divergence, **drops one tier**. No tier is skipped, and the criteria are versioned exactly like the validation gates (§15).
+
+### 14.6 Alpha decay detection
+
+§15 retires a strategy for "sustained degradation". Left undefined, that phrase resolves to whatever the operator feels after a bad month, which is the worst possible decision rule: it retires good strategies inside normal drawdowns and keeps broken ones during lucky streaks.
+
+It is therefore a pre-registered statistical test, fixed **before** the strategy goes live:
+
+- Validation produces an expected return distribution (mean, volatility, and a Monte Carlo drawdown distribution from §8.6). That distribution is the null hypothesis for live performance.
+- A **sequential test** runs continuously on live returns — CUSUM on the cumulative deviation, or an SPRT of "Sharpe equals the validated value" against "Sharpe is zero". Sequential, because the decision is being made repeatedly and a fixed-sample test applied daily is a multiple-testing violation in its own right.
+- Thresholds and the required evidence to retire are set in advance and versioned.
+
+Two rules that follow, and that matter as much as the test:
+
+**A drawdown inside the validated distribution is not evidence of failure.** If Monte Carlo said a 22% drawdown occurs in 1 run out of 5, then seeing 22% is information you already had. Retiring there destroys a working strategy and, worse, teaches the lab to retire on discomfort.
+
+**Separate "not working" from "its regime is absent."** A regime-conditional strategy producing nothing during a regime it was never meant to trade is behaving correctly. The test conditions on regime (§10) before concluding decay; a strategy flat in the wrong regime goes dormant, not retired.
+
+Outcome of the test feeds the lifecycle: `warn` raises monitoring, `breach` halts and demands review, sustained `breach` retires.
+
+---
+
+## 15. Strategy lifecycle
+
+State machine with transitions bound to hard criteria. No transition is manual without a record.
+
+```
+draft → screening → validating → candidate → simulator → testnet → live_ramp → live
+                        ↓            ↓           ↓          ↓          ↓        ↓
+                     rejected     rejected   rejected    rejected   halted   retired
+```
+
+| Transition | Criteria |
+|---|---|
+| `screening → validating` | Tier A: ≥ minimum trade count, beats buy & hold net of costs, exceeds the 95th percentile of the random null |
+| `validating → candidate` | DSR p < 0.05 with full trial count · PBO < 0.3 · `param_stability` above threshold · ≥ 100 OOS trades · positive in ≥ 2 regimes · survives 2× costs · capacity analysis completed (§12.7) |
+| `candidate → simulator` | Recorded human approval + leakage review + signed report |
+| `simulator → testnet` | ≥ 60 days in simulator · divergence vs backtest not significant · ≥ 30 trades · zero unhandled errors |
+| `testnet → live_ramp` | ≥ 2 weeks on testnet · zero rejections from formatting or precision bugs · clean reconciliation · kill switch and dead man's switch proven in drill |
+| `live_ramp → live` | Tiers L0–L3 completed per §14.5 |
+| `* → halted` | Hard limit breach, reconciliation discrepancy, or error rate above threshold |
+| `* → rejected/retired` | Criterion failure, sustained degradation as defined by the §14.6 sequential test (never by operator judgement alone), or structural regime change |
+
+Thresholds live in versioned configuration, not in code, and **changing them is an audited event**. Lowering the bar when nothing clears it is the most common way a lab stops being one.
+
+One detail worth noting: `simulator` requires 60 days because a strategy with infrequent signals needs time to accumulate enough trades. If it does not reach 30 trades in 60 days, it has not failed — it cannot be evaluated, and the decision is whether to give it more time or discard it as unviable.
+
+---
+
+## 16. Reproducibility, testing and quality
+
+### 16.1 Versioning
+
+Four things are versioned by content hash and referenced from every experiment and every run:
+
+1. **Data** — `dataset_versions.content_hash` (hash of the Parquet file manifest)
+2. **Code** — git sha + container digest
+3. **Definitions** — `code_hash` of features, labels, strategies, cost models and regime models
+4. **Configuration** — `config_hash` of the experiment, or the `RunConfig` of the run
+
+Dagster materialises each asset with its lineage, so "which data and which code produced this number" is a query, not an investigation.
+
+Operational consequence: given a trade in production, the full chain can be reconstructed back to the experiment that promoted that strategy and the dataset it was validated against.
+
+### 16.2 What the test suite must protect against
+
+Testing this system is not like testing ordinary software, and designing the suite as though it were is the most likely way to end up with high coverage and no protection.
+
+**The bugs that matter here do not crash.** A look-ahead bug does not raise an exception — it returns a *better* Sharpe ratio. A wrong fee tier does not fail a request — it makes a losing strategy look profitable. A mis-sized purge produces a clean, plausible, entirely invalid validation report. Conventional "does it run" testing catches almost none of this, because the failure mode is a wrong number that looks right.
+
+Three consequences shape the suite:
+
+- **For most outputs there is no expected value to assert.** Nobody knows what the correct Sharpe is. So the suite cannot be built on expected outputs; it is built on **invariants**, on **synthetic data where the truth is known by construction**, and on **differential comparison** between two implementations that must agree.
+- **Coverage is the wrong metric.** 100% line coverage says nothing about whether the validator rejects noise. The metric that matters is the **canary catch rate** (§16.5): the fraction of deliberately broken inputs the suite detects.
+- **The suite must be able to fail the science, not just the code.** The phase 3 exit criterion — the system rejects a strategy built on pure noise — is a test, and it runs nightly like any other.
+
+Seven layers, ordered by how much they protect:
+
+| Layer | Catches | Where |
+|---|---|---|
+| 1. Unit and contract | Ordinary bugs, schema drift, API breakage | Everywhere |
+| 2. Temporal invariants | **Look-ahead bias, generically** | §16.3 |
+| 3. Synthetic ground truth | A validator that accepts noise or rejects real edges | §16.4 |
+| 4. Leakage canaries | Anti-leakage machinery that silently stopped working | §16.5 |
+| 5. Differential and golden | Refactors that change results; tier A/B disagreement | §16.6 |
+| 6. Execution and drills | Integration failures, unsafe recovery, risk limits that do not fire | §16.7 |
+| 7. Data assertions | Bad data, continuously, in production | §16.7 |
+
+Layers 2, 3 and 4 carry most of the value and are the ones almost nobody builds.
+
+### 16.3 Temporal invariants (property-based)
+
+Written with `hypothesis`, over generated inputs rather than fixed cases.
+
+- **Truncation invariance.** For any feature and any t, the value computed on data truncated at t equals the value computed on the full dataset. This is the **generic look-ahead detector**: it finds leakage without knowing where it is, which is why it is the single most valuable test in the system.
+- **Decision truncation invariance.** The same property for a whole backtest: decisions up to t are identical whether run on data truncated at t or on complete history.
+- **Row-order invariance.** Reordering rows that share a timestamp does not change any output. Catches accidental dependence on arrival order.
+- **Declared lookback honesty.** Perturbing rows older than a feature's declared `lookback_bars` must not change its output. A feature that reaches further back than it declared fails here — and since `lookback` drives purge size (§8.2), that is a correctness bug, not a documentation one.
+- **Purge sufficiency.** For every experiment, `purge ≥ label_horizon + max(feature lookback)`. Asserted at construction, so an invalid CV scheme cannot be built.
+- **`available_at` monotonicity.** No row is ever visible before it exists; revisions never lower the availability of their predecessor.
+
+### 16.4 Synthetic ground truth
+
+Seeded generators that produce data where the answer is known by construction. This is the only place where "the system got it right" is a checkable statement.
+
+| Generator | Produces | The suite asserts |
+|---|---|---|
+| `make_noise(seed)` | Zero-drift series with GARCH volatility clustering, no edge | **Every strategy is rejected**, after 10⁵ trials. Phase 3's exit criterion |
+| `make_edge(sharpe, horizon, seed)` | Noise plus a predictable component of known size | The edge is found, and the estimated Sharpe falls within its confidence interval |
+| `make_subthreshold_edge(seed)` | A real edge *below* the study's minimum detectable effect | Verdict is `inconclusive`, never `pass`. This is what proves §8.8 actually bites |
+| `make_regime_switch(seed)` | Two regimes with different dynamics and known switch points | The regime classifier recovers the switches within tolerance, using only past data |
+| `make_costed(drag, seed)` | Known analytic cost drag | Backtest net return matches the analytic expectation to tolerance |
+| `make_survivorship(seed)` | A universe where losers are delisted | Results computed on the point-in-time universe differ from the naive one, in the expected direction |
+
+The `make_subthreshold_edge` case deserves emphasis: it tests the system's willingness to say "I do not know". A validator that passes it is one that claims more than the data supports, and that is the failure this whole project exists to prevent.
+
+### 16.5 Leakage canaries
+
+Deliberately broken inputs, injected on purpose, with an expected detector for each. The suite fails if any canary goes undetected.
+
+| Canary | Expected detector |
+|---|---|
+| Feature returning next-bar return directly | Truncation invariance (§16.3) |
+| Feature peeking exactly one bar ahead | Truncation invariance — the subtle case, and the one that proves the test has teeth |
+| Feature using `event_time` instead of `available_at` | Causality verifier |
+| Feature reaching further back than its declared `lookback` | Lookback honesty property |
+| Swing-high level confirmed with future bars, then read at the bar it formed | Truncation invariance (§16.3). The classic level-based leak, and the reason §6.2 exists |
+| Purging disabled | PBO spikes detectably on `make_noise` |
+| Label horizon longer than the declared purge | Build-time assertion, before anything runs |
+| Delisted assets silently dropped from the universe | Survivorship generator comparison |
+| Fee tier set to zero | Cost sensitivity sweep flags implausible cost-free profitability |
+| `studies.executed_trials` reset mid-campaign | Monotonicity constraint at the database level |
+| Event timestamps shifted earlier by one hour | **Pre-event flatness** (§11.8): the IRF stops being flat before `h=0`. This is the canary that proves `available_at` is honest |
+| IRF fitted on the full sample, applied retrospectively | Walk-forward gate (§11.9): the full-sample IRF beats the walk-forward one implausibly |
+
+Two rules govern this set:
+
+- **Catch rate must be 100%.** It is the suite's headline metric, reported in CI, and it replaces coverage as the number that matters.
+- **The set only grows.** Every bug found in production becomes canary N+1 before the fix is merged. An anti-leakage system that has never caught a leak is not demonstrated to work; one whose canary set has grown from bugs found in the wild is.
+
+### 16.6 Differential and golden tests
+
+- **Golden run.** A pinned configuration whose metrics must reproduce bit-identically. Failure means hidden non-determinism — hash randomisation, float reduction order, a library upgrade that moved a number — and is a blocking bug (§9.4). A companion test runs the same computation at 1, 2 and 8 threads and asserts the digests agree, so thread-invariance is measured rather than assumed (§2.2).
+- **Regression corpus.** Roughly 50 frozen experiments spanning the feature families. A refactor that changes any of their results must either be reverted or accompanied by an explicit, reviewed explanation of why the number changed. This is what makes it safe to keep refactoring a system whose outputs nobody can eyeball.
+- **Tier A ↔ tier B differential.** The same configuration under the same cost model must agree within tolerance across the two engines. Divergence beyond tolerance means the screening filter is biased and is promoting the wrong candidates (§9.2).
+- **Backtest ↔ simulator differential.** Replaying captured live data through the backtest must produce the same decisions the simulator made. Any difference is a data or timing bug, not a strategy result.
+- **Performance regression.** Tier A throughput is a specified requirement (10⁴ configurations in under an hour, phase 2). It is benchmarked, and a regression fails CI — otherwise it degrades quietly until the funnel stops being viable.
+
+### 16.7 Execution, failure drills and data assertions
+
+**Execution tests** run against recorded venue responses (cassette-style fixtures) in CI, and against live testnet before any promotion:
+
+- Idempotency: the same `client_order_id` sent twice produces exactly one order
+- Precision: quantities and prices round correctly to `tick_size`, `lot_size` and `min_notional`, per venue and point-in-time
+- Rejection handling: every documented venue error code has a defined behaviour and none of them crash the executor
+- Reconciliation: an injected position discrepancy halts the run and writes to `position_reconciliations`
+- Risk limits: **each rule in `risk_limit_configs` has a test that fires it at its threshold.** A limit without a test that has seen it fire is a limit that has never run
+
+**Failure drills**, automated where possible, exercised in simulator and testnet before LIVE: websocket drop with an open position · process restart with a live position · order rejection for insufficient margin · corrupt data (zero price, 50% jump) · rate limit reached · clock drift · kill switch during execution · registry restore from backup (§16.10).
+
+Each has a documented expected behaviour. If the system has never crashed in a drill, it will crash for the first time in production.
+
+**Data assertions** are different in kind: they run continuously against production data, not in CI against code. Every ingestion batch is checked for gaps beyond the source SLA, duplicates, out-of-range values, cross-source inconsistency and backfill-vs-live mismatch (§4.6). Failures open `data_quality_issues`, and a `blocking` issue prevents promotion of anything validated on the affected window.
+
+### 16.8 Running the suite
+
+Speed tiers, because a suite that is not fast enough to run constantly will not be run.
+
+| Tier | Budget | Contents | When |
+|---|---|---|---|
+| `fast` | < 15 s | Unit, schema, contracts | On save |
+| `medium` | < 3 min | Property tests at reduced example budgets, canaries, golden run | On commit |
+| `slow` | ~1 h | Full synthetic ground truth, full hypothesis budgets, regression corpus, tier A↔B differential, benchmarks | Nightly |
+| `integration` | variable | Testnet cassettes and live testnet | On demand, and mandatory before any promotion |
+
+Tooling: `pytest` with markers for the tiers, `pytest-xdist` for parallelism, `hypothesis` for properties, `pytest-benchmark` for the performance guards, small frozen Parquet fixtures committed to the repository, and seeded generators for everything synthetic.
+
+Line coverage is tracked as hygiene and is explicitly **not** a release criterion. The release criteria are: canary catch rate at 100%, the noise rejection test green, the regression corpus unchanged or explained, and the golden run bit-identical.
+
+### 16.9 Observability
+
+Grafana metrics: freshness and completeness per source · open quality issues · experiment throughput and latency · funnel hit rate (tier A → B survivors) · cost model calibration error · backtest↔simulator↔live divergence · lifecycle state of each strategy · risk limit utilisation against caps · canary catch rate and regression corpus status · compute cost per promoted strategy.
+
+That last metric is the lab's most honest number: what it costs to produce a strategy that survives.
+
+### 16.10 Backup and recovery
+
+The registry is the asset. Losing the Parquet archive costs a re-download; losing Postgres costs every experiment ever run, every validation verdict and the trial counters that make the statistics valid — and those cannot be reconstructed.
+
+- Postgres: daily base backup plus continuous WAL archiving to object storage, retained 90 days
+- Parquet archive and artifacts: versioned bucket with lifecycle rules; immutability makes incremental backup trivial
+- Secrets: backed up separately, never in the same store as the data
+- **Restore drill quarterly**, into a scratch environment, verifying that a known experiment reproduces bit-identically from the restored registry. An untested backup is a belief, not a backup.
+
+---
+
+## 17. AI research agent — with limits
+
+AI participates where it adds value, and never touches the verdict.
+
+**It may**: cluster and classify news, extract structured facts, detect data anomalies, propose hypotheses, suggest features, draft interpretations of results, compare experiments and summarise patterns across them.
+
+**It may not**: declare that a strategy works, adjust validation thresholds, select the winning configuration, access the frozen OOS, **or have any access whatsoever to TESTNET and LIVE modes**. The agent lives in the lab; it does not touch execution.
+
+**Mandatory protocol**:
+1. The hypothesis is recorded in `hypotheses` with `prior_belief` **before** it is run
+2. It is translated into a `study` with a declared search space
+3. It runs through the same funnel and the same gates as a human hypothesis
+4. The outcome is written to `hypotheses.outcome`, win or lose
+
+This makes the agent's **historical hit rate** queryable. If it generates 400 hypotheses and its confirmation rate does not beat random configuration generation, the agent is not adding signal — and that is a measurable fact rather than an impression.
+
+---
+
+## 18. Implementation phases
+
+Every phase has a verifiable exit criterion. No phase is skipped without meeting it.
+
+### Phase 0 — Foundations (1–2 weeks)
+Docker Compose per §2.2 (Postgres+pgvector, MinIO, Dagster, runner, api, grafana), the three images with digest-pinned bases, registry schema, Parquet layout, `uv` with lockfile, CI with the `fast` and `medium` test tiers wired and the golden run in place.
+
+**Exit**: `docker compose up` brings the environment up and **does not start the executor**; migrations apply; `pytest -m fast` runs in under 15 seconds; the golden run reproduces bit-identically, and the thread-invariance test passes at 1, 2 and 8 threads.
+
+### Phase 1 — Tier 1 data (2–4 weeks)
+Collectors for OHLCV, trades, funding, OI and liquidations on one venue and ~20 assets. 3+ years backfilled. Validation, three timestamps, point-in-time universe, dataset versioning.
+
+**Exit**: a versioned dataset, reproducible by hash, with a quality report and zero undocumented gaps. A DuckDB query over 3 years of 1m OHLCV answers in seconds.
+
+### Phase 2 — Features, labels and tier A (3–5 weeks)
+Feature registry with declared `lookback`, ~30 base definitions, cached materialisation, triple barrier, vectorized engine with parametric cost model.
+
+**Exit**: 10,000 configurations evaluated in under an hour (benchmarked, with a performance regression guard); truncation-invariance properties green across every registered feature; the first six canaries caught.
+
+### Phase 3 — Statistical validation (3–4 weeks)
+CPCV with automatically derived purging and embargo, DSR, PBO, SPA, MinTRL, null baselines, parameter stability, `validation_reports`.
+
+**Exit** — the most important in the project, and it is a test, not a review: **`make_noise` survives 100,000 trials with every strategy rejected**, and `make_subthreshold_edge` returns `inconclusive` rather than `pass`. Both run nightly from here on. If the system does not reject noise, nothing it says afterwards is worth anything.
+
+### Phase 4 — Tier B, regimes and walk-forward (4–6 weeks)
+nautilus_trader integration, realistic book-based cost model, A↔B calibration, regime classifier, full walk-forward, promotion gates, capacity analysis, FastAPI + registry UI, Grafana.
+
+**Exit**: one strategy traverses the complete funnel and produces a defensible validation report including its capital ceiling.
+
+### Phase 5 — SIMULATOR mode (4–6 weeks)
+TimescaleDB hot window, live ingestion, simulated execution on nautilus with configurable fake capital, risk limit engine (active in backtest too), daily reconciliation with divergence decomposition, simulation dashboard in Grafana.
+
+**Exit**: 30 days of continuous simulation, with daily reconciliation, divergence within band and decomposed by cause. Risk limits have fired at least once in a forced test.
+
+### Phase 6 — TESTNET mode and hardening (3–4 weeks)
+Real venue adapter against sandbox, idempotent `client_order_id`, state reconciliation, kill switch, dead man's switch, credential management, failure drills (§16.7).
+
+**Exit**: 2 weeks on testnet with no rejections caused by our own bugs; all seven failure drills executed with documented behaviour; kill switch proven with an open position.
+
+### Phase 7 — LIVE mode with capital ramp (ongoing)
+Segregated production keys, tiers L0→L3 per §14.5, monitoring and alerting, live↔simulator↔backtest reconciliation, alpha decay test running on every live run.
+
+**Exit**: tier L0 completed — 2 weeks at minimum capital, zero integration incidents, slippage within model, decay test green and its thresholds pre-registered.
+
+### Phase 8 — Portfolio layer (3–4 weeks, once 3+ strategies exist)
+Strategy return correlation and clustering, HRP allocation, portfolio-level trial counter and deflated Sharpe, joint capacity, portfolio risk limits above the per-strategy ones.
+
+**Exit**: two strategies known to be correlated are correctly collapsed into one cluster and allocated as one bet; portfolio capacity is strictly below the sum of individual ceilings.
+
+Note this phase is gated on having strategies, not on calendar time. With fewer than three surviving strategies there is no portfolio problem to solve, and building the layer early is speculative work.
+
+### Phase 9 — Event intelligence (starts in parallel at phase 1; modelling from phase 3)
+Split, because the parts have different urgency:
+
+- **From phase 1, immediately**: capture exchange announcements and the macro calendar. Both are structured, timestamped and free, and **neither can be backfilled** — every week of delay is history that does not come back.
+- **From phase 2**: market state index (§11.4) from funding, basis, liquidation asymmetry and participation. It is built from Tier 1 data already collected and is useful on its own as a regime input.
+- **From phase 3**: abnormal-return measurement and `event_reactions`, including negative horizons.
+- **From phase 4**: local projections, decay fitting, hierarchical pooling, the §11.9 gates.
+
+**Exit**: for at least one event class, `τ_slow` has a confidence interval excluding zero, pre-event flatness passes, the IRF beats the placebo null, and the cost filter passes inside the §0.2 band. If no class clears that, the honest conclusion is that news impact in crypto decays faster than this cost structure can monetise — which is a finding, and a cheap one compared to trading on the assumption that it does not.
+
+---
+
+## 19. Non-goals and risks
+
+**Out of scope**: low-latency / HFT execution, market making, multi-tenancy, mobile app, managing third-party capital. Also out of scope as *research targets*: sub-hour holding periods (cost drag, §0.1) and holding periods beyond three weeks (unverifiable with available history, and largely BTC beta).
+
+Real-money trading **is** a goal, but it is the end of the ladder in §12, not a starting point. No phase before 7 involves it.
+
+**Principal risks**:
+
+| Risk | Mitigation |
+|---|---|
+| OOS degradation through repeated use | `oos_access_log` plus a second OOS held untouched until the final decision |
+| **Re-optimising on simulator results** | The §12.4 boundary enforced by the system: changing signal params creates a new strategy that re-enters the funnel |
+| Portfolio of correlated strategies presenting as diversified | Correlation measured on returns and per regime; clusters treated as one bet; joint capacity ceiling |
+| Retiring a working strategy inside a normal drawdown | Pre-registered sequential test (§14.6); Monte Carlo drawdown distribution is the reference, not intuition |
+| Searching for an edge too small to detect | Minimum detectable effect fixed on the study before the search (§8.8) |
+| Horizon drift — a strategy quietly becoming intraday as parameters are tuned | Holding period is a declared constraint on the study; a configuration whose realised average hold falls outside §0.2 is rejected before evaluation, not after |
+| Expecting income before evidence exists | §0.3 states the realistic timeline and return band up front; the capital ramp (§14.5) makes early size impossible by construction |
+| Maker strategies inflated by ignored adverse selection | Modelled explicitly in the cost model; promotion requires pessimistic-fill viability (§9.5) |
+| Losing the registry and with it every trial counter | WAL archiving plus quarterly restore drill verifying bit-identical reproduction (§16.10) |
+| Caving to "nothing clears the filters" | Versioned thresholds; changing them is an audited, reviewed event |
+| Jumping from simulator straight to live | Testnet rung mandatory in the state machine; no transition bypasses it |
+| State desynchronised from the exchange | Periodic and startup reconciliation; discrepancy → halt, never self-correction |
+| Losing money to a bug rather than to the market | Hard limits in an independent component, active from mode 1; capital ramp |
+| Compute cost explosion | Funnel + `config_hash` cache + per-study budget |
+| Silently bad data quality | Ingestion-time validation + cross-source reconciliation |
+| Scope: 18 sources at once | Data tiers; no source enters without a quality test and backfill |
+| Complexity nobody maintains | Hard boundaries between layers; every phase ships something usable |
+
+---
+
+## Appendix A — Original brief
+
+Preserved verbatim (translated) as the source of requirements. §1 maps each gap found here to its fix.
+
+> I want to build a professional quantitative research and paper trading platform for cryptocurrencies.
+>
+> Not simply an indicator dashboard or a fixed-rule bot. I want an **algorithmic laboratory** capable of accumulating data, generating hypotheses, testing strategies en masse, detecting overfitting, running walk-forward testing and ultimately executing paper trading in real time.
+>
+> **Objective** — build a system with this cycle:
+> DATA → FEATURES → HYPOTHESIS → EXPERIMENTS → BACKTEST → VALIDATION → PAPER TRADING → EVALUATION → NEW HYPOTHESES
+>
+> The system must be designed from the start to experiment with thousands or millions of parameter combinations and to retain every experiment so it can be reproduced.
+>
+> **Data** — architecture prepared to store a very large historical base: trades/ticks, OHLCV, volume, order book, bid/ask imbalance, CVD/order flow, open interest, funding rates, liquidations, futures basis, options/IV/skew when available, on-chain data, BTC dominance, cross-asset correlations, traditional indices and markets, DXY, yields, Nasdaq, S&P, VIX, macroeconomic events, news. PostgreSQL + TimescaleDB as the main store for structured and time-series data; Parquet + object storage for massive raw datasets. The architecture must allow new sources without redesigning the system.
+>
+> **News Intelligence** — an advanced news system. Do not treat each article as an independent signal. Detect: entities, event, event type, affected assets, expected impact, surprise, source credibility, novelty, time horizon, event evolution. Multiple articles about the same fact must group into a single **Event ID**. If new information about the same event appears later, update the event rather than create a new signal. Use embeddings/semantic similarity + entities + temporality + structured fact extraction. AI may be used here for classification, extraction and semantic analysis.
+>
+> **Feature Engine** — an extensible feature system. It must allow the same indicator to be used repeatedly with different parameters (RSI 7, 9, 14, 21, 28…; EMA 10/20, 20/50, 34/89…; ATR 7, 14, 21…) and combine them with momentum, trend, volatility, volume, market structure, VWAP, volume profile, order flow, open interest, funding, liquidations, basis, options, macro, on-chain, news and cross-asset relationships. Do not assume in advance which indicators are useful. The goal is to discover that experimentally.
+>
+> **Experiment Engine** — an engine that generates and runs experiments automatically. Each experiment must have: experiment_id, strategy_id, dataset version, timeframe, assets, features used, parameters, rules, training period, validation period, out-of-sample period, results, timestamp, code/model version. It must be fully reproducible. Allow grid search, random search and more advanced optimisation later. Avoid absurd combinations via configurable constraints.
+>
+> **Backtesting** — a realistic backtesting engine accounting for fees, spread, slippage, liquidity, latency, partial fills, funding, position size, stop loss, take profit, position sizing and exchange restrictions. Never accidentally use future information. Avoid look-ahead bias and survivorship bias.
+>
+> **Anti-overfitting** — this is a priority. Do not select strategies solely by highest historical return. Implement: train/validation/test, out-of-sample, walk-forward testing, parameter stability, sensitivity analysis, Monte Carlo, bootstrap where appropriate, market-regime analysis, minimum trade count, complexity penalty, detection of strategies overly dependent on a specific period. Also evaluate the shape of the parameter surface — RSI 14 excellent with 13/15 disastrous is suspicious; RSI 12–18 with similar results is more robust.
+>
+> **Market Regime Engine** — identify market states: bullish/bearish, trending/ranging, high/low volatility, risk-on/risk-off, high/low liquidity, expanding/contracting volatility. Strategies must be evaluable separately within each regime.
+>
+> **Causal/Event Reaction Engine** — relate events to market reaction: news event → expected BTC reaction → actual BTC reaction → ETH reaction → altcoin reaction → volume reaction → OI reaction → funding reaction. Measure especially **underreaction / overreaction**. Positive news that should produce +2% but produces only +0.2% may differ from moderately positive news that produces +4%. Create features to measure this reaction.
+>
+> **AI Research Agent** — incorporate AI only where it provides a clear advantage. The agent may analyse news, group events, detect anomalies, analyse results, discover relationships, generate hypotheses, propose new experiments, explain why a strategy might work, and compare results across experiments. But the AI **must not declare that a strategy works**. Every AI-generated hypothesis must pass through the Experiment Engine and Backtest Engine. Quantitative results must be independent of the model's opinion. Record which hypotheses the AI generated and what result they obtained.
+>
+> **Paper Trading** — strategies that clear validation must be able to move to paper trading. Simulate real-time execution including orders, fills, fees, slippage, funding, P&L, drawdown, exposure, position and equity curve. Then compare BACKTEST vs PAPER TRADING and detect divergences.
+>
+> **Experiment Registry** — everything must be stored. I want to be able to answer questions like: "Which strategies used RSI + Open Interest + Funding?" "Which parameters worked best for BTC 4H?" "Which strategies were robust out-of-sample?" "Which AI-generated hypotheses turned out to be statistically useful?" "Which features have the most predictive power?" "Which strategies only work in certain regimes?"
+>
+> **Architecture** — before writing code: analyse the requirements; propose the complete architecture; define the services/components; define the PostgreSQL/TimescaleDB schema; define the main tables and relationships; define the data pipeline; define the interfaces between components; define a strategy for scaling backtests; define how to version datasets, features, strategies and experiments; propose a phased MVP. Do not build everything at once. Present the architecture and explain the technical decisions first, then implement the MVP incrementally.
+>
+> **Principles** — modularity, reproducibility, scalability, observability, scientific experimentation, avoid data leakage, avoid overfitting, separation between research and execution, separation between AI and quantitative results, every experiment must be reproducible.
+>
+> Prioritise a solid research/backtesting architecture first. Real trading is NOT the initial objective.
+>
+> The first objective is a system able to answer: **"Do we have sufficient statistical evidence that this strategy works out-of-sample and under different market conditions?"**
+>
+> When choosing between a quick implementation and an architecture that enables rigorous research and future evolution, prioritise the latter.
+
+*Note: the brief's final constraint — real trading not being an initial objective — was superseded by a later decision. Real-money trading is now the destination; see §12 and §19.*
+
+---
+
+## Appendix B — Laravel variant
+
+If the decision to use Laravel is imposed externally, it is workable under a strict boundary:
+
+- **It enters at phase 4**, not earlier. Phases 0–3 are pure Python.
+- **Laravel + Filament as an operations and read portal**: browse the registry, compare experiments, approve promotions, monitor simulator and production, manage users and permissions, record capital-tier approvals.
+- **It does not own the schema.** Migrations belong to Alembic; Laravel maps existing tables read-only except for its own tables (users, approvals, comments).
+- **It computes nothing quantitative.** Not one metric, not one Sharpe, not one aggregation of results. Every figure on screen was computed by Python and is persisted.
+- **It does not invoke Python code and does not touch execution.** Communication happens via queue (Redis) and via tables. The kill switch has its own direct path, independent of both Laravel and the orchestrator.
+
+Under that boundary Laravel stops owning domain and becomes presentation, which is where its productivity is real and its divergence cost is close to zero.

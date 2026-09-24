@@ -1,0 +1,77 @@
+[project]
+name = "tradelab"
+version = "0.1.0"
+description = "Quantitative research, simulation and trading platform"
+requires-python = ">=3.12"
+
+# Core: needed from phase 0. Dependency groups mirror the phases in Plan.md §17.
+dependencies = [
+    "polars>=1.0",
+    "pyarrow>=16.0",
+    "duckdb>=1.0",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "structlog>=24.1",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# Phase 1 — collectors
+collectors = ["httpx>=0.27", "websockets>=12.0", "tenacity>=8.3"]
+# Phase 2-3 — features, labels, validation
+research = ["numpy>=1.26", "scipy>=1.13", "statsmodels>=0.14", "scikit-learn>=1.5", "arch>=7.0", "numba>=0.60"]
+# Phase 1+ — orchestration
+orchestration = ["dagster>=1.7", "dagster-postgres>=0.23", "dagster-webserver>=1.7"]
+# Phase 4 — API
+api = ["fastapi>=0.111", "uvicorn[standard]>=0.30"]
+# Phase 4+ — tier B, simulator, testnet, live
+exec = ["nautilus_trader>=1.190"]
+# Phase 6+ — news
+nlp = ["sentence-transformers>=3.0", "hdbscan>=0.8"]
+dev = [
+    "pytest>=8.2", "pytest-xdist>=3.6", "pytest-benchmark>=4.0",
+    "hypothesis>=6.100", "ruff>=0.5", "mypy>=1.10",
+]
+
+[project.scripts]
+tradelab = "tradelab.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tradelab"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Speed tiers per Plan.md §16.8. Default run excludes everything slow.
+addopts = "-q --strict-markers -m 'not slow and not integration'"
+markers = [
+    "fast: unit, schema and contract tests. Budget < 15s total, run on save.",
+    "medium: properties at reduced budgets, canaries, golden run. Budget < 3min, run on commit.",
+    "slow: full synthetic ground truth, regression corpus, benchmarks. Nightly.",
+    "integration: requires Postgres/MinIO or a venue testnet. On demand.",
+]
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["duckdb.*", "pgvector.*"]
+ignore_missing_imports = true
