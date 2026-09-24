@@ -57,6 +57,12 @@ class StudySpec:
     min_detectable_sharpe: float | None = None
     oos_fraction: float = 0.3
     years: float | None = None      # None uses the whole archive
+    # Configurations below this are excluded from SELECTION, not merely rejected
+    # afterwards (§8.7). A surface scored on Sharpe alone is won by whichever
+    # configuration traded least: few trades give a noisy Sharpe, and the maximum
+    # of a noisy quantity is what a search finds. The gate would then reject it
+    # and the whole study is spent on a configuration that was never eligible.
+    min_trades: int = 100
     # Long above the threshold, or short below it. Funding extremes are read
     # short-side more naturally than momentum is.
     direction: int = 1
@@ -210,9 +216,15 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             gross_matrix.append(lagged * returns)
             turnover.append(float(traded.sum()))
             # In-sample score only: selecting on the full series would be
-            # choosing with the test set in hand.
-            surface_points.append(({spec.param_name: value, "entry": float(entry)},
-                                   result.gross_sharpe))
+            # choosing with the test set in hand. Configurations that did not
+            # trade enough are scored -inf rather than omitted, so the surface
+            # keeps its shape for the stability analysis (§8.5) while remaining
+            # unselectable.
+            eligible = result.n_trades >= spec.min_trades
+            surface_points.append((
+                {spec.param_name: value, "entry": float(entry)},
+                result.gross_sharpe if eligible else float("-inf"),
+            ))
 
     executed = len(results)
     if not executed:
@@ -221,6 +233,11 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     # Selection on the smoothed surface: the centre of the best region rather
     # than the luckiest single draw (§8.5).
     surface = Surface.build(surface_points, [spec.param_name, "entry"])
+    if not np.isfinite(surface.scores).any():
+        raise ValueError(
+            f"no configuration reached {spec.min_trades} trades; the grid is "
+            f"testing thresholds the signal rarely crosses"
+        )
     stability = analyse(surface, radius=1)
     chosen = params.index(stability.peak_params)
     best = results[chosen]
