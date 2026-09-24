@@ -151,6 +151,40 @@ def backfill_funding_cmd(
 
 
 @app.command()
+def quality(
+    kinds: str = typer.Option("ohlcv,funding", help="Comma-separated"),
+    worst: int = typer.Option(10, help="Least complete series to list"),
+    record: bool = typer.Option(False, help="Persist gaps as data_quality_issues"),
+    root: Path | None = None,
+) -> None:
+    """Coverage report over the archive. Phase 1 exit criterion (§17)."""
+    from tradelab.storage.quality import record_gaps, scan_coverage
+
+    archive = root or get_settings().archive_root
+    report = scan_coverage(archive, tuple(k.strip() for k in kinds.split(",")))
+    typer.echo(report.summary())
+
+    incomplete = [c for c in report.coverage if c.missing]
+    typer.echo(f"\n{len(incomplete)} series with gaps, of {len(report.coverage)}")
+    for c in report.worst(worst):
+        if not c.missing:
+            break
+        typer.echo(
+            f"  {c.asset:<16}{c.kind:<10}{c.completeness:>7.1%}  "
+            f"{len(c.missing):>5} missing, longest run {c.longest_gap}  "
+            f"({c.first} to {c.last})"
+        )
+
+    if record:
+        from tradelab.registry.db import session as db_session
+
+        with db_session() as session:
+            written = record_gaps(report, session)
+        typer.echo(f"\nrecorded {written} gap issues; a gap only visible by rerunning "
+                   f"this report is discoverable, not documented (§4.2)")
+
+
+@app.command()
 def backfill(
     asset: str,
     start: str = typer.Option(..., help="YYYY-MM-DD"),
