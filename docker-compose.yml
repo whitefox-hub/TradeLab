@@ -6,6 +6,11 @@
 #   docker compose --profile testnet   up
 #   docker compose --profile live      up
 
+x-provenance: &provenance
+  # Recorded on every experiment (§16.1). Set by `make up` from the built image,
+  # so a result cites something that cannot move under it.
+  TRADELAB_IMAGE_DIGEST: ${TRADELAB_IMAGE_DIGEST:-}
+
 x-determinism: &determinism
   # Float reduction order depends on thread count. Pinning these is what makes the
   # golden run bit-identical across machines with different core counts (§2.2).
@@ -95,7 +100,7 @@ services:
     image: tradelab-compute
     command: ["tradelab", "capture"]
     environment:
-      <<: [*determinism, *db]
+      <<: [*determinism, *db, *provenance]
       TRADELAB_ARCHIVE_ROOT: /data/parquet
     volumes:
       - archive:/data/parquet          # writable: this one ingests
@@ -112,7 +117,7 @@ services:
     build: {context: ., dockerfile: docker/compute.Dockerfile}
     image: tradelab-compute
     environment:
-      <<: [*determinism, *db]
+      <<: [*determinism, *db, *provenance]
       TRADELAB_ARCHIVE_ROOT: /data/parquet
     volumes:
       - archive:/data/parquet

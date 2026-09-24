@@ -1,7 +1,7 @@
 # tradelab-compute — collectors, feature engine, experiment runner, validator, dagster.
 # NOTE: base images must be pinned by sha256 before phase 0 is signed off (Plan.md §2.2).
 # `make pin-digests` resolves the current digests and rewrites the FROM lines.
-FROM python:3.12-slim-bookworm AS base
+FROM python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e AS base
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential curl git ca-certificates \

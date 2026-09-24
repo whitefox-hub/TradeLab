@@ -46,6 +46,35 @@ from tradelab.registry.models import (
 )
 
 
+def image_digest() -> str:
+    """Digest of the image this process is running in.
+
+    Recorded on every experiment (§16.1). It read "unpinned" until the base
+    images were pinned, which made the reproducibility contract nominal: an
+    experiment citing a tag cites something that moves.
+    """
+    import os
+
+    for source in (os.environ.get("TRADELAB_IMAGE_DIGEST"), _cgroup_image()):
+        if source:
+            return source
+    return "unpinned"
+
+
+def _cgroup_image() -> str | None:
+    """Container id from cgroup, as a fallback identity inside Docker."""
+    from pathlib import Path as _Path
+
+    try:
+        text = _Path("/proc/self/cgroup").read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if "docker" in line and len(line.rsplit("/", 1)[-1]) >= 12:
+            return f"container:{line.rsplit('/', 1)[-1][:12]}"
+    return None
+
+
 def code_version() -> str:
     try:
         return subprocess.check_output(
@@ -118,7 +147,7 @@ def ensure_gate_config(session: Session, thresholds: dict, rationale: str) -> Ga
 def persist(
     result: StudyResult, session: Session, root: Path,
     dataset_version_id: uuid.UUID, venue: str = "binance",
-    image_digest: str = "unpinned",
+    digest: str | None = None,
 ) -> uuid.UUID:
     """Record a study: tier A to Parquet, the candidate to Postgres."""
     spec = result.spec
@@ -167,7 +196,7 @@ def persist(
         splits={"oos_fraction": spec.oos_fraction},
         # Tier 2: it survived screening, so it earns a row (§5.7).
         tier=2, cost_model_id=cost_model.id, seed=0,
-        code_version=code_version(), image_digest=image_digest,
+        code_version=code_version(), image_digest=digest or image_digest(),
         config_hash=digest, status="completed",
     )
     session.add(experiment)

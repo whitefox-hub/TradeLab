@@ -7,7 +7,8 @@ install:  ## Create the venv and install all dependency groups
 	uv venv && uv pip install -e ".[collectors,research,orchestration,api,dev]"
 
 up:  ## Start the research stack. Does NOT start the executor (§2.2).
-	docker compose up -d --build
+	TRADELAB_IMAGE_DIGEST=$$(docker images --no-trunc --format '{{.ID}}' tradelab-compute | head -1) \
+		docker compose up -d --build
 
 down:  ## Stop everything
 	docker compose down
