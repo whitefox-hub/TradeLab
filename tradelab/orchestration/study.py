@@ -37,19 +37,46 @@ from tradelab.validation.stability import Surface, analyse, plateau_width
 
 @dataclass
 class StudySpec:
+    """One hypothesis and the grid that tests it.
+
+    `param_name` and `params` describe the feature's own axis; `entries` the
+    threshold the signal is compared against. Keeping them separate is what lets
+    a single study test any registered feature rather than only the one it was
+    written for — and testing only the feature it was written for is how a lab
+    ends up having judged nothing but RSI.
+    """
+
     name: str
     feature: str = "rsi"
-    periods: tuple[int, ...] = tuple(range(5, 41))
+    param_name: str = "period"
+    params: tuple = tuple(range(5, 41))
     entries: tuple[float, ...] = tuple(np.arange(52.0, 80.0, 1.0))
+    extra_params: dict = field(default_factory=lambda: {"source": "close"})
     timeframe: str = "1h"
     costs: CostModel = BINANCE_RETAIL
     min_detectable_sharpe: float | None = None
     oos_fraction: float = 0.3
     years: float | None = None      # None uses the whole archive
+    # Long above the threshold, or short below it. Funding extremes are read
+    # short-side more naturally than momentum is.
+    direction: int = 1
 
     @property
     def planned_trials(self) -> int:
-        return len(self.periods) * len(self.entries)
+        return len(self.params) * len(self.entries)
+
+    def feature_set(self) -> list[tuple[str, dict]]:
+        return [
+            (self.feature, {self.param_name: value, **self.extra_params})
+            for value in self.params
+        ]
+
+    def column(self, value) -> str:
+        from tradelab.features import REGISTRY
+
+        return REGISTRY.get(self.feature).column(
+            {self.param_name: value, **self.extra_params}
+        )
 
 
 @dataclass
@@ -76,6 +103,7 @@ class StudyResult:
 def load_bars(
     root: Path, asset: str, timeframe: str = "1h",
     years: float | None = None, limit_days: int | None = None,
+    with_funding_series: bool = True,
 ):
     """Resample the 1m archive to the study timeframe.
 
@@ -106,7 +134,45 @@ def load_bars(
         limit_days = int(years * 365)
     if limit_days:
         bars = bars.tail(limit_days * _bars_per_day(timeframe))
-    return bars.drop_nulls(subset=["open", "high", "low", "close"])
+    bars = bars.drop_nulls(subset=["open", "high", "low", "close"])
+    return with_funding(root, asset, bars) if with_funding_series else bars
+
+
+def with_funding(root: Path, asset: str, bars: pl.DataFrame) -> pl.DataFrame:
+    """Attach the funding rate, aligned to the bar containing each settlement.
+
+    Settlements land at 00:00, 08:00 and 16:00 UTC, so on hourly bars most bars
+    carry zero. Left-joined and filled rather than forward-filled: funding is a
+    payment at an instant, not a level that persists, and carrying it forward
+    would charge it every bar.
+    """
+    from tradelab.storage.query import scan
+
+    try:
+        funding = scan(root, "funding", asset, columns="event_time, funding_rate")
+    except Exception:
+        return bars.with_columns(funding_rate=pl.lit(0.0))
+    if not funding.height:
+        return bars.with_columns(funding_rate=pl.lit(0.0))
+
+    step = bars["event_time"].diff().drop_nulls().median()
+    aligned = funding.with_columns(pl.col("event_time").dt.truncate(step))
+    return (
+        bars.join(aligned.group_by("event_time").agg(pl.col("funding_rate").sum()),
+                  on="event_time", how="left")
+        .with_columns(pl.col("funding_rate").fill_null(0.0))
+    )
+
+
+def _funding_series(bars: pl.DataFrame) -> np.ndarray | None:
+    """Per-bar funding, zero where no settlement falls in that bar.
+
+    Costs 11.8% a year on a long perpetual position (§9.5), so a study that omits
+    it understates a long-biased result by roughly half its cost.
+    """
+    if "funding_rate" not in bars.columns:
+        return None
+    return bars["funding_rate"].fill_null(0.0).to_numpy().astype(np.float64)
 
 
 def _bars_per_day(timeframe: str) -> int:
@@ -116,11 +182,7 @@ def _bars_per_day(timeframe: str) -> int:
 
 def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     """Screen the grid, validate the survivor, return a verdict."""
-    features = materialise(
-        bars,
-        [(spec.feature, {"period": p, "source": "close"}) for p in spec.periods],
-        keep=("event_time", "close"),
-    )
+    features = materialise(bars, spec.feature_set(), keep=("event_time", "close"))
     close = bars["close"].to_numpy().astype(np.float64)
     returns = np.zeros_like(close)
     returns[1:] = np.diff(close) / close[:-1]
@@ -133,14 +195,15 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     turnover: list[float] = []
     surface_points: list[tuple[dict, float]] = []
 
-    for period in spec.periods:
-        signal = features[f"{spec.feature}__period{period}_sourceclose"].to_numpy()
-        signal = signal.astype(np.float64)
+    funding = _funding_series(bars)
+
+    for value in spec.params:
+        signal = features[spec.column(value)].to_numpy().astype(np.float64)
         for entry in spec.entries:
-            position = threshold_position(signal, float(entry))
-            result = run(close, position, spec.costs, spec.timeframe)
+            position = threshold_position(signal, float(entry)) * spec.direction
+            result = run(close, position, spec.costs, spec.timeframe, funding=funding)
             results.append(result)
-            params.append({"period": period, "entry": float(entry)})
+            params.append({spec.param_name: value, "entry": float(entry)})
 
             lagged = np.concatenate([[0.0], position[:-1]])
             traded = np.abs(np.diff(np.concatenate([[0.0], lagged])))
@@ -148,7 +211,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             turnover.append(float(traded.sum()))
             # In-sample score only: selecting on the full series would be
             # choosing with the test set in hand.
-            surface_points.append(({"period": period, "entry": float(entry)},
+            surface_points.append(({spec.param_name: value, "entry": float(entry)},
                                    result.gross_sharpe))
 
     executed = len(results)
@@ -157,17 +220,21 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
 
     # Selection on the smoothed surface: the centre of the best region rather
     # than the luckiest single draw (§8.5).
-    surface = Surface.build(surface_points, ["period", "entry"])
+    surface = Surface.build(surface_points, [spec.param_name, "entry"])
     stability = analyse(surface, radius=1)
     chosen = params.index(stability.peak_params)
     best = results[chosen]
 
     net = gross_matrix[chosen].copy()
     oos = net[split:]
-    oos_result = run(close[split:], threshold_position(
-        features[f"{spec.feature}__period{stability.peak_params['period']}_sourceclose"]
-        .to_numpy().astype(np.float64)[split:],
-        stability.peak_params["entry"]), spec.costs, spec.timeframe)
+    chosen_signal = features[spec.column(stability.peak_params[spec.param_name])]
+    oos_result = run(
+        close[split:],
+        threshold_position(chosen_signal.to_numpy().astype(np.float64)[split:],
+                           stability.peak_params["entry"]) * spec.direction,
+        spec.costs, spec.timeframe,
+        funding=funding[split:] if funding is not None else None,
+    )
 
     stats = sharpe_stats(oos, effective_n=oos_result.effective_n)
     pbo = probability_of_backtest_overfitting(
@@ -191,11 +258,11 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
 
     tier_a_rows = [
         {
-            "period": p["period"], "entry": p["entry"],
+            "param": p[spec.param_name], "entry": p["entry"],
             "sharpe": r.sharpe, "gross_sharpe": r.gross_sharpe,
             "n_trades": r.n_trades, "turnover": t,
             "effective_n": r.effective_n, "max_drawdown": r.max_drawdown,
-            "config_hash": f"{spec.name}:{p['period']}:{p['entry']}",
+            "config_hash": f"{spec.name}:{p[spec.param_name]}:{p['entry']}",
         }
         for p, r, t in zip(params, results, turnover, strict=True)
     ]
@@ -207,7 +274,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             "peak_score": stability.peak_score,
             "robust_score": stability.robust_score,
             "is_spike": stability.is_spike,
-            "plateau_width_period": plateau_width(surface, "period"),
+            "plateau_width": plateau_width(surface, spec.param_name),
         },
         robustness=robustness,
         tier_a_rows=tier_a_rows,
