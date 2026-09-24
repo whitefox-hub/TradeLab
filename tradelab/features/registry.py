@@ -122,7 +122,7 @@ def ewm_lookback(span: int, epsilon: float = MEMORY_EPSILON) -> int:
     import math
 
     alpha = 2.0 / (span + 1.0)
-    return int(math.ceil(math.log(epsilon) / math.log(1.0 - alpha)))
+    return math.ceil(math.log(epsilon) / math.log(1.0 - alpha))
 
 
 REGISTRY = Registry()
