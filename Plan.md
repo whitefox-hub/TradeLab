@@ -104,6 +104,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 28 | No limit on concurrent open positions in the enforced risk config, and no minimum position size at all. | `max_open_positions`, `max_positions_per_cluster`, `min_position_notional`; minimum viable size derived as `max(min_notional, lot_size x price)` point-in-time, and a floor added to the capital ramp. See §14.1. |
 | 27 | Price levels and multi-asset selection absent, though both are how the system is meant to be operated. | Level families with declared confirmation windows, and a hard boundary between a backtestable selection rule and picking the winner. See §6.2, §6.3. |
 | 26 | News handled as classification and magnitude only — no duration, no participation, no state conditioning, and no test of whether an effect outlives its trading costs. | Impulse response via local projections, two-component decay, in-house point-in-time state index, and a cost filter that rejects fast-decaying classes automatically. See §11.5. |
 | 24 | Tests were scattered and framed as ordinary software testing, which catches none of the bugs that matter here. | Seven-layer suite built on invariants, synthetic ground truth and adversarial canaries; canary catch rate replaces coverage as the release criterion. See §16.2–§16.8. |
@@ -709,7 +710,14 @@ CREATE TABLE data_quality_issues (
 CREATE TABLE risk_limit_configs (
   id                     uuid PRIMARY KEY,
   name                   text NOT NULL,
+  max_open_positions     int NOT NULL,     -- enforced by the risk engine, not the strategy
+  max_positions_per_cluster int NOT NULL,  -- a cluster is ONE bet (§13.1)
+  max_open_orders        int NOT NULL,
+  min_position_notional  numeric NOT NULL, -- floor: see §14.1
   max_position_notional  numeric NOT NULL,
+  min_position_pct_equity numeric NOT NULL,
+  max_position_pct_equity numeric NOT NULL,
+  min_seconds_between_entries int NOT NULL, -- same asset; blocks churn
   max_gross_exposure     numeric NOT NULL,
   max_net_exposure       numeric NOT NULL,
   max_leverage           numeric NOT NULL,
@@ -1666,7 +1674,7 @@ SIMULATOR mode parameters, all versioned alongside the run:
 
 - **`initial_capital`** — starting fake amount
 - **`sizing`** — fraction of equity per position, or fixed risk per trade as % of equity
-- **`leverage_max`**, **`positions_max`**, **`exposure_max`**
+- **`leverage_max`**, **`positions_max`**, **`exposure_max`** — these mirror `risk_limit_configs` (§14.1) rather than being simulator-only knobs; the same limits are enforced in every mode, so the limiter's first real execution is never with real money
 - **`fee_tier`** — the real tier your volume would earn, not the optimistic tier 0
 - **`latency_model`** — network latency measured against the venue, not assumed
 - **`fill_model`** — `optimistic` (everything at mid), `realistic` (walks the book), `pessimistic` (worst price of the level). Defaults to `realistic`, and the promotion report includes all three.
@@ -1776,7 +1784,11 @@ These controls are a requirement for modes 3 and 4, and are exercised from mode 
 
 Evaluated by a component **independent of the strategy**, able to veto any order:
 
-- `max_position_size` and `max_notional` per asset
+- `max_open_positions` and `max_open_orders` — **counted by the risk engine, not by the strategy.** A strategy that miscounts its own positions is exactly the case this limit exists for
+- `max_positions_per_cluster` — five strategies in one correlation cluster are one bet (§13.1), so limiting positions per strategy does not limit the exposure that matters
+- `min_position_notional` and `max_position_notional` per asset
+- `min_position_pct_equity` and `max_position_pct_equity`
+- `min_seconds_between_entries` on the same asset — blocks churn from a signal flickering around its threshold
 - `max_gross_exposure` and `max_net_exposure` for the portfolio
 - `max_leverage`
 - `max_daily_loss` → **automatic halt** and cancellation of open orders
@@ -1788,6 +1800,37 @@ Evaluated by a component **independent of the strategy**, able to veto any order
 **Manual kill switch**: one command and one button that cancel everything, close positions in `reduce_only` mode and leave the system halted. It must work even if the orchestrator is down — meaning it cannot depend on the same process it is trying to stop.
 
 **Dead man's switch**: if the system loses its heartbeat, the exchange cancels open orders on its own. Binance and other venues support this natively; it is always enabled in LIVE mode.
+
+#### Minimum viable position, and why the capital ramp has a floor
+
+The minimum tradeable size is not `min_notional`. It is:
+
+```
+min_viable(asset, t) = max( min_notional(t), lot_size(t) x price(t) )
+```
+
+resolved from `asset_universe` **as of the simulated instant** (§4.4), never from today's parameters. Measured on Binance USD-M in September 2026:
+
+| Asset | Price | lot_size | min_notional | **min_viable** |
+|---|---|---|---|---|
+| BTCUSDT | 84,532 | 0.001 | 50 | **84.53** |
+| ETHUSDT | 2,690 | 0.001 | 20 | 20.00 |
+| SOLUSDT | 117 | 0.01 | 5 | 5.00 |
+| ADAUSDT | 0.249 | 1.0 | 5 | 5.00 |
+
+For BTC the lot size binds, not the notional minimum — so reading `min_notional` alone gives the wrong floor by a factor of 1.7.
+
+Two consequences, and the second is a defect in §14.5 as originally written:
+
+**Sizing granularity degrades at small capital.** Positions quantise to `lot_size x price`. Wanting €150 of BTC when the increment is €84.53 yields €84.53 or €169.06 — the realised position differs from the intended one by up to 44%, which means realised risk differs from intended risk by the same margin. Below roughly twenty increments of headroom, position sizing stops being a control.
+
+**The capital ramp needs a floor.** §14.5 sets L0 at 1% of target. For a €5,000 target that is €50, and BTC cannot be opened at all at that size. A tier you cannot stand on is not a tier, so:
+
+```
+capital(L0) = max( 0.01 x target , positions_target x max_asset min_viable )
+```
+
+If that floor exceeds the target, the strategy is not deployable at that capital and the honest answer is to say so before the ramp starts rather than after L0 fails to fill.
 
 ### 14.2 State reconciliation with the exchange
 
@@ -2122,6 +2165,7 @@ Real-money trading **is** a goal, but it is the end of the ladder in §12, not a
 | Caving to "nothing clears the filters" | Versioned thresholds; changing them is an audited, reviewed event |
 | Jumping from simulator straight to live | Testnet rung mandatory in the state machine; no transition bypasses it |
 | State desynchronised from the exchange | Periodic and startup reconciliation; discrepancy → halt, never self-correction |
+| A capital tier too small to open the intended positions | L0 floored at `positions_target x min_viable`; if that exceeds the target, the strategy is declared undeployable before the ramp rather than after it fails |
 | Losing money to a bug rather than to the market | Hard limits in an independent component, active from mode 1; capital ramp |
 | Compute cost explosion | Funnel + `config_hash` cache + per-study budget |
 | Silently bad data quality | Ingestion-time validation + cross-source reconciliation |
