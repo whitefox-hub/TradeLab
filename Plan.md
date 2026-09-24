@@ -36,6 +36,8 @@ It is not a matter of taste. Two constraints squeeze from opposite directions an
 
 An earlier version of this table counted ~250 round trips per year at a one-day hold, which is the equities trading calendar. Crypto trades every day, so every figure was understated by 46%, and it made short horizons look far more viable than they are. The numbers above come from `CostModel.annual_drag`, so the table is computed rather than quoted and cannot drift from the engine again.
 
+**The table covers turnover only.** A long-biased perpetual position also pays funding, measured at 11.8% a year on BTCUSDT (§9.5), and that term does not shrink with the holding period — it grows with it. Beyond about two days the carry is the larger cost, which sharpens rather than moves the conclusion: the band stays 2–7 days, and a long-biased strategy inside it needs to clear turnover **plus** carry.
+
 **Constraint 2 — statistical power falls as the horizon lengthens.** Usable perpetuals history is roughly 2019 onward, so six to seven years. The sample that matters is **non-overlapping trades**, and crypto cross-sectional correlation (~0.7–0.8 against BTC) means 20 assets behave closer to 3–4 independent ones:
 
 | Average hold | Nominal trades, 20 assets × 6 yr | Effective independent | Verdict |
@@ -108,6 +110,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 38 | The engine ignored funding entirely, understating the cost of any long-biased perpetual strategy by 11.8% a year. | Charged against the position held and signed; on a real BTCUSDT study it moved the Sharpe from −0.45 to −0.59. Funding, OI and positioning features added, which is what the differentiation thesis actually rests on. See §9.5, §11.4. |
 | 37 | Walk-forward was specified and absent, so non-stationarity had no treatment and the only answer to "seven years is a lot" was to cut the window — which costs power without fixing the problem. | Rolling and anchored walk-forward with purge gaps, accumulating trials across windows, reporting parameter churn. On real BTCUSDT it returned −0.37 with 40% churn where a single split had shown +0.53. See §8.1. |
 | 36 | §8.6's resampling was described but absent, leaving §14.6's "a drawdown inside the validated distribution is not evidence of failure" with no distribution to consult. | Stationary bootstrap, trade-reordering drawdown distribution and price jitter. The iid alternative was measured and produces intervals narrow enough to change verdicts. See §8.6. |
 | 35 | Parameter stability was described but never implemented, though §15 lists it as a gate. | Surface analysis that promotes the neighbourhood median rather than the selection-biased peak, and chooses the centre of the best region rather than the best point. See §8.5. |
@@ -1454,7 +1457,7 @@ Backtest realism lives almost entirely here. The model is versioned (`cost_model
 - **Maker queue position**: the genuinely hard part. A resting limit order fills only once the volume ahead of it trades through. Default assumption is the back of the queue; anything more optimistic must be justified against observed fills.
 - **Adverse selection on maker fills**: this is the one that quietly inflates results. Passive orders fill preferentially when the market is about to move against them, so a maker strategy evaluated without it looks far better than it is. Modelled as a conditional drift applied after each passive fill, estimated from historical data and recalibrated from own fills once live.
 - **Market impact**: square-root law on participation rate, parametric until enough own fills exist to calibrate it. Feeds §12.7 capacity directly.
-- **Funding**: applied at the venue's real marks, on mark price, not last price.
+- **Funding**: applied at the venue's real marks, on mark price, not last price. Not a detail: measured on BTCUSDT from 2020 to 2026, funding averaged **0.0108% every eight hours — 11.8% a year, 78.7% cumulative**. That is on the same scale as the entire turnover drag of a three-day hold, so a cost model omitting it roughly halves the measured cost of any long-biased perpetual strategy. It is charged against the position held and signed, so a long pays it and a short receives it.
 - **Latency**: measured against the venue, applied between `intent_ts` and `sent_ts`.
 
 Every promotion report carries results under all three fill models (optimistic / realistic / pessimistic). **Promotion requires viability under `pessimistic`.** A strategy that only works under optimistic fills is a strategy that only works in the backtest.
@@ -2233,6 +2236,7 @@ Real-money trading **is** a goal, but it is the end of the ladder in §12, not a
 | Compute cost explosion | Funnel + `config_hash` cache + per-study budget |
 | Silently bad data quality | Ingestion-time validation + cross-source reconciliation |
 | Scope: 18 sources at once | Data tiers; no source enters without a quality test and backfill |
+| Venue concentration: one exchange holds the data, the execution and the capital | Account restrictions and term changes arrive without notice. Keep only the required margin on the venue between trades, keep a second venue's collectors running so the data side survives, and treat single-venue dependency as a stated exposure rather than an assumption |
 | Complexity nobody maintains | Hard boundaries between layers; every phase ships something usable |
 
 ---

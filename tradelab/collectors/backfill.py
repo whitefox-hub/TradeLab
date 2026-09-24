@@ -214,6 +214,86 @@ def backfill_universe(
     return total
 
 
+def backfill_funding(
+    asset: str, start: date, end: date, root: Path, client: httpx.Client | None = None,
+) -> Progress:
+    """Funding history for one asset, a month per request.
+
+    Funding is the positioning component of the state index (§11.4) and the
+    clearest expression of the differentiation thesis: it settles every eight
+    hours, it is not a price derivative, and it says who is crowded. Resumable by
+    file existence like everything else.
+    """
+    from tradelab.collectors.binance.bulk import BinanceFundingBulk
+
+    collector = BinanceFundingBulk(client=client)
+    result = Progress()
+
+    for year, month in _months(start, end):
+        days = _days_in(year, month, start, end)
+        if all(_funding_partition(root, asset, d).exists() for d in days):
+            result.days_skipped += len(days)
+            continue
+        try:
+            frame = collector.fetch_month(asset, year, month)
+        except Exception as exc:
+            log.warning("funding_month_failed", asset=asset,
+                        month=f"{year}-{month:02d}", error=str(exc))
+            continue
+        if frame is None or not frame.height:
+            result.days_absent += len(days)
+            continue
+
+        report = collector.validate(Batch("funding", "binance", asset, frame, collector.schema))
+        result.issues.extend(report.issues)
+        if not report.ok:
+            log.warning("funding_month_refused", asset=asset, month=f"{year}-{month:02d}")
+            continue
+
+        import polars as pl
+
+        tagged = frame.with_columns(pl.col("event_time").dt.date().alias("_day"))
+        for (day,), chunk in tagged.group_by(["_day"], maintain_order=True):
+            target = _funding_partition(root, asset, day)
+            if target.exists():
+                result.days_skipped += 1
+                continue
+            path = write_partition(chunk.drop("_day"), collector.schema, root,
+                                   "funding", "binance", asset, day)
+            result.days_written += 1
+            result.rows += chunk.height
+            result.bytes_written += path.stat().st_size
+
+    return result
+
+
+def _funding_partition(root: Path, asset: str, day: date) -> Path:
+    return Partition(kind="funding", venue="binance", asset=asset, day=day).absolute_path(root)
+
+
+def backfill_funding_universe(
+    assets: dict[str, date], end: date, root: Path, workers: int = 12,
+) -> Progress:
+    total = Progress(assets_total=len(assets))
+    local = threading.local()
+
+    def client() -> httpx.Client:
+        if not hasattr(local, "client"):
+            local.client = httpx.Client(timeout=120.0, follow_redirects=True)
+        return local.client
+
+    def work(item: tuple[str, date]) -> None:
+        asset, listed = item
+        total.merge(backfill_funding(asset, listed, end, root, client()))
+        log.info("funding_asset_done", asset=asset,
+                 progress=f"{total.assets_done}/{total.assets_total}",
+                 days=total.days_written, rows=total.rows)
+
+    with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(work, sorted(assets.items())))
+    return total
+
+
 def listing_dates(limit: int | None = None, min_history_days: int = 365) -> dict[str, date]:
     """Universe with its listing dates, filtered to contracts old enough to matter.
 

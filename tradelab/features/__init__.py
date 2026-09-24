@@ -7,7 +7,12 @@ someone remembers an import is a registry that will be empty at the worst moment
 mistake.
 """
 
-from tradelab.features import momentum, participation, volatility  # noqa: F401
+from tradelab.features import (  # noqa: F401
+    funding,
+    momentum,
+    participation,
+    volatility,
+)
 from tradelab.features.registry import REGISTRY, Registry, feature
 
 __all__ = ["REGISTRY", "Registry", "feature"]

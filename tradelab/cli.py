@@ -128,6 +128,28 @@ def backfill_universe_cmd(
     )
 
 
+@app.command("backfill-funding")
+def backfill_funding_cmd(
+    limit: int = typer.Option(50, help="0 = every eligible contract"),
+    min_history_days: int = typer.Option(365),
+    workers: int = 12,
+    root: Path | None = None,
+) -> None:
+    """Backfill funding history. Free, no account (§4.7)."""
+    from datetime import date as _date
+    from datetime import timedelta as _td
+
+    from tradelab.collectors.backfill import backfill_funding_universe, listing_dates
+
+    archive = root or get_settings().archive_root
+    assets = listing_dates(limit=limit or None, min_history_days=min_history_days)
+    total = backfill_funding_universe(assets, _date.today() - _td(days=1), archive, workers)
+    typer.echo(
+        f"funding: {total.days_written} days, {total.rows:,} settlements, "
+        f"{total.bytes_written / 2**20:.1f} MB, {len(total.issues)} issues"
+    )
+
+
 @app.command()
 def backfill(
     asset: str,

@@ -38,7 +38,8 @@ class BacktestResult:
     turnover: float
     avg_holding_bars: float
     gross_sharpe: float
-    cost_drag: float
+    cost_drag: float            # turnover plus funding
+    funding_drag: float
     exposure: float
     # Independent bets, not bars. A position held for 240 bars produces 240
     # serially dependent returns, not 240 observations, and every significance
@@ -52,6 +53,7 @@ class BacktestResult:
 def run(
     close: np.ndarray, position: np.ndarray, costs: CostModel | None = None,
     timeframe: str = "1h", already_lagged: bool = False,
+    funding: np.ndarray | None = None,
 ) -> BacktestResult:
     """Evaluate one position series.
 
@@ -59,6 +61,17 @@ def run(
     bar's information. It is lagged by one bar here unless the caller states it
     has already been lagged — and stating that is deliberately awkward, because
     doing it twice is harmless and forgetting it once is fatal.
+
+    `funding` is the per-bar rate paid by longs, zero where no settlement falls
+    in that bar. It is charged against the position held, so a long pays it and a
+    short receives it.
+
+    Funding is not a detail of perpetuals, it is a large recurring cost that
+    §0.1's arithmetic did not contain: measured on BTCUSDT from 2020 to 2026 it
+    averaged 0.0108% every eight hours — **11.8% a year**, and 78.7% cumulative
+    over the period. That is comparable to the entire turnover drag of a
+    three-day holding period, so omitting it roughly halves the measured cost of
+    any long-biased strategy.
     """
     costs = costs or BINANCE_RETAIL
     if not already_lagged:
@@ -70,6 +83,15 @@ def run(
     gross = position * returns
     traded = np.abs(np.diff(np.concatenate([[0.0], position])))
     cost = traded * costs.per_side
+
+    # Charged on the position held, signed: longs pay, shorts receive. A flat
+    # rate is a fallback; the real series belongs here whenever it is available.
+    if funding is not None:
+        funding_cost = position * np.asarray(funding, dtype=np.float64)
+    else:
+        funding_cost = position * costs.funding_per_bar
+    cost = cost + funding_cost
+
     net = gross - cost
 
     equity = np.cumprod(1.0 + net)
@@ -98,6 +120,7 @@ def run(
         avg_holding_bars=float(exposure * len(close) / max(entries, 1)),
         gross_sharpe=float(gross.mean() / gross_std * np.sqrt(bars)) if gross_std > 0 else 0.0,
         cost_drag=float(cost.sum()),
+        funding_drag=float(np.sum(funding_cost)),
         exposure=exposure,
         effective_n=effective_n,
     )

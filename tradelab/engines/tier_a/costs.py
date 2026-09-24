@@ -20,6 +20,10 @@ class CostModel:
     half_spread: float = 0.00005
     slippage: float = 0.0001           # beyond the spread, taker
     maker_fill_rate: float = 0.0       # tier A assumes taker: the honest default
+    #: Fallback when no funding series is supplied. Longs pay it, shorts receive
+    #: it. Measured on BTCUSDT 2020-2026: 0.0108% per 8h settlement, which is
+    #: 11.8% a year and 78.7% cumulative — a cost on the same scale as the entire
+    #: turnover drag of a three-day hold, and one §0.1's table did not contain.
     funding_per_bar: float = 0.0
 
     @property
@@ -32,15 +36,24 @@ class CostModel:
     def round_trip(self) -> float:
         return 2 * self.per_side
 
-    def annual_drag(self, bars_per_year: float, avg_holding_bars: float) -> float:
+    def annual_drag(self, bars_per_year: float, avg_holding_bars: float,
+                    include_funding: bool = False) -> float:
         """Cost drag per year for a strategy always in the market.
 
         This is the arithmetic behind §0.1: it is what rules out holding periods
         below roughly a day, and it is worth being able to compute rather than
         quote.
+
+        `include_funding` adds the carry a permanently long position pays. It is
+        off by default because the table in §0.1 is about turnover, but for a
+        long-biased perpetual strategy it is the larger term at any holding period
+        beyond a couple of days.
         """
         round_trips = bars_per_year / max(avg_holding_bars, 1e-9)
-        return round_trips * self.round_trip
+        drag = round_trips * self.round_trip
+        if include_funding:
+            drag += self.funding_per_bar * bars_per_year
+        return drag
 
 
 #: Retail Binance USD-M. Deliberately not tier 0: assuming fees you do not have

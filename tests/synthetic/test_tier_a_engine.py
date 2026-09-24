@@ -105,3 +105,54 @@ def test_a_random_strategy_on_noise_loses_exactly_its_costs() -> None:
     assert abs(result.gross_sharpe) < 0.75, "found an edge in pure noise"
     assert result.sharpe < result.gross_sharpe, "costs must reduce the Sharpe"
     assert result.total_return < 0, "a random strategy paying fees must lose"
+
+
+@pytest.mark.fast
+def test_funding_is_charged_to_longs_and_paid_to_shorts() -> None:
+    """Funding is not a detail of perpetuals, it is a large recurring cost.
+
+    Measured on BTCUSDT from 2020 to 2026 it averaged 0.0108% every eight hours:
+    11.8% a year, 78.7% cumulative. The engine ignored it entirely until this
+    test existed, which understated the cost of any long-biased strategy by an
+    amount comparable to the whole turnover drag of a three-day hold.
+    """
+    n = 1000
+    close = np.full(n, 100.0)                 # flat: every move is a cost
+    rate = np.zeros(n)
+    rate[::8] = 0.0001                        # a settlement every eight bars
+    free = CostModel(0, 0, 0, 0)
+
+    long_side = np.ones(n)
+    short_side = -np.ones(n)
+
+    paid = run(close, long_side, free, funding=rate, already_lagged=True)
+    received = run(close, short_side, free, funding=rate, already_lagged=True)
+
+    assert paid.funding_drag > 0, "a long position must pay funding"
+    assert received.funding_drag < 0, "a short position must receive it"
+    assert paid.funding_drag == pytest.approx(-received.funding_drag)
+    assert paid.total_return < 0 < received.total_return
+
+
+@pytest.mark.fast
+def test_funding_is_only_charged_on_held_exposure() -> None:
+    """A flat position pays nothing, however many settlements pass."""
+    n = 1000
+    close = np.full(n, 100.0)
+    rate = np.full(n, 0.0001)
+    result = run(close, np.zeros(n), CostModel(0, 0, 0, 0), funding=rate, already_lagged=True)
+    assert result.funding_drag == 0.0
+
+
+@pytest.mark.fast
+def test_annual_drag_can_include_the_carry() -> None:
+    """For a long-biased perpetual strategy funding is the larger term at any
+    holding period beyond a couple of days, which §0.1's table did not show."""
+    costs = CostModel(taker_fee=0.0005, half_spread=0.00005, slippage=0.0001,
+                      funding_per_bar=0.0108e-2 / 8)     # per hour, from the 8h rate
+    turnover_only = costs.annual_drag(BARS_PER_YEAR["1h"], avg_holding_bars=24 * 5)
+    with_carry = costs.annual_drag(BARS_PER_YEAR["1h"], avg_holding_bars=24 * 5,
+                                   include_funding=True)
+    assert with_carry > turnover_only * 2, (
+        "at a five-day hold the carry should dominate the turnover drag"
+    )
