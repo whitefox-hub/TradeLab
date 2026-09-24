@@ -2148,64 +2148,159 @@ This makes the agent's **historical hit rate** queryable. If it generates 400 hy
 
 ## 18. Implementation phases
 
-Every phase has a verifiable exit criterion. No phase is skipped without meeting it.
+Revised once the lab existed and started producing results. What changed is not
+the list of components but their order, and the reason is in §18.0.
 
-### Phase 0 — Foundations (1–2 weeks)
-Docker Compose per §2.2 (Postgres+pgvector, MinIO, Dagster, runner, api, grafana), the three images with digest-pinned bases, registry schema, Parquet layout, `uv` with lockfile, CI with the `fast` and `medium` test tiers wired and the golden run in place.
+### 18.0 What building it taught, and what that reorders
 
-**Exit**: `docker compose up` brings the environment up and **does not start the executor**; migrations apply; `pytest -m fast` runs in under 15 seconds; the golden run reproduces bit-identically, and the thread-invariance test passes at 1, 2 and 8 threads.
+Phases 0 through 4 are largely done, and running them produced findings that
+should govern what comes next rather than being filed as trivia:
 
-### Phase 1 — Tier 1 data (2–4 weeks)
-Collectors for OHLCV, trades, funding, OI and liquidations on one venue and ~20 assets. 3+ years backfilled. Validation, three timestamps, point-in-time universe, dataset versioning.
+- **The lab rejects what it is shown.** RSI thresholds on BTC and ETH, 1,008
+  configurations over seven years: `inconclusive` on a single split, and −0.37
+  under walk-forward with 40% parameter churn. That is the correct answer to the
+  question asked, and it says nothing about the differentiation thesis, because
+  the thesis was never tested — RSI over close prices is the most mined signal in
+  retail trading and BTC is the most efficient asset in the market.
+- **Funding costs 11.8% a year** on a long perpetual position, 78.7% cumulative
+  since 2020. It was absent from the engine and from §0.1's table. Carry grows
+  with the holding period where turnover shrinks, so beyond about two days carry
+  dominates, and a long-biased strategy must clear both.
+- **Effective observations run 30–120× below the bar count.** Every significance
+  figure depends on getting that number right, and it is the difference between
+  "established" and "cannot be established" on identical returns.
+- **The trial budget sets the bar.** Over six years of daily returns a survivor
+  needs an annualised Sharpe of 2.00 after 1,000 trials and 2.66 after a million.
+  Testing more hypotheses raises what the winner must clear, which contradicts the
+  original brief's "millions of combinations".
+- **The liquidation feed does not deliver.** Four hours connected, thirteen
+  reconnections, zero messages, on a connection where `@trade` floods and Bybit
+  behaves identically. One pillar of the differentiation thesis may simply be
+  unavailable without paying for it.
 
-**Exit**: a versioned dataset, reproducible by hash, with a quality report and zero undocumented gaps. A DuckDB query over 3 years of 1m OHLCV answers in seconds.
+**The reordering that follows.** Phases 5 through 7 build the machinery to deploy
+a strategy: executor, risk engine, reconciliation, capital ramp. That is weeks of
+careful engineering in service of something that does not yet exist — no strategy
+has passed. Building deployment machinery before the lab has found anything to
+deploy is speculative work, and it is the kind that feels productive.
 
-### Phase 2 — Features, labels and tier A (3–5 weeks)
-Feature registry with declared `lookback`, ~30 base definitions, cached materialisation, triple barrier, vectorized engine with parametric cost model.
+So a research campaign comes first. It is the only phase whose outcome can make
+the others unnecessary.
 
-**Exit**: 10,000 configurations evaluated in under an hour (benchmarked, with a performance regression guard); truncation-invariance properties green across every registered feature; the first six canaries caught.
+### Phase 4b — The research campaign (4–8 weeks, research not engineering)
 
-### Phase 3 — Statistical validation (3–4 weeks)
-CPCV with automatically derived purging and embargo, DSR, PBO, SPA, MinTRL, null baselines, parameter stability, `validation_reports`.
+Use the lab on what justifies it. The components exist; this phase spends them.
 
-**Exit** — the most important in the project, and it is a test, not a review: **`make_noise` survives 100,000 trials with every strategy rejected**, and `make_subthreshold_edge` returns `inconclusive` rather than `pass`. Both run nightly from here on. If the system does not reject noise, nothing it says afterwards is worth anything.
+**Universe.** 193 assets carry both OHLCV and funding, 416 carry OHLCV.
+Mid-caps and recent listings rather than majors, per §0.4: a small operator's
+structural advantage is capacity, and the majors are where that advantage does
+not apply.
 
-### Phase 4 — Tier B, regimes and walk-forward (4–6 weeks)
-nautilus_trader integration, realistic book-based cost model, A↔B calibration, regime classifier, full walk-forward, promotion gates, capacity analysis, FastAPI + registry UI, Grafana.
+**Hypotheses, in descending order of how well the data supports them:**
 
-**Exit**: one strategy traverses the complete funnel and produces a defensible validation report including its capital ceiling.
+1. Funding extremes and persistence (§11.4). Funding is not a function of price —
+   it says who is crowded and what it costs them — and it is fully backfilled.
+2. Open-interest divergence from price. Positions opening into a move resolve
+   differently from positions closing out of one, and price alone cannot tell
+   them apart. Limited to the OI captured from 2026-09 onward.
+3. Cross-sectional selection across the universe (§6.3), validated wide and
+   deployed narrow.
+4. Listing events from the announcement collector, which is the one event class
+   with a real sample.
 
-### Phase 5 — SIMULATOR mode (4–6 weeks)
-TimescaleDB hot window, live ingestion, simulated execution on nautilus with configurable fake capital, risk limit engine (active in backtest too), daily reconciliation with divergence decomposition, simulation dashboard in Grafana.
+**Discipline.** The trial budget is declared per hypothesis before searching, and
+the minimum detectable effect with it. A disciplined search is worth more than a
+large one, and that is now arithmetic rather than advice.
 
-**Exit**: 30 days of continuous simulation, with daily reconciliation, divergence within band and decomposed by cause. Risk limits have fired at least once in a forced test.
+**Exit, and it has two honest branches:**
 
-### Phase 6 — TESTNET mode and hardening (3–4 weeks)
-Real venue adapter against sandbox, idempotent `client_order_id`, state reconciliation, kill switch, dead man's switch, credential management, failure drills (§16.7).
+- Something clears §15's `validating → candidate` gate under walk-forward, with a
+  plateau rather than a spike and a capacity ceiling above the intended capital.
+  Then phases 5 onward are justified and specified by what was found.
+- Nothing clears it. Then the finding is that this data and this cost structure do
+  not support a tradeable edge at this horizon — which is worth knowing, cost
+  months rather than capital, and is the outcome the whole apparatus was built to
+  be able to reach.
 
-**Exit**: 2 weeks on testnet with no rejections caused by our own bugs; all seven failure drills executed with documented behaviour; kill switch proven with an open position.
+### Phase 4c — Tier B, gated on 4b (3–5 weeks)
 
-### Phase 7 — LIVE mode with capital ramp (ongoing)
-Segregated production keys, tiers L0→L3 per §14.5, monitoring and alerting, live↔simulator↔backtest reconciliation, alpha decay test running on every live run.
+Only for a strategy that survived 4b. nautilus_trader for the event-driven engine,
+so backtest, simulator and live share one code path and the main cause of
+backtest-to-live divergence disappears by construction (§12.1).
 
-**Exit**: tier L0 completed — 2 weeks at minimum capital, zero integration incidents, slippage within model, decay test green and its thresholds pre-registered.
+Also here: the realistic cost model against recorded book depth, tier A↔B
+calibration (§9.2), and the capacity analysis that sets the capital ceiling
+(§12.7).
 
-### Phase 8 — Portfolio layer (3–4 weeks, once 3+ strategies exist)
-Strategy return correlation and clustering, HRP allocation, portfolio-level trial counter and deflated Sharpe, joint capacity, portfolio risk limits above the per-strategy ones.
+**Exit**: a strategy traverses the full funnel and produces a validation report
+that survives being read adversarially, including under pessimistic fills.
 
-**Exit**: two strategies known to be correlated are correctly collapsed into one cluster and allocated as one bet; portfolio capacity is strictly below the sum of individual ceilings.
+### Phase 5 — Simulator (4–6 weeks, gated on 4c)
 
-Note this phase is gated on having strategies, not on calendar time. With fewer than three surviving strategies there is no portfolio problem to solve, and building the layer early is speculative work.
+TimescaleDB hot window, live ingestion, simulated execution with configurable
+fake capital, the risk-limit engine active in every mode, daily reconciliation
+with divergence attribution (§12.5), and the Grafana panel.
 
-### Phase 9 — Event intelligence (starts in parallel at phase 1; modelling from phase 3)
-Split, because the parts have different urgency:
+**Exit**: 60 days continuous, divergence within band and decomposed by cause,
+risk limits fired at least once in a forced test.
 
-- **From phase 1, immediately**: capture exchange announcements and the macro calendar. Both are structured, timestamped and free, and **neither can be backfilled** — every week of delay is history that does not come back.
-- **From phase 2**: market state index (§11.4) from funding, basis, liquidation asymmetry and participation. It is built from Tier 1 data already collected and is useful on its own as a regime input.
-- **From phase 3**: abnormal-return measurement and `event_reactions`, including negative horizons.
-- **From phase 4**: local projections, decay fitting, hierarchical pooling, the §11.9 gates.
+### Phase 6 — Testnet and hardening (3–4 weeks)
 
-**Exit**: for at least one event class, `τ_slow` has a confidence interval excluding zero, pre-event flatness passes, the IRF beats the placebo null, and the cost filter passes inside the §0.2 band. If no class clears that, the honest conclusion is that news impact in crypto decays faster than this cost structure can monetise — which is a finding, and a cheap one compared to trading on the assumption that it does not.
+The venue adapter against the sandbox, idempotent `client_order_id`, state
+reconciliation, kill switch, dead man's switch, credential separation, and the
+failure drills of §16.7.
+
+**Exit**: two weeks with no rejections caused by our own bugs; every drill
+executed with documented behaviour; kill switch proven with an open position.
+
+### Phase 7 — Live with capital ramp (ongoing)
+
+Segregated production keys, tiers L0–L3 per §14.5 with the minimum-viable-size
+floor, monitoring, and the alpha decay test running continuously.
+
+**Exit**: tier L0 complete — two weeks at minimum capital, zero integration
+incidents, slippage within model, decay test green against pre-registered
+thresholds.
+
+### Phase 8 — Portfolio (3–4 weeks, gated on having 3+ strategies)
+
+Return-correlation clustering, HRP allocation, portfolio-level trial counting and
+joint capacity. Gated on strategies existing rather than on calendar time: below
+three survivors there is no portfolio problem, and building the layer early is
+speculative.
+
+### Phase 9 — Event intelligence (parallel from now)
+
+Split by urgency, because one part is already losing history:
+
+- **Now**: keep capturing announcements and the macro calendar. Neither is
+  backfillable beyond what the CMS endpoint paginates.
+- **With 4b**: listing events are the one class with hundreds of occurrences, so
+  they enter the research campaign directly rather than waiting.
+- **After 4b**: local projections, two-component decay fitting, hierarchical
+  pooling, and the §11.9 gates.
+
+**Exit**: for at least one event class, `τ_slow` has a confidence interval
+excluding zero, pre-event flatness passes, the impulse response beats the placebo
+null, and the cost filter passes inside the §0.2 band. If no class clears that,
+the honest conclusion is that news impact decays faster than this cost structure
+can monetise — a finding, and a cheap one.
+
+### Open decisions
+
+**Liquidations.** Measured silent across two venues over four hours on healthy
+connections. If it stays silent, the choice is a proxy inferred from sharp
+open-interest drops coinciding with adverse price moves — labelled as derived
+throughout, because it is not the same measurement — or a paid vendor. The proxy
+costs nothing and the OI it needs is already accumulating.
+
+**Base image digests.** The last open item from phase 0. `image_digest` is
+recorded on every experiment and currently reads `unpinned`, which makes the
+reproducibility contract of §16.1 nominal rather than real.
+
+**Venue concentration.** Data, execution and capital all sit with one exchange.
+Worth a second venue's collectors at least, so the data side survives an account
+restriction.
 
 ---
 
