@@ -102,12 +102,13 @@ def test_successive_flushes_increment_the_part_number(tmp_path) -> None:
 
 
 @pytest.mark.integration
-def test_liquidation_stream_delivers_messages() -> None:
-    """Requires outbound websockets. Verify on the target machine before phase 1 sign-off.
+def test_websocket_egress_works() -> None:
+    """Proves frames actually arrive, using a stream that is always busy.
 
-    NOT verified in the development sandbox used to write this: HTTPS works there
-    but websocket frames do not arrive, so the socket path is the one part of the
-    capture collector that has never run against live data.
+    `btcusdt@trade` is the control, NOT `@aggTrade`: on fstream the aggregate
+    stream returns nothing even when egress is healthy, and using it as a control
+    produced a false "websockets are blocked" diagnosis that stood for a while.
+    A control stream has to be one that is known to deliver.
     """
     import asyncio
     import json
@@ -117,7 +118,7 @@ def test_liquidation_stream_delivers_messages() -> None:
     async def probe() -> int:
         count = 0
         async with websockets.connect(
-            "wss://fstream.binance.com/ws/btcusdt@aggTrade", ping_interval=20
+            "wss://fstream.binance.com/ws/btcusdt@trade", ping_interval=20
         ) as socket:
             deadline = asyncio.get_event_loop().time() + 20
             while asyncio.get_event_loop().time() < deadline:
@@ -129,3 +130,37 @@ def test_liquidation_stream_delivers_messages() -> None:
         return count
 
     assert asyncio.run(probe()) > 0, "No websocket frames received: check egress"
+
+
+@pytest.mark.integration
+def test_liquidation_stream_delivers_messages() -> None:
+    """Whether Binance's liquidation streams still deliver.
+
+    Run this only when egress is known good (the test above) and the market is
+    not flat. Observed on 2026-09-24 with 24h ranges of 2.5-5.7%: zero frames in
+    90s across six major symbols AND the all-market stream, while `@trade`
+    flooded on the same connection. That combination is not explainable by market
+    conditions, so treat a failure here as "the feed changed or something in the
+    path filters it", not as "the collector is broken".
+    """
+    import asyncio
+    import json
+
+    import websockets
+
+    async def probe() -> int:
+        count = 0
+        streams = "/".join(f"{s}@forceOrder" for s in ("btcusdt", "ethusdt", "solusdt"))
+        async with websockets.connect(
+            f"wss://fstream.binance.com/stream?streams={streams}", ping_interval=20
+        ) as socket:
+            deadline = asyncio.get_event_loop().time() + 90
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    json.loads(await asyncio.wait_for(socket.recv(), timeout=3))
+                    count += 1
+                except TimeoutError:
+                    continue
+        return count
+
+    assert asyncio.run(probe()) > 0, "No liquidations in 90s across three majors"

@@ -14,7 +14,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /opt/venv && VIRTUAL_ENV=/opt/venv uv pip install --no-cache ".[exec]"
 
 FROM python:3.12-slim-bookworm AS runtime
-ENV PATH="/opt/venv/bin:$PATH" VIRTUAL_ENV=/opt/venv PYTHONUNBUFFERED=1
+# The package is installed in the deps stage, before the source exists, so the
+# console script resolves but the module does not. PYTHONPATH makes /app
+# importable — and it is the only option that also works for tradelab-exec,
+# which deliberately copies only part of the package.
+ENV PATH="/opt/venv/bin:$PATH" VIRTUAL_ENV=/opt/venv PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY --from=deps /opt/venv /opt/venv
 WORKDIR /app
 COPY tradelab/execution ./tradelab/execution

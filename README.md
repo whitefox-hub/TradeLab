@@ -124,9 +124,14 @@ that never comes back.
 - [x] DuckDB query layer with a point-in-time filter, and derived bar aggregation
 - [x] Dataset versioning by content hash, idempotent on rebuild
 - [x] Open interest capture, verified against the live REST endpoint
-- [ ] **Liquidation websocket capture — code written, socket path never exercised.**
-      The development sandbox passes HTTPS but drops websocket frames, confirmed
-      against a control stream. Run `pytest -m integration` on the target machine
-      before trusting it.
+- [x] Websocket egress verified: `btcusdt@trade` delivers ~400 frames in 8s
+- [ ] **Liquidation capture — the feed itself delivers nothing.** Not a network
+      problem: on the same connection `@trade` floods while `!forceOrder@arr`,
+      per-symbol `@forceOrder` and even the unconditional `markPrice@1s` return
+      zero, with `SUBSCRIBE` accepted. Measured 2026-09-24 with 24h ranges of
+      2.5-5.7%, so market quiet does not explain it. Verify from a plain shell
+      outside any sandbox before concluding the feed changed. Fallback if it did:
+      infer liquidations from sharp open-interest drops coinciding with adverse
+      price moves — a proxy, not the real thing, and it must be labelled as such.
 - [ ] Trades, funding and exchange-announcement collectors
 - [ ] 3+ years backfilled across the target universe
