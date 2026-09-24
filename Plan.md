@@ -108,6 +108,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 36 | §8.6's resampling was described but absent, leaving §14.6's "a drawdown inside the validated distribution is not evidence of failure" with no distribution to consult. | Stationary bootstrap, trade-reordering drawdown distribution and price jitter. The iid alternative was measured and produces intervals narrow enough to change verdicts. See §8.6. |
 | 35 | Parameter stability was described but never implemented, though §15 lists it as a gate. | Surface analysis that promotes the neighbourhood median rather than the selection-biased peak, and chooses the centre of the best region rather than the best point. See §8.5. |
 | 34 | Overlapping labels were counted as independent observations, inflating the effective sample by up to 218× and every significance figure with it. | Concurrency-based uniqueness; the engine reports `effective_n` and the statistics take it instead of the bar count. The phase 3 exit criterion still passes, now under the stricter condition. See §7. |
 | 33 | Regime classification with full-sample thresholds labels the past using the future, invisibly and flatteringly. | Expanding-window quantiles over past data only; regime labels are held to §16.3's truncation invariance like any feature, and unclassifiable warmup is marked rather than guessed. See §10. |
@@ -1373,9 +1374,9 @@ Two consequences, both implemented rather than described:
 
 ### 8.6 Additional robustness
 
-- Monte Carlo over trade ordering → distribution of maximum drawdown
-- Stationary bootstrap (Politis-Romano) over the return series, respecting serial dependence
-- Input perturbation (price jitter within the spread)
+- **Monte Carlo over trade ordering → distribution of maximum drawdown.** The observed drawdown is not a property of the strategy; it is what happened to occur in the single ordering history produced. Reordering the same trades gives a different figure, usually worse: measured on one series, the observed −17.5% sat at the 71st percentile, with a median reordering of −19.9% and a 5th percentile of −30%. §14.6 depends on this distribution existing — without it the rule protecting a strategy from being retired during an ordinary drawdown has no reference to point at.
+- **Stationary bootstrap** (Politis-Romano) over the return series, respecting serial dependence. Not optional: on a series with autocorrelation 0.3, the iid bootstrap returned an interval 28% narrower that **excluded zero** where the blocked one included it. A narrower interval than the data earns is a different conclusion, not a rounding difference.
+- Input perturbation (price jitter within the spread). A result that moves materially when each price shifts by a fraction of the bid-ask spread is fitted to the exact prints rather than to the market.
 - Results broken down **by regime** (§10), with a minimum trade count per regime
 - Explicit complexity penalty: number of parameters, features and rules
 
