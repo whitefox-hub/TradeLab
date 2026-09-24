@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -24,7 +25,35 @@ FEATURE_NAMES = sorted(REGISTRY.features)
 
 @pytest.fixture(scope="module")
 def bars() -> pl.DataFrame:
-    return pl.read_parquet(FIXTURE).sort("event_time")
+    """Real bars, augmented with whatever the registry's features require.
+
+    Synthesised rather than skipped. A feature whose columns are absent would
+    otherwise drop out of the causality suite silently, and a feature with no
+    causality test is a feature with no causality guarantee — which is precisely
+    the thing these tests exist to prevent being assumed.
+
+    The property under test is structural, so the values need only be plausible.
+    """
+    frame = pl.read_parquet(FIXTURE).sort("event_time")
+    needed = {c for f in REGISTRY.features.values() for c in f.requires}
+    missing = needed - set(frame.columns)
+
+    rng = np.random.default_rng(20260101)
+    n = frame.height
+    synthetic = {
+        # Funding: 8-hourly settlement on hourly-or-finer bars, zero elsewhere.
+        "funding_rate": np.where(np.arange(n) % 8 == 0,
+                                 rng.normal(1.1e-4, 8e-5, n), 0.0),
+        "open_interest": np.abs(np.cumsum(rng.normal(0, 50, n))) + 10_000,
+    }
+    for column in sorted(missing):
+        if column not in synthetic:
+            raise AssertionError(
+                f"feature requires {column!r} and the fixture cannot supply it; "
+                f"add it here rather than letting the feature escape the suite"
+            )
+        frame = frame.with_columns(pl.Series(column, synthetic[column]))
+    return frame
 
 
 def _one_param_set(name: str) -> dict:
@@ -138,6 +167,19 @@ def test_row_order_within_a_timestamp_does_not_matter(offset: int, bars: pl.Data
         materialise(bars, feature_set)[column].to_list()
         == materialise(shuffled, feature_set)[column].to_list()
     )
+
+
+@pytest.mark.fast
+def test_every_registered_feature_is_covered(bars: pl.DataFrame) -> None:
+    """No feature may sit outside the causality suite.
+
+    The parametrisation covers the registry, and the fixture supplies every
+    declared requirement — so adding a feature with a new input fails loudly here
+    instead of quietly reducing coverage.
+    """
+    needed = {c for f in REGISTRY.features.values() for c in f.requires}
+    assert needed <= set(bars.columns)
+    assert len(FEATURE_NAMES) == len(REGISTRY)
 
 
 @pytest.mark.fast

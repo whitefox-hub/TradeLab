@@ -4,7 +4,8 @@ Plan.md §16.5. An anti-leakage system that has never caught a leak is not
 demonstrated to work; these exist so the detectors are known to have teeth.
 
 Every canary is registered in an isolated registry so it can never reach a real
-feature set.
+feature set — and that isolation was broken for a while without anyone noticing,
+which is documented in `test_canaries_never_reach_the_global_registry` below.
 """
 
 from __future__ import annotations
@@ -131,3 +132,31 @@ def test_canary_out_of_space_parameter_is_refused() -> None:
 
     with pytest.raises(ValueError, match="outside its declared space"):
         bounded.expr(period=999)
+
+
+@pytest.mark.fast
+def test_canaries_never_reach_the_global_registry() -> None:
+    """Isolation, asserted rather than assumed.
+
+    It was not holding. `feature(..., registry=registry)` resolved its target
+    with `registry or REGISTRY`, and `Registry` defines `__len__`, so an EMPTY
+    registry is falsy and the expression fell through to the global one. Every
+    canary — features written to cheat on purpose — was being registered in the
+    production registry and was available to real studies.
+
+    The bug is invisible by construction: the canaries still passed, because they
+    were still detected. Only a count of the global registry revealed it.
+    """
+    from tradelab.features import REGISTRY
+
+    isolated = Registry()
+
+    @feature(family="momentum", lookback=1, params={}, registry=isolated)
+    def only_here() -> pl.Expr:
+        return pl.col("close")
+
+    assert "only_here" in isolated.features
+    assert "only_here" not in REGISTRY.features
+    assert not any(
+        name.startswith(("cheat_", "liar_")) for name in REGISTRY.features
+    ), "a deliberately broken feature is registered for real studies"

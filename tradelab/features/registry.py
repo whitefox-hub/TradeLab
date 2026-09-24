@@ -154,7 +154,13 @@ def feature(
             code_hash=hashlib.sha256(source.encode()).hexdigest(),
             requires=requires,
         )
-        (registry or REGISTRY).add(definition)
+        # `is not None`, never `or`: Registry defines __len__, so an EMPTY
+        # registry is falsy and `registry or REGISTRY` silently falls through to
+        # the global one. That is how the leakage canaries — features written to
+        # cheat on purpose — ended up registered in the production registry,
+        # available to real studies.
+        target = registry if registry is not None else REGISTRY
+        target.add(definition)
         return definition
 
     return decorate

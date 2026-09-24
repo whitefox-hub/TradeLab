@@ -24,7 +24,7 @@ def materialise(
     keep: tuple[str, ...] = ("event_time", "available_at", "asset", "close"),
 ) -> pl.DataFrame:
     """Compute a feature set in a single pass."""
-    reg = registry or REGISTRY
+    reg = registry if registry is not None else REGISTRY
     lazy = frame.lazy() if isinstance(frame, pl.DataFrame) else frame
     exprs = [reg.get(name).expr(**params) for name, params in feature_set]
     columns = [c for c in keep if c in lazy.collect_schema().names()]
@@ -38,7 +38,7 @@ def feature_set_hash(feature_set: FeatureSet, registry: Registry | None = None) 
     produces a different set even when the name and parameters are unchanged —
     which is what stops a silent recomputation being mistaken for a cache hit.
     """
-    reg = registry or REGISTRY
+    reg = registry if registry is not None else REGISTRY
     payload = sorted(
         {"name": name, "params": params, "code": reg.get(name).code_hash}
         for name, params in feature_set  # type: ignore[type-var]
@@ -49,5 +49,5 @@ def feature_set_hash(feature_set: FeatureSet, registry: Registry | None = None) 
 
 def expand(name: str, registry: Registry | None = None) -> FeatureSet:
     """Every parameterisation of one definition."""
-    reg = registry or REGISTRY
+    reg = registry if registry is not None else REGISTRY
     return [(name, params) for params in reg.get(name).grid()]

@@ -121,7 +121,7 @@ def triple_barrier(
     `side` is +1 for long, -1 for short; with a primary model supplying direction
     this is where meta-labelling attaches (§7).
     """
-    spec = spec or BarrierSpec()
+    spec = spec if spec is not None else BarrierSpec()
     frame = bars.sort("event_time")
 
     vol = (

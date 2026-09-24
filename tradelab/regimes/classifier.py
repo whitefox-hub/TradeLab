@@ -82,7 +82,7 @@ def _expanding_quantile(values: np.ndarray, q: float, warmup: int) -> np.ndarray
 
 def classify(bars: pl.DataFrame, spec: RegimeSpec | None = None) -> pl.DataFrame:
     """Label every bar with direction, volatility and structure."""
-    spec = spec or RegimeSpec()
+    spec = spec if spec is not None else RegimeSpec()
     frame = bars.sort("event_time")
     close = frame["close"].to_numpy().astype(np.float64)
     n = close.size
