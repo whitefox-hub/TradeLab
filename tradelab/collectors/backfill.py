@@ -51,55 +51,127 @@ class Progress:
             self.assets_done += 1
 
 
+def _months(start: date, end: date) -> list[tuple[int, int]]:
+    out, year, month = [], start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        out.append((year, month))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return out
+
+
+def _days_in(year: int, month: int, start: date, end: date) -> list[date]:
+    day = max(start, date(year, month, 1))
+    last = date(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1)
+    stop = min(end, last)
+    out = []
+    while day <= stop:
+        out.append(day)
+        day += timedelta(days=1)
+    return out
+
+
 def backfill_asset(
     asset: str, start: date, end: date, root: Path, timeframe: str = "1m",
     client: httpx.Client | None = None,
 ) -> Progress:
+    """Backfill one asset, a month per request wherever possible.
+
+    The monthly archive holds the same bytes as its thirty daily files but costs
+    one request instead of thirty, and the archive is latency-bound rather than
+    bandwidth-bound. The trailing month falls back to daily files, because the
+    monthly archive for an unfinished month does not exist yet.
+    """
     collector = BinanceKlineBulk(timeframe, client=client)
     result = Progress()
-    day = start
+    current_month = (end.year, end.month)
 
-    while day <= end:
-        target = Partition(
-            kind="ohlcv", venue="binance", asset=asset, day=day, timeframe=timeframe
-        ).absolute_path(root)
-        if target.exists():
-            result.days_skipped += 1
-            day += timedelta(days=1)
+    for year, month in _months(start, end):
+        wanted = [
+            day for day in _days_in(year, month, start, end)
+            if not _partition(root, asset, day, timeframe).exists()
+        ]
+        result.days_skipped += len(_days_in(year, month, start, end)) - len(wanted)
+        if not wanted:
             continue
 
+        frame = None
+        if (year, month) != current_month:
+            try:
+                frame = collector.fetch_month(asset, year, month)
+            except Exception as exc:
+                log.warning("month_fetch_failed", asset=asset, month=f"{year}-{month:02d}",
+                            error=str(exc))
+
+        if frame is not None and frame.height:
+            _write_days(collector, result, frame, root, asset, timeframe, set(wanted))
+            continue
+
+        # No monthly archive: either the trailing partial month, or a month
+        # before the contract was listed. Fall through to per-day requests,
+        # which distinguish the two.
+        for day in wanted:
+            _fetch_one_day(collector, result, root, asset, day, timeframe)
+
+    return result
+
+
+def _partition(root: Path, asset: str, day: date, timeframe: str) -> Path:
+    return Partition(kind="ohlcv", venue="binance", asset=asset, day=day,
+                     timeframe=timeframe).absolute_path(root)
+
+
+def _write_days(collector, result: Progress, frame, root: Path, asset: str,
+                timeframe: str, wanted: set[date]) -> None:
+    import polars as pl
+
+    for (day,), chunk in frame.with_columns(
+        pl.col("event_time").dt.date().alias("_day")
+    ).group_by(["_day"], maintain_order=True):
+        if day not in wanted:
+            continue
+        chunk = chunk.drop("_day")
+        report = collector.validate(Batch("ohlcv", "binance", asset, chunk, collector.schema))
+        result.issues.extend(report.issues)
+        if not report.ok:
+            log.warning("day_refused", asset=asset, day=str(day),
+                        issues=[str(i.kind) for i in report.blocking])
+            continue
+        path = write_partition(chunk, collector.schema, root, "ohlcv", "binance",
+                               asset, day, timeframe=timeframe)
+        result.days_written += 1
+        result.rows += chunk.height
+        result.bytes_written += path.stat().st_size
+
+
+def _fetch_one_day(collector, result: Progress, root: Path, asset: str,
+                   day: date, timeframe: str) -> None:
+    if True:
         try:
             frame = collector.fetch_day(asset, day)
         except Exception as exc:
             # One bad day must not abandon six years of an asset. Logged and
             # skipped; the missing partition is visible in the manifest later.
             log.warning("fetch_failed", asset=asset, day=str(day), error=str(exc))
-            day += timedelta(days=1)
-            continue
+            return
 
         if frame is None or not frame.height:
             # No archive for that date: the contract was not listed yet. This is
             # the point-in-time universe doing its job, not a gap (§4.4).
             result.days_absent += 1
-            day += timedelta(days=1)
-            continue
+            return
 
         report = collector.validate(Batch("ohlcv", "binance", asset, frame, collector.schema))
         result.issues.extend(report.issues)
         if not report.ok:
             log.warning("day_refused", asset=asset, day=str(day),
                         issues=[str(i.kind) for i in report.blocking])
-            day += timedelta(days=1)
-            continue
+            return
 
         path = write_partition(frame, collector.schema, root, "ohlcv", "binance",
                                asset, day, timeframe=timeframe)
         result.days_written += 1
         result.rows += frame.height
         result.bytes_written += path.stat().st_size
-        day += timedelta(days=1)
-
-    return result
 
 
 def backfill_universe(
