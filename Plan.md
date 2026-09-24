@@ -108,6 +108,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 35 | Parameter stability was described but never implemented, though §15 lists it as a gate. | Surface analysis that promotes the neighbourhood median rather than the selection-biased peak, and chooses the centre of the best region rather than the best point. See §8.5. |
 | 34 | Overlapping labels were counted as independent observations, inflating the effective sample by up to 218× and every significance figure with it. | Concurrency-based uniqueness; the engine reports `effective_n` and the statistics take it instead of the bar count. The phase 3 exit criterion still passes, now under the stricter condition. See §7. |
 | 33 | Regime classification with full-sample thresholds labels the past using the future, invisibly and flatteringly. | Expanding-window quantiles over past data only; regime labels are held to §16.3's truncation invariance like any feature, and unclassifiable warmup is marked rather than guessed. See §10. |
 | 32 | PBO on net returns reads 0.000 on pure noise — not a broken estimator, but selection of minimum turnover, which persists out of sample without being alpha. | Computed on gross returns, with a turnover-correlation diagnostic so the confusion is visible; the turnover-matched random baseline is the control that catches what PBO cannot. See §8.3. |
@@ -1357,13 +1358,18 @@ A Sharpe of 1.8 that lands in the 60th percentile of the random-entry distributi
 
 ### 8.5 Parameter stability
 
-The **shape of the surface** is evaluated, not just its maximum:
+The **shape of the surface** is the evidence, not its maximum. RSI 14 excellent with 13 and 15 disastrous is a spike, and a spike is what noise produces; RSI 12–18 all working is a plateau, and a plateau is what a mechanism produces.
 
-- Performance of immediate neighbours in parameter space
-- Local flatness: gradient and curvature around the optimum
-- Ratio of the maximum to the median of its neighbourhood
+There is a subtlety that changes how this is measured. **The maximum of a noisy surface is biased upward by selection** — even on a perfectly flat true surface the sampled peak is an outlier, so any metric anchored on the peak is partly measuring that bias.
 
-RSI 14 excellent with 13 and 15 disastrous → rejected. RSI 12–18 with equivalent results → accepted. Formalised as the `param_stability` metric, not as visual inspection.
+Two consequences, both implemented rather than described:
+
+- **The robust score is the neighbourhood median, and it is what gets promoted.** It needs no bias correction because it is not the quantity that was maximised. A spike scores poorly because its neighbours drag the median down; a plateau scores well because its neighbours agree with it.
+- **The configuration chosen is the centre of the best neighbourhood, not the best point.** Taking the argmax and then describing its surroundings fails on near-ties: the argmax lands on an arbitrary member of a plateau, and a corner member has most of its neighbourhood outside, so a genuine plateau is reported as a spike. Maximising the smoothed surface lands in the middle, which is where a configuration should be taken from anyway.
+
+`is_spike` is then `robust_score < retention × peak_score` — does the good result survive smoothing? It is stated against the peak rather than against the chosen neighbourhood because an isolated spike is erased entirely by the median smoother, leaving a uniformly low surface whose "best neighbourhood" is arbitrary.
+
+`plateau_width` answers §8.5's own question directly: the contiguous run of parameter values holding half the best score on their slice. A width of one is a spike.
 
 ### 8.6 Additional robustness
 
