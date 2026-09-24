@@ -104,6 +104,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 29 | Operator interface never specified: no screens, no auth design, and an unresolved Grafana/application boundary. | Screen inventory by phase, the boundary rule, identity as an audit-trail requirement, and mode made non-editable by construction. See §20. |
 | 28 | No limit on concurrent open positions in the enforced risk config, and no minimum position size at all. | `max_open_positions`, `max_positions_per_cluster`, `min_position_notional`; minimum viable size derived as `max(min_notional, lot_size x price)` point-in-time, and a floor added to the capital ramp. See §14.1. |
 | 27 | Price levels and multi-asset selection absent, though both are how the system is meant to be operated. | Level families with declared confirmation windows, and a hard boundary between a backtestable selection rule and picking the winner. See §6.2, §6.3. |
 | 26 | News handled as classification and magnitude only — no duration, no participation, no state conditioning, and no test of whether an effect outlives its trading costs. | Impulse response via local projections, two-component decay, in-house point-in-time state index, and a cost filter that rejects fast-decaying classes automatically. See §11.5. |
@@ -147,7 +148,7 @@ Seven services with hard boundaries. Nothing calls across a boundary except thro
 | `validator` | Statistics only. Never runs a backtest | `experiment_results`, `studies` | `validation_reports` |
 | `executor` | The only service that talks to a venue for trading | Live feed, registry | `runs`, `orders`, `fills` |
 | `risk_engine` | Independent veto. Cannot be bypassed by a strategy | `runs`, positions | halts, `position_reconciliations` |
-| `api` | FastAPI + UI. Read-heavy; writes only approvals | Registry | approvals, lifecycle transitions |
+| `api` | FastAPI + UI (§20). Read-heavy; writes only approvals. Holds no venue credentials, so it cannot start live trading | Registry | approvals, lifecycle transitions |
 
 Two boundaries matter more than the rest:
 
@@ -2171,6 +2172,77 @@ Real-money trading **is** a goal, but it is the end of the ladder in §12, not a
 | Silently bad data quality | Ingestion-time validation + cross-source reconciliation |
 | Scope: 18 sources at once | Data tiers; no source enters without a quality test and backfill |
 | Complexity nobody maintains | Hard boundaries between layers; every phase ships something usable |
+
+---
+
+## 20. Operator interface
+
+The pieces exist across §2.1, §5.6 and §12.6 but were never assembled into screens. This section does that, and settles one boundary and one prohibition that matter more than the screen list.
+
+### 20.1 The Grafana / application boundary
+
+Two surfaces, and putting something on the wrong one costs either weeks of chart code or an unauditable decision:
+
+| | Grafana | Application |
+|---|---|---|
+| Answers | "How is it going?" | "What is this, and what do I decide?" |
+| Data | Time series | Relational registry |
+| Writes | Nothing | Approvals and lifecycle transitions only |
+| Identity | Not required | **Required** |
+
+The rule: **if it reads a time series, it is Grafana; if it writes to the registry, it is the application.** Equity curves, drawdown, slippage per trade, latency, ingestion freshness and risk-limit utilisation are all Grafana, and cost no code. Anything that records a decision is the application, because a decision needs an actor and a timestamp.
+
+The application **never computes a quantitative figure**. Every number it displays was computed by a worker and persisted, exactly as required of the Laravel variant in Appendix B — the constraint is about provenance, not about which framework draws the page.
+
+### 20.2 Mode is not a toggle
+
+The single most important thing in this section.
+
+There must be **no control that switches a strategy from simulator to production.** Not a button, not a dropdown, not a config field an operator can edit. The reasons are structural rather than cautious:
+
+- §15 makes every transition conditional on gate criteria plus a recorded approval. A toggle bypasses both by construction.
+- §14.5 requires the capital ramp; production is reached through L0–L3, not entered.
+- §14.4 puts LIVE credentials out of reach of everything but the executor. The `tradelab-api` image does not have them, so **the interface is incapable of starting live trading** even if its code asked to.
+
+What the interface actually does is *request* a transition. The request lands in `approvals`; the gate evaluates `gate_configs` against `validation_reports`; the executor acts only on an approved transition whose criteria passed. The screen shows which criteria are met and which are not, and the button is disabled with the failing criterion named — not hidden, because knowing why you cannot promote is the useful part.
+
+The mode of a running strategy is therefore **displayed, never edited**, and it is displayed prominently: mistaking simulator for live is the error this design is most concerned with.
+
+### 20.3 Login, and why a single operator still needs one
+
+Not to keep strangers off a service bound to localhost. Because `approvals.approved_by` is `NOT NULL` and §15 states that no transition is manual without a record. **Identity is a correctness requirement of the audit trail**, not a security nicety, and it stays one when the user count is one.
+
+- Sessions are short-lived; `audit_log` records actor, action and subject for every write
+- Roles from §5.6: `researcher` may read everything and request transitions; `operator` may approve up to `candidate → simulator`; `admin` may approve capital-tier advances and change `gate_configs`
+- Changing a gate threshold requires `gate_configs.rationale`, which is `NOT NULL`. The field is a text box the operator must fill, and lowering a bar is therefore always accompanied by the reason, attached to every verdict issued under it.
+
+### 20.4 Screens
+
+Ordered by the phase that needs them, so none is built before there is something to put in it.
+
+| Screen | Shows | Writes | Phase |
+|---|---|---|---|
+| **Sign in** | — | session, `audit_log` | 4 |
+| **Home** | Running runs by mode, open alerts, capital tier, blocking data-quality issues | — | 4 |
+| **Universe** | Configured assets, point-in-time `tick_size`/`lot_size`/`min_notional`, computed `min_viable` (§14.1), listing dates | deployed asset set | 4 |
+| **Strategies** | Lifecycle state, gate status per criterion, cluster membership (§13.1) | transition requests | 4 |
+| **Strategy detail** | Params (read-only), validation report, capacity ceiling, decay test | — | 4 |
+| **Experiments** | Browse and filter by feature, parameter, regime; side-by-side comparison | — | 4 |
+| **Approvals** | Pending transitions with the evidence snapshot that will be recorded | `approvals`, `lifecycle_transitions` | 4 |
+| **Risk limits** | Current `risk_limit_configs`, live utilisation against each cap, breach history | limit changes (admin) | 5 |
+| **Runs** | Active positions, orders, fills, realised and unrealised P&L, per-trade slippage | — | 5 |
+| **Reconciliation** | Divergence vs backtest with its attribution into costs / timing / fills / data (§12.5) | — | 5 |
+| **Data quality** | Open issues, which windows are blocked and what that blocks | issue resolution | 2 |
+| **Capital ramp** | Current tier, days at tier, criteria for advancing | tier approvals (admin) | 7 |
+
+Parameter configuration deserves its own note, because it is where the interface is most likely to do damage: **signal parameters are not editable anywhere.** §12.4 makes changing one create a new strategy that re-enters the funnel, and `runs.params` is immutable in the schema. The interface exposes the operational settings of §12.4's left-hand column — sizing, risk limits, order type, alert thresholds — and displays the rest read-only.
+
+### 20.5 What the interface must not be
+
+- **Not the kill switch's only path.** §14.1 requires it to work when the orchestrator is down; a browser is a weaker dependency still. The UI has a kill button, and a CLI kill exists that does not go through the API or the orchestrator.
+- **Not a place metrics are computed.** A figure that appears only on screen is a figure nobody can reproduce.
+- **Not a live-trading control surface.** It approves; the executor acts.
+- **Not required for the system to run.** Collectors, backfill, validation and execution all run headless. The interface is for deciding and for looking, and if it is down, nothing stops.
 
 ---
 
