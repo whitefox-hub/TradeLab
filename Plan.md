@@ -108,6 +108,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 33 | Regime classification with full-sample thresholds labels the past using the future, invisibly and flatteringly. | Expanding-window quantiles over past data only; regime labels are held to §16.3's truncation invariance like any feature, and unclassifiable warmup is marked rather than guessed. See §10. |
 | 32 | PBO on net returns reads 0.000 on pure noise — not a broken estimator, but selection of minimum turnover, which persists out of sample without being alpha. | Computed on gross returns, with a turnover-correlation diagnostic so the confusion is visible; the turnover-matched random baseline is the control that catches what PBO cannot. See §8.3. |
 | 31 | The §0.1 cost table counted 250 round trips a year at a one-day hold — the equities calendar. Crypto trades 365 days, so every drag figure was understated by 46%. | Recomputed at 365 days: a one-day hold costs 47%/yr, not 30%, and the horizon band moves out to 2–7 days. The table now comes from `CostModel.annual_drag`, so it cannot drift from the engine again. |
 | 30 | Single operator collapses the roles, removing the separation of duties that stopped a threshold being lowered and used the same day. | Replaced with a temporal control: a 24h cooling-off before an approval may cite a relaxed gate, enforced in the approval path rather than the interface. See §20.3. |
@@ -170,6 +171,7 @@ tradelab/
   storage/           Parquet layout, manifests, DuckDB session helpers
   features/          registry + definitions, one file per family
   labeling/          triple barrier, meta-labeling, sample weights
+  regimes/           point-in-time regime classification
   engines/
     tier_a/          vectorized screening
     tier_b/          nautilus adapters, cost models
@@ -1446,7 +1448,11 @@ A regime classifier, causal and point-in-time (it cannot use future data to labe
 
 Dimensions: direction (bull/bear/neutral) · structure (trending/ranging) · volatility (high/low, expanding/contracting) · risk (risk-on/risk-off, via macro correlation) · liquidity (high/low).
 
-Methods: explicit rules over realised volatility, ADX, Hurst, band width; alternatively Hidden Markov Models or clustering, **always trained only on data preceding each point**.
+Methods: explicit rules over realised volatility, the Kaufman efficiency ratio, Hurst or band width; alternatively Hidden Markov Models or clustering, **always fitted only on data preceding each point**.
+
+The trap, stated plainly because it is easy to fall into and invisible afterwards: **the thresholds must not know the future.** Calling a period "high volatility" because it sits above the median of the whole sample uses data from years later to label a day in 2020. Nothing raises, the labels look entirely sensible, and every per-regime result computed from them is contaminated — and the contamination flatters, because regimes defined with hindsight separate outcomes better than any regime identifiable at the time.
+
+Every threshold is therefore an **expanding-window quantile over past data only**, and a regime label is treated as a feature for testing purposes: it must satisfy the truncation invariance of §16.3. The cost is that the first bars cannot be classified at all, and they are returned as `unknown` rather than guessed.
 
 Usage: `experiment_results` carries one row per regime. A strategy that only works in one regime is not discarded — it is annotated, and its deployment is conditioned on detecting that regime live. But it must still meet a minimum trade count within that regime.
 
