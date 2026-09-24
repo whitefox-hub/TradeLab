@@ -29,6 +29,10 @@ COPY tradelab ./tradelab
 # alembic.ini is required at runtime: `alembic upgrade head` reads
 # `script_location` from it and fails with exit 255 without it.
 COPY pyproject.toml alembic.ini ./
-RUN useradd -m -u 1000 lab && chown -R lab /app
+RUN useradd -m -u 1000 lab && chown -R lab /app \
+    # Docker seeds a new named volume from the image directory, ownership
+    # included. Without this the volume is root-owned and the collector cannot
+    # write to it.
+    && mkdir -p /data/parquet && chown -R lab:lab /data
 USER lab
 CMD ["python", "-c", "import tradelab; print('tradelab-compute ready')"]

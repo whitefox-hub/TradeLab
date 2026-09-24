@@ -91,7 +91,7 @@ def capture(
     typer.echo(f"Capturing {selected} -> {archive}")
     if "open_interest" in selected:
         typer.echo(f"  open interest polls {len(symbols)} symbols")
-    asyncio.run(run_capture(collectors, "binance"))
+    asyncio.run(run_capture(collectors, "binance", root=archive))
 
 
 @app.command()

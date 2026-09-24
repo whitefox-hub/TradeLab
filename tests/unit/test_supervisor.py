@@ -81,3 +81,30 @@ def test_watermark_survives_a_restart() -> None:
     with db_session() as session:
         source = watermark.source_id(session, "test-resume", "ohlcv", "binance")
         assert watermark.read(session, source) is not None
+
+
+@pytest.mark.fast
+def test_refuses_to_start_when_the_archive_is_not_writable(tmp_path) -> None:
+    """Fail at startup, not at the first flush.
+
+    Without this the process logs `capture_starting`, connects, and looks healthy
+    for a whole flush interval before the first write raises — having silently
+    discarded everything it received in the meantime. For a source that cannot be
+    backfilled, that is permanent loss wearing the costume of a running service.
+    """
+    import os
+
+    from tradelab.collectors.supervisor import assert_writable
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    assert_writable(archive)  # writable: no complaint
+
+    if os.getuid() == 0:
+        pytest.skip("running as root; permissions cannot be exercised")
+    archive.chmod(0o500)
+    try:
+        with pytest.raises(PermissionError, match="not writable"):
+            assert_writable(archive)
+    finally:
+        archive.chmod(0o700)

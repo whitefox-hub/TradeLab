@@ -16,8 +16,10 @@ about how much unrecoverable data an unclean kill may cost.
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 
@@ -108,7 +110,30 @@ async def _supervise_one(collector, kind: str, source_name: str, venue: str,
                  rows=getattr(collector.buffer, "flushed_rows", 0), clean=stop.is_set())
 
 
-async def run_capture(collectors: list[tuple[object, str, str]], venue: str) -> None:
+def assert_writable(root: Path) -> None:
+    """Refuse to start if the archive cannot be written.
+
+    Without this the process logs `capture_starting`, connects, and looks healthy
+    for a full flush interval before the first write raises — by which point it
+    has silently discarded everything it received. For a source that cannot be
+    backfilled, that window is permanent data loss dressed up as a running
+    service.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    probe = root / ".write_probe"
+    try:
+        probe.touch()
+        probe.unlink()
+    except OSError as exc:
+        raise PermissionError(
+            f"Archive {root} is not writable by uid {os.getuid()}: {exc}. "
+            "Nothing would reach disk until the first flush, which would then "
+            "crash the collector. Refusing to start."
+        ) from exc
+
+
+async def run_capture(collectors: list[tuple[object, str, str]], venue: str,
+                      root: Path | None = None) -> None:
     """Run several capture collectors concurrently under one shutdown signal.
 
     `collectors` is a list of (collector, kind, source_name).
@@ -116,11 +141,26 @@ async def run_capture(collectors: list[tuple[object, str, str]], venue: str) -> 
     One signal stops all of them, and the function returns only once every buffer
     has been flushed — which is what `stop_grace_period` in compose must cover.
     """
+    if root is not None:
+        assert_writable(root)
+
     stop = asyncio.Event()
     install_shutdown_handler(stop)
     log.info("capture_starting", venue=venue, collectors=[k for _, k, _ in collectors])
 
-    await asyncio.gather(
-        *(_supervise_one(c, kind, name, venue, stop) for c, kind, name in collectors)
+    # return_exceptions keeps one failing collector from silently taking the
+    # others down with it; the failure is logged and re-raised afterwards.
+    results = await asyncio.gather(
+        *(_supervise_one(c, kind, name, venue, stop) for c, kind, name in collectors),
+        return_exceptions=True,
     )
+    failures = [
+        (collectors[i][1], r)
+        for i, r in enumerate(results)
+        if isinstance(r, BaseException)
+    ]
+    for kind, error in failures:
+        log.error("collector_failed", kind=kind, error=str(error))
+    if failures:
+        raise failures[0][1]
     log.info("capture_stopped_cleanly")
