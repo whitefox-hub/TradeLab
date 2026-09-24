@@ -160,6 +160,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 41 | The operator needs to annotate events, and an in-place edit would inject hindsight straight into historical labels through the interface. | Annotations are revisions with their own `available_at`, corrections separated from judgements by whether the value was knowable at publication, and judgements cannot be backdated. Operator calibration is tallied like the agent's. See §20.5. |
 | 40 | Sign treated as the signal, and no shape for news that starts a process rather than being an event. | Sign is an input to the expected-reaction model; the residual is the signal. Three shapes — shock, schedule, process — the last a state machine whose transitions are measured separately and supersede their predecessors. See §11.7. |
 | 39 | §11 modelled shocks only, so a scheduled event's anticipation had nowhere to live, and its schedule was assumed fixed when schedules are revised. | Anticipation path keyed on time-until, versioned `schedule_revisions`, and three distinct ways a signal ends rather than one decay constant. See §11.6, §11.8. |
 | 38 | The engine ignored funding entirely, understating the cost of any long-biased perpetual strategy by 11.8% a year. | Charged against the position held and signed; on a real BTCUSDT study it moved the Sharpe from −0.45 to −0.59. Funding, OI and positioning features added, which is what the differentiation thesis actually rests on. See §9.5, §11.4. |
@@ -1065,6 +1066,27 @@ CREATE TABLE schedule_revisions (
   confidence      text,                  -- fixed | estimated | rumoured
   source          text,
   PRIMARY KEY (event_id, revision)
+);
+
+-- Human annotations on events (§20.5). Revisions, never edits: a rating made
+-- today must be invisible to a backtest of last year, or hindsight enters the
+-- historical labels through the interface.
+CREATE TABLE event_annotations (
+  id              uuid PRIMARY KEY,
+  event_id        uuid NOT NULL REFERENCES events(id),
+  kind            text NOT NULL,         -- correction | judgement
+  -- A correction repairs a parse failure, so it inherits the event's own
+  -- availability: the value was always there. A judgement creates information
+  -- at the moment it is made and can never be backdated.
+  available_at    timestamptz NOT NULL,
+  payload         jsonb NOT NULL,        -- corrected fields, or the rating
+  rating          numeric,               -- signed expected impact, if a judgement
+  confidence      numeric,
+  author          uuid NOT NULL REFERENCES users(id),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  CHECK (kind IN ('correction', 'judgement')),
+  -- A judgement dated before it was written is hindsight with a form around it.
+  CHECK (kind <> 'judgement' OR available_at >= created_at - interval '1 minute')
 );
 
 -- Transitions of a process event (§11.7). Each is measured separately, because
@@ -2683,10 +2705,84 @@ Ordered by the phase that needs them, so none is built before there is something
 | **Reconciliation** | Divergence vs backtest with its attribution into costs / timing / fills / data (§12.5) | — | 5 |
 | **Data quality** | Open issues, which windows are blocked and what that blocks | issue resolution | 2 |
 | **Capital ramp** | Current tier, days at tier, criteria for advancing | tier approvals (admin) | 7 |
+| **News** | Events, extracted fields, ratings with their calibration, process state | `event_annotations`, `process_transitions` (§20.5) | 9 |
 
 Parameter configuration deserves its own note, because it is where the interface is most likely to do damage: **signal parameters are not editable anywhere.** §12.4 makes changing one create a new strategy that re-enters the funnel, and `runs.params` is immutable in the schema. The interface exposes the operational settings of §12.4's left-hand column — sizing, risk limits, order type, alert thresholds — and displays the rest read-only.
 
-### 20.5 What the interface must not be
+### 20.5 The news screen, and the one rule that makes it safe
+
+The operator needs to work on events directly: the LLM extraction will
+misclassify, the taxonomy will miss things, and some events carry judgement no
+classifier can supply. So the screen exists, and it allows adding an event,
+correcting its extraction, rating it, and setting its state.
+
+It collides with two principles, and the resolution is what makes it usable
+rather than dangerous.
+
+**It appears to break §20.1** — the application computes no quantitative figure —
+because a human rating is a number entering through the interface. It does not,
+because the rating is not a computed metric; it is **an observation, recorded
+with the time it was made**. The application still computes nothing. It records
+what someone asserted and when.
+
+**It genuinely threatens §11.2**, and this is the one that matters. Editing an
+event's rating today, in place, and letting a 2022 backtest read it is hindsight
+injected straight into historical labels — the purest form of look-ahead bias
+this system can suffer, because a human who knows how 2022 turned out is rating
+2022 events.
+
+#### A rating is a revision, never an edit
+
+Nothing on this screen overwrites anything. Every annotation is a new row with
+its own `available_at`, exactly as `event_revisions` already works for extracted
+content (§11.2). A backtest at time `t` sees an annotation only if it was made
+before `t`, so today's corrections are invisible to a backtest of last year —
+which is the correct behaviour and will occasionally be frustrating.
+
+#### Corrections and judgements are not the same thing
+
+The distinction decides the timestamp, and getting it wrong is how hindsight
+enters while looking like housekeeping.
+
+| | Correction | Judgement |
+|---|---|---|
+| Example | "The ticker is PONSUSDT, not the release date the parser captured" | "I read this as strongly bullish for the sector" |
+| Was the value knowable at publication? | Yes — the parser simply failed | No — it did not exist until you formed it |
+| `available_at` | The original event's | **Now** |
+| May be backdated | Yes, and should be | **Never** |
+
+A correction repairs a mechanical failure to read something that was always
+there. A judgement creates information at the moment it is made. The interface
+requires choosing which one is being entered, does not offer a date field for
+judgements, and the backdating path is closed in the approval layer rather than
+in the form — a control in a form is a control that can be clicked past.
+
+#### The operator's ratings are scored like the agent's
+
+§17 requires the AI agent's hypotheses to carry a recorded prior and be tallied
+against outcomes, so its hit rate is a measurable fact rather than an impression.
+A human annotator entering ratings is an input to the same models and gets the
+same treatment, for the same reason.
+
+If ratings over two hundred events show no relationship to subsequent reaction
+residuals, that is worth knowing, and it is only knowable if each rating was
+recorded with a timestamp before the outcome existed. The screen therefore shows
+the operator their own calibration next to the entry form — not to discourage
+annotation, but because an unmeasured input with a confident human behind it is
+the least examined thing in any research system.
+
+#### State
+
+For a `process` event (§11.7), state is the state machine: `proposed`,
+`under_review`, `decided`, `implemented`, `withdrawn`. Setting it manually is
+legitimate, because often no feed announces a transition — a consultation quietly
+closing is not a press release.
+
+A state change is a `process_transitions` row, and `supersedes` is set, so a
+position built on the prior state goes to zero at the transition rather than
+decaying from it (§11.8).
+
+### 20.6 What the interface must not be
 
 - **Not the kill switch's only path.** §14.1 requires it to work when the orchestrator is down; a browser is a weaker dependency still. The UI has a kill button, and a CLI kill exists that does not go through the API or the orchestrator.
 - **Not a place metrics are computed.** A figure that appears only on screen is a figure nobody can reproduce.
