@@ -1028,6 +1028,11 @@ CREATE TABLE event_reactions (
   funding_change   numeric,
   trade_count_z    numeric,              -- participation (§11.4)
   avg_trade_size_z numeric,
+  -- Why the signal ended (§11.8). Decay is a rate; the other two are dates, and
+  -- a model carrying only a rate keeps a position open on an item cancelled
+  -- yesterday because its clock says half-life remains.
+  ended_by         text,                 -- decay | superseded | resolved | open
+  ended_at         timestamptz,
   PRIMARY KEY (event_id, asset, horizon_minutes)
 );
 
@@ -1696,7 +1701,63 @@ The halving belongs in the table only to be excluded. Four occurrences cannot
 support a conditional model, and the temptation to reason about it anyway is
 exactly what §8.8 exists to resist.
 
-### 11.7 When a news item expires
+### 11.7 Three shapes, and why sign is not the signal
+
+Events differ along two axes, and only one of them is the obvious one.
+
+**Sign** — positive or negative for the asset — is the axis everyone reaches for
+first and the less useful of the two. What is tradeable is the **residual** of
+§11.10: observed reaction minus expected. Positive news that should have moved
++2σ and moved +0.2σ is bearish information; lukewarm news that moved +4σ is
+bullish. Sign is therefore an **input to the expected-reaction model**, never a
+signal in itself, and a system trading sign directly is trading the part of the
+reaction everyone else has already priced.
+
+**Shape** — how the response is distributed in time — is the axis that changes
+the model. Three of them, each needing different machinery:
+
+| Shape | When the market acts | Example | Modelled by |
+|---|---|---|---|
+| **Shock** | Immediately, then decays | Hack, surprise CPI print | §11.5 impulse response |
+| **Schedule** | Builds before a known date, resolves at it | Unlock, expiry, FOMC | §11.6 anticipation path |
+| **Process** | Gradually, as a sequence of resolutions | Regulatory consultation, governance vote, announced intent to accumulate | below |
+
+#### Processes: news that starts something rather than being something
+
+The third is what the other two miss, and it is common. A regulator opens a
+consultation; an exchange says it will "consider" a listing; a protocol proposes
+an upgrade; a treasury announces an intent to buy over coming quarters. None is a
+shock, because the outcome is not yet known, and none is a schedule, because
+there is no date.
+
+What exists instead is a **probability distribution over outcomes that updates as
+the process advances**. The tradeable object is not the announcement — it is each
+revision of that distribution, and the announcement is merely the first.
+
+So a process event is a state machine, and every transition is an event with its
+own reaction:
+
+```
+proposed → under_review → decided → implemented
+                       ↘ withdrawn
+```
+
+Two consequences, both easy to get wrong:
+
+- **Each transition is measured separately.** The reaction to `proposed` and the
+  reaction to `decided` are different quantities, and pooling them estimates
+  neither. The class in §11.1's taxonomy is `(process_type, transition)`.
+- **A transition supersedes its predecessor.** This is the concrete case behind
+  supersession below: when `withdrawn` arrives, a position built on `proposed` is
+  not decaying, it is wrong. The feature goes to zero at the transition rather
+  than fading from it.
+
+The sample problem is severe — a regulatory process has a handful of occurrences,
+not hundreds — so processes enter the research campaign last, after unlocks and
+listings, and most likely as a conditioning variable rather than a signal of
+their own.
+
+### 11.8 When a news item expires
 
 "How long does it last" has three distinct answers that a single decay constant
 cannot carry, and conflating them is how a model keeps trading information that
@@ -1722,7 +1783,7 @@ The practical test that separates them: **decay is a rate, the other two are
 dates.** A model with only a rate will keep a position open on an item that was
 cancelled yesterday, because its clock says there is still half-life remaining.
 
-### 11.8 Hierarchical pooling
+### 11.9 Hierarchical pooling
 
 Cells are sparse and always will be. Conditioning impact on `class × state × participation` with 7 classes, 4 states and 3 participation levels gives 84 cells; at 30 events per cell that needs 2,500 events **per class**. Only listings come close.
 
@@ -1737,7 +1798,7 @@ Implementation is **empirical Bayes** (closed-form James–Stein style shrinkage
 
 `n_events` is stored alongside every coefficient and is **displayed wherever the coefficient is displayed**. A number backed by six events must never be presentable without that six being visible next to it.
 
-### 11.9 The tradeable signal
+### 11.10 The tradeable signal
 
 At prediction time, for an event observed `h_obs` ago:
 
@@ -1760,7 +1821,7 @@ AND  implied_hold(τ_slow)   ∈  [2d, 7d]     # §0.2
 
 The algorithm enforces the horizon constraint itself. A signal whose implied holding period is three hours is rejected by construction, not by discipline.
 
-### 11.10 Baselines and diagnostics
+### 11.11 Baselines and diagnostics
 
 Event studies fail in characteristic ways. Three checks, all mandatory before any IRF is usable:
 
@@ -1772,7 +1833,7 @@ Event studies fail in characteristic ways. Three checks, all mandatory before an
 
 And the standing hazard, which no test fully removes: **the narrative fallacy.** Given any large move, financial media reliably produces an explanation. Retrospective matching of moves to headlines is overfitting with prose attached, and it is more persuasive than the numerical kind precisely because it comes with a coherent story. The residual formulation of §11.9 is the structural defence: it asks whether the reaction differed from expectation, not whether a story exists.
 
-### 11.11 Gates
+### 11.12 Gates
 
 Before an IRF-derived feature reaches the feature engine:
 
