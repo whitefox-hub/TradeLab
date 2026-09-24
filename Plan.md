@@ -79,6 +79,56 @@ Stated plainly, because the number matters more than the ambition.
 
 This section is the honest answer to "I want profitability": the fastest route to *profit* is not the fastest route to *evidence*, and without evidence there is no profit, only variance that has not revealed itself yet.
 
+### 0.4 Where the edge is hypothesised to live
+
+A **skill** advantage requires being better than competitors with more people and
+more money, which is a poor bet for one operator. A **structural** advantage comes
+from constraints the competition has and you do not, and it is durable because
+they cannot remove it.
+
+| Structural advantages | Structural disadvantages |
+|---|---|
+| No capacity requirement: a €500k opportunity is worth having | No colocation, no competitive latency |
+| No mandate to deploy: eighteen months in cash is permitted | Retail fee tiers, and VIP tiers unreachable |
+| No venue restrictions: second-tier exchanges are available | One researcher |
+| No LPs demanding explanations during a drawdown | No prime broker, no cross-venue margin |
+| Iteration in a day rather than a three-week committee | Short history outside the majors |
+
+The design rule that follows: **pursue only edges that live in the advantages and
+do not require overcoming the disadvantages.** That excludes anything
+latency-sensitive and anything fee-sensitive at high turnover, and points at what
+is capacity-limited, requires patience, or suffers from operational fragmentation.
+
+Where to look, in order:
+
+1. **Capacity-constrained assets.** A fund with $50m cannot deploy into a
+   strategy with $2m of capacity — not unwillingness, it simply does not move
+   their needle while consuming the same research. Perpetuals ranked 30–150 by
+   volume are effectively empty of institutional money.
+2. **New listings.** Each is a fresh event, so 50–200 listings across venues in
+   six years give a genuinely independent cross-section — which is exactly what
+   six years of BTC does not, being one correlated path. This raises statistical
+   power by construction, not by assumption.
+3. **Cross-venue funding dispersion.** The same asset with different funding on
+   eight exchanges. It requires fragmented margin and reconciliation in several
+   places, which is precisely why institutions avoid it.
+4. **Post-liquidation-cascade reversion.** Cascades are mechanical rather than
+   informational: price moves because an engine must sell, not because anyone
+   knows something.
+5. **The dataset you build rather than buy.** Anything for sale is priced in. The
+   event reaction residual of §11.10 is not sold by anyone, and it compounds: at
+   two years you hold something a new competitor cannot purchase.
+6. **The freedom to decline.** A fund *must* deploy. Most operators lower the bar
+   because they cannot afford to reject everything for a year, and §15 exists to
+   make lowering it an audited event.
+
+**It is not free.** Worse data with more gaps, wider spreads that raise the drag
+of §0.1, far more aggressive survivorship bias — mid-caps die, so the
+point-in-time universe of §4.4 moves from advisable to essential — shorter
+history per asset, and real venue risk. All of that is paid in data engineering
+and operational exposure, which are controllable, rather than in latency and
+capital, which are not.
+
 ---
 
 ## 1. What changed from the original brief
@@ -110,6 +160,8 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 40 | Sign treated as the signal, and no shape for news that starts a process rather than being an event. | Sign is an input to the expected-reaction model; the residual is the signal. Three shapes — shock, schedule, process — the last a state machine whose transitions are measured separately and supersede their predecessors. See §11.7. |
+| 39 | §11 modelled shocks only, so a scheduled event's anticipation had nowhere to live, and its schedule was assumed fixed when schedules are revised. | Anticipation path keyed on time-until, versioned `schedule_revisions`, and three distinct ways a signal ends rather than one decay constant. See §11.6, §11.8. |
 | 38 | The engine ignored funding entirely, understating the cost of any long-biased perpetual strategy by 11.8% a year. | Charged against the position held and signed; on a real BTCUSDT study it moved the Sharpe from −0.45 to −0.59. Funding, OI and positioning features added, which is what the differentiation thesis actually rests on. See §9.5, §11.4. |
 | 37 | Walk-forward was specified and absent, so non-stationarity had no treatment and the only answer to "seven years is a lot" was to cut the window — which costs power without fixing the problem. | Rolling and anchored walk-forward with purge gaps, accumulating trials across windows, reporting parameter churn. On real BTCUSDT it returned −0.37 with 40% churn where a single split had shown +0.53. See §8.1. |
 | 36 | §8.6's resampling was described but absent, leaving §14.6's "a drawdown inside the validated distribution is not evidence of failure" with no distribution to consult. | Stationary bootstrap, trade-reordering drawdown distribution and price jitter. The iid alternative was measured and produces intervals narrow enough to change verdicts. See §8.6. |
@@ -959,7 +1011,7 @@ CREATE TABLE portfolio_results (
 );
 ```
 
-### 5.5 News, events and impact (11 tables)
+### 5.5 News, events and impact (15 tables)
 
 ```sql
 CREATE TABLE entities (
@@ -988,10 +1040,60 @@ CREATE TABLE articles (
 CREATE TABLE events (
   id              uuid PRIMARY KEY,
   event_type      text NOT NULL,         -- listing | hack | regulation | macro_release | unlock ...
+  -- Which of the three shapes in §11.7, because each needs different machinery.
+  shape           text NOT NULL DEFAULT 'shock',   -- shock | schedule | process
   first_seen_at   timestamptz NOT NULL,
   latest_revision int NOT NULL DEFAULT 1,
+  resolved_at     timestamptz,           -- when the date passed, whatever happened
   cluster_method  text NOT NULL,
-  code_hash       text NOT NULL
+  code_hash       text NOT NULL,
+  CHECK (shape IN ('shock', 'schedule', 'process'))
+);
+
+-- What the expected date was believed to be, and when that belief existed.
+--
+-- Unlocks are postponed and deadlines extended, so computing "days until the
+-- event" from the date it eventually happened on assumes the market knew a date
+-- it did not. That is look-ahead bias wearing a calendar, and it is invisible
+-- afterwards because the labels look entirely reasonable — they are simply built
+-- from a future nobody had (§11.6).
+CREATE TABLE schedule_revisions (
+  event_id        uuid NOT NULL REFERENCES events(id),
+  revision        int NOT NULL,
+  available_at    timestamptz NOT NULL,  -- when this date became public
+  scheduled_for   timestamptz NOT NULL,  -- the date as believed at that moment
+  confidence      text,                  -- fixed | estimated | rumoured
+  source          text,
+  PRIMARY KEY (event_id, revision)
+);
+
+-- Transitions of a process event (§11.7). Each is measured separately, because
+-- the reaction to `proposed` and to `decided` are different quantities and
+-- pooling them estimates neither.
+CREATE TABLE process_transitions (
+  event_id        uuid NOT NULL REFERENCES events(id),
+  sequence        int NOT NULL,
+  state           text NOT NULL,         -- proposed|under_review|decided|implemented|withdrawn
+  available_at    timestamptz NOT NULL,
+  supersedes      int,                   -- sequence invalidated by this one
+  payload         jsonb NOT NULL,
+  PRIMARY KEY (event_id, sequence)
+);
+
+-- The anticipation path: response as a function of time UNTIL the date (§11.6).
+-- Kept apart from event_impulse_response, which is time SINCE — the two carry
+-- opposite signs often enough that merging them would cancel the effect.
+CREATE TABLE event_anticipation (
+  id              uuid PRIMARY KEY,
+  event_class     text NOT NULL,
+  state_bucket    text NOT NULL,
+  days_until      int NOT NULL,          -- positive: before the date
+  coef            numeric NOT NULL,
+  ci_low          numeric NOT NULL,
+  ci_high         numeric NOT NULL,
+  n_events        int NOT NULL,
+  fitted_through  timestamptz NOT NULL,
+  UNIQUE (event_class, state_bucket, days_until, fitted_through)
 );
 
 -- Events accrete revisions; a backtest at t sees only revisions with available_at <= t (§11.2)
