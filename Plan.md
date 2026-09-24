@@ -21,16 +21,20 @@ The brief never fixed a holding period, and almost every parameter downstream de
 
 It is not a matter of taste. Two constraints squeeze from opposite directions and their intersection is narrow.
 
-**Constraint 1 — costs rise as the horizon shortens.** Liquid perpetual majors, retail fee tier, all-in round trip (taker fees both sides + spread + slippage) ≈ **0.12%**. Assuming a position is held continuously:
+**Constraint 1 — costs rise as the horizon shortens.** Liquid perpetual majors, retail fee tier, all-in round trip (taker fees both sides + spread + slippage) ≈ **0.13%**. Assuming a position is held continuously, and counting **365 trading days**, because crypto does not close:
 
 | Average hold | Round trips / year | Annual cost drag | Verdict |
 |---|---|---|---|
-| 4 hours | ~1,500 | ~180% | Dead on arrival without maker fills and an exceptional edge |
-| 12 hours | ~500 | ~60% | Very demanding |
-| 1 day | ~250 | ~30% | Possible with a genuine edge |
-| 2–3 days | ~85–125 | ~10–15% | Comfortable |
-| 5 days | ~50 | ~6% | Comfortable |
-| 1 month | ~12 | ~1.4% | Costs irrelevant |
+| 4 hours | 2,190 | **~285%** | Dead on arrival without maker fills and an exceptional edge |
+| 12 hours | 730 | ~95% | Not recoverable |
+| 1 day | 365 | **~47%** | Demanding even with a genuine edge |
+| 2 days | 183 | ~24% | Workable |
+| 3 days | 122 | ~16% | Comfortable |
+| 5 days | 73 | ~9.5% | Comfortable |
+| 1 week | 52 | ~6.8% | Comfortable |
+| 1 month | 12 | ~1.6% | Costs irrelevant |
+
+An earlier version of this table counted ~250 round trips per year at a one-day hold, which is the equities trading calendar. Crypto trades every day, so every figure was understated by 46%, and it made short horizons look far more viable than they are. The numbers above come from `CostModel.annual_drag`, so the table is computed rather than quoted and cannot drift from the engine again.
 
 **Constraint 2 — statistical power falls as the horizon lengthens.** Usable perpetuals history is roughly 2019 onward, so six to seven years. The sample that matters is **non-overlapping trades**, and crypto cross-sectional correlation (~0.7–0.8 against BTC) means 20 assets behave closer to 3–4 independent ones:
 
@@ -42,18 +46,18 @@ It is not a matter of taste. Two constraints squeeze from opposite directions an
 | 1 month | ~1,440 | ~300, heavily overlapping | Below the §8.8 floor |
 | 3+ months | ~480 | ~100 | Unverifiable. Also mostly BTC beta in disguise |
 
-The two tables intersect at **holding periods of roughly 1 to 7 days**.
+The two tables intersect at **holding periods of roughly 2 to 7 days**. The lower bound moved out from one day once the drag was counted over 365 days rather than 250: at a one-day hold, 47% of annualised return is consumed before any edge is measured.
 
 ### 0.2 The decision
 
 | Band | Hold | Status |
 |---|---|---|
 | Ultra-short / HFT | < 1 minute | **Excluded.** Requires colocation and competes against firms with structurally better latency. Out of scope per §19 |
-| Short / intraday | 1 min – 4 h | **Excluded as a primary target.** Cost drag of 60–180%/yr is not recoverable at retail fee tiers. Revisitable only if maker execution is proven and fee tiers improve |
-| **Medium / swing** | **1 – 7 days, centred on 2–3** | **PRIMARY TARGET** |
+| Short / intraday | 1 min – 4 h | **Excluded as a primary target.** Cost drag of 95–285%/yr is not recoverable at retail fee tiers. Revisitable only if maker execution is proven and fee tiers improve |
+| **Medium / swing** | **2 – 7 days, centred on 3** | **PRIMARY TARGET** |
 | Long / position | > 3 weeks | **Excluded as a research target.** Not enough independent observations to validate; returns are dominated by BTC beta, which is obtainable by holding BTC at zero research cost |
 
-Signals are evaluated on **1h and 4h bars**, with 15m available for entry timing. Triple-barrier maximum holding (§7) is set in the 1–7 day range, which in turn fixes the purge and embargo sizes in §8.2.
+Signals are evaluated on **1h and 4h bars**, with 15m available for entry timing. Triple-barrier maximum holding (§7) is set in the 2–7 day range, which in turn fixes the purge and embargo sizes in §8.2.
 
 Why this band is also where the edge plausibly lives, not merely where the arithmetic permits it: the data this project is built around has its signal at exactly this frequency. Funding settles every 8 hours. Liquidation cascades resolve over hours. Open-interest build-ups and unwinds run over days. News reaction residuals (§11.3) decay over hours to days. None of that is visible at monthly horizons — it has already averaged out — and none of it is tradeable at second horizons without L3 microstructure and colocation. The market's own clock, for the features in this plan, runs at hours to days.
 
@@ -104,6 +108,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 31 | The §0.1 cost table counted 250 round trips a year at a one-day hold — the equities calendar. Crypto trades 365 days, so every drag figure was understated by 46%. | Recomputed at 365 days: a one-day hold costs 47%/yr, not 30%, and the horizon band moves out to 2–7 days. The table now comes from `CostModel.annual_drag`, so it cannot drift from the engine again. |
 | 30 | Single operator collapses the roles, removing the separation of duties that stopped a threshold being lowered and used the same day. | Replaced with a temporal control: a 24h cooling-off before an approval may cite a relaxed gate, enforced in the approval path rather than the interface. See §20.3. |
 | 29 | Operator interface never specified: no screens, no auth design, and an unresolved Grafana/application boundary. | Screen inventory by phase, the boundary rule, identity as an audit-trail requirement, and mode made non-editable by construction. See §20. |
 | 28 | No limit on concurrent open positions in the enforced risk config, and no minimum position size at all. | `max_open_positions`, `max_positions_per_cluster`, `min_position_notional`; minimum viable size derived as `max(min_notional, lot_size x price)` point-in-time, and a floor added to the capital ramp. See §14.1. |
@@ -1592,7 +1597,7 @@ The entry condition follows from the model rather than from a threshold someone 
 
 ```
 expected_remaining · σ_pre  >  cost_round_trip + margin
-AND  implied_hold(τ_slow)   ∈  [1d, 7d]     # §0.2
+AND  implied_hold(τ_slow)   ∈  [2d, 7d]     # §0.2
 ```
 
 The algorithm enforces the horizon constraint itself. A signal whose implied holding period is three hours is rejected by construction, not by discipline.
