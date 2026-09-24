@@ -109,3 +109,34 @@ def test_schema_carries_three_timestamps() -> None:
     assert names[:3] == ["event_time", "ingest_time", "available_at"]
     for schema in schemas.BY_KIND.values():
         assert {"event_time", "ingest_time", "available_at"} <= {f.name for f in schema}
+
+
+@pytest.mark.fast
+def test_jitter_is_not_a_gap(real_batch: Batch) -> None:
+    """Venue timestamps carry milliseconds of jitter.
+
+    Comparing against the exact interval reported a gap on every single bar. A
+    validator that cries wolf is worse than none, because its output stops being
+    read and the real gap goes with it.
+    """
+    jittered = Batch(
+        real_batch.kind, real_batch.venue, real_batch.asset,
+        real_batch.frame.with_columns(
+            (pl.col("event_time") + pl.duration(milliseconds=1)).alias("event_time")
+        ),
+        real_batch.schema,
+    )
+    assert check_gaps(jittered, timedelta(minutes=1)) == []
+
+
+@pytest.mark.fast
+def test_one_missing_observation_is_still_a_gap(real_batch: Batch) -> None:
+    dropped = real_batch.frame.filter(
+        pl.col("event_time") != real_batch.frame["event_time"][50]
+    )
+    issues = check_gaps(
+        Batch(real_batch.kind, real_batch.venue, real_batch.asset, dropped, real_batch.schema),
+        timedelta(minutes=1),
+    )
+    assert len(issues) == 1
+    assert issues[0].detail["gap_seconds"] == 120.0

@@ -138,11 +138,19 @@ def check_ranges(batch: Batch, positive: list[str], non_negative: list[str]) -> 
     return issues
 
 
-def check_gaps(batch: Batch, expected: timedelta, sla: timedelta) -> list[Issue]:
-    """Gaps beyond the source SLA. Reported, never interpolated away."""
+def check_gaps(batch: Batch, expected: timedelta, sla: timedelta | None = None,
+               tolerance: float = 1.5) -> list[Issue]:
+    """Gaps beyond the source SLA. Reported, never interpolated away.
+
+    A gap means **at least one expected observation is missing**, so the
+    threshold is `tolerance x expected`, not `expected`. Venue timestamps carry
+    milliseconds of jitter, and comparing against the exact interval reports a
+    gap on every single bar — a validator that cries wolf is worse than none,
+    because its output stops being read.
+    """
     if batch.frame.height < 2:
         return []
-    threshold = max(expected, sla)
+    threshold = max(expected * tolerance, sla or timedelta(0))
     offending = (
         batch.frame.sort("event_time")
         .with_columns(pl.col("event_time").diff().alias("_d"))

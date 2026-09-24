@@ -87,9 +87,13 @@ services:
         limits: {cpus: "4", memory: 8g}
     networks: [lab_net]
 
-  collector:
+  # Capture of data that cannot be backfilled. Deliberately NOT behind a profile:
+  # this is meant to run permanently, and every hour it is down is liquidation
+  # history that will never exist (§4.1).
+  capture:
     build: {context: ., dockerfile: docker/compute.Dockerfile}
     image: tradelab-compute
+    command: ["tradelab", "capture"]
     environment:
       <<: [*determinism, *db]
       TRADELAB_ARCHIVE_ROOT: /data/parquet
@@ -97,6 +101,24 @@ services:
       - archive:/data/parquet          # writable: this one ingests
     depends_on:
       migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    # Must exceed the longest flush. Docker sends SIGTERM, waits this long, then
+    # SIGKILL — and a SIGKILL loses the buffer permanently.
+    stop_grace_period: 90s
+    networks: [lab_net]
+
+  # Backfill and other one-shot ingestion. Run on demand.
+  collector:
+    build: {context: ., dockerfile: docker/compute.Dockerfile}
+    image: tradelab-compute
+    environment:
+      <<: [*determinism, *db]
+      TRADELAB_ARCHIVE_ROOT: /data/parquet
+    volumes:
+      - archive:/data/parquet
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    profiles: [tools]
     networks: [lab_net]
 
   api:

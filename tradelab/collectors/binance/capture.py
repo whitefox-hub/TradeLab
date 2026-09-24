@@ -91,8 +91,11 @@ class LiquidationCapture:
     kind = "liquidations"
     venue = VENUE
 
-    def __init__(self, root: Path, flush_rows: int = 500,
-                 flush_after: timedelta = timedelta(minutes=5)) -> None:
+    def __init__(self, root: Path, flush_rows: int = 200,
+                 flush_after: timedelta = timedelta(seconds=60)) -> None:
+        # A short flush budget because this data is unrecoverable: an unclean kill
+        # costs at most one interval, and the price is more small files, which is
+        # a far cheaper problem than a permanent hole.
         self.buffer = _Buffer(root, self.kind, schemas.LIQUIDATIONS, flush_rows, flush_after)
 
     @staticmethod
@@ -163,7 +166,7 @@ class OpenInterestCapture:
     venue = VENUE
 
     def __init__(self, root: Path, assets: list[str], interval: timedelta = timedelta(minutes=5),
-                 flush_after: timedelta = timedelta(minutes=30)) -> None:
+                 flush_after: timedelta = timedelta(minutes=10)) -> None:
         self.assets = assets
         self.interval = interval
         self.buffer = _Buffer(root, self.kind, schemas.OPEN_INTEREST, 10_000, flush_after)

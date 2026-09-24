@@ -18,14 +18,13 @@ from __future__ import annotations
 import asyncio
 import signal
 from datetime import UTC, datetime
-from pathlib import Path
 
 import structlog
 
 from tradelab.collectors import watermark
 from tradelab.collectors.recovery import GapPlan, plan_recovery
 from tradelab.registry.db import session as db_session
-from tradelab.registry.models import DataQualityIssue
+from tradelab.registry.models import DataQualityIssue, IngestionRun
 
 log = structlog.get_logger(__name__)
 
@@ -84,26 +83,44 @@ def install_shutdown_handler(stop: asyncio.Event) -> None:
             signal.signal(sig, lambda *_: stop.set())
 
 
-async def supervise(collector, kind: str, source_name: str, venue: str,
-                    root: Path, assets: list[str] | None = None) -> None:
-    """Reconcile, then run until signalled, then flush."""
+async def _supervise_one(collector, kind: str, source_name: str, venue: str,
+                         stop: asyncio.Event) -> None:
+    """Reconcile, run until signalled, flush, then advance the watermark."""
     reconcile_on_start(kind, source_name, venue)
-
-    stop = asyncio.Event()
-    install_shutdown_handler(stop)
 
     with db_session() as session:
         source = watermark.source_id(session, source_name, kind, venue)
         run = watermark.start(session, source, "stream", datetime.now(UTC))
+        run_id = run.id
 
     try:
         await collector.run(stop)
     finally:
-        # The buffer is flushed by collector.run on exit; only after that is the
-        # watermark allowed to move. Write first, advance second (§watermark).
+        # collector.run flushes on exit. Only after that may the watermark move:
+        # write first, advance second. Reversing it means a crash between the two
+        # leaves a watermark claiming data that was never written.
         with db_session() as session:
-            merged = session.merge(run)
-            watermark.advance(session, merged, datetime.now(UTC),
+            run = session.get(IngestionRun, run_id)
+            watermark.advance(session, run, datetime.now(UTC),
                               rows=getattr(collector.buffer, "flushed_rows", 0))
-            watermark.finish(session, merged, "stopped" if stop.is_set() else "completed")
-        log.info("collector_stopped", kind=kind, clean=stop.is_set())
+            watermark.finish(session, run, "stopped" if stop.is_set() else "completed")
+        log.info("collector_stopped", kind=kind,
+                 rows=getattr(collector.buffer, "flushed_rows", 0), clean=stop.is_set())
+
+
+async def run_capture(collectors: list[tuple[object, str, str]], venue: str) -> None:
+    """Run several capture collectors concurrently under one shutdown signal.
+
+    `collectors` is a list of (collector, kind, source_name).
+
+    One signal stops all of them, and the function returns only once every buffer
+    has been flushed — which is what `stop_grace_period` in compose must cover.
+    """
+    stop = asyncio.Event()
+    install_shutdown_handler(stop)
+    log.info("capture_starting", venue=venue, collectors=[k for _, k, _ in collectors])
+
+    await asyncio.gather(
+        *(_supervise_one(c, kind, name, venue, stop) for c, kind, name in collectors)
+    )
+    log.info("capture_stopped_cleanly")
