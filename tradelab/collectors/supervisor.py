@@ -95,6 +95,14 @@ async def _supervise_one(collector, kind: str, source_name: str, venue: str,
         run = watermark.start(session, source, "stream", datetime.now(UTC))
         run_id = run.id
 
+    buffer = getattr(collector, "buffer", None)
+    if buffer is not None:
+        def record(rows: int, upto: datetime, _run_id=run_id) -> None:
+            with db_session() as session:
+                watermark.advance(session, session.get(IngestionRun, _run_id), upto, rows)
+
+        buffer.on_flush = record
+
     try:
         await collector.run(stop)
     finally:
@@ -103,8 +111,6 @@ async def _supervise_one(collector, kind: str, source_name: str, venue: str,
         # leaves a watermark claiming data that was never written.
         with db_session() as session:
             run = session.get(IngestionRun, run_id)
-            watermark.advance(session, run, datetime.now(UTC),
-                              rows=getattr(collector.buffer, "flushed_rows", 0))
             watermark.finish(session, run, "stopped" if stop.is_set() else "completed")
         log.info("collector_stopped", kind=kind,
                  rows=getattr(collector.buffer, "flushed_rows", 0), clean=stop.is_set())

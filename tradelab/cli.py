@@ -94,6 +94,40 @@ def capture(
     asyncio.run(run_capture(collectors, "binance", root=archive))
 
 
+@app.command("backfill-universe")
+def backfill_universe_cmd(
+    limit: int = typer.Option(0, help="0 = every eligible contract"),
+    min_history_days: int = typer.Option(365, help="Skip contracts younger than this"),
+    timeframe: str = "1m",
+    workers: int = 6,
+    root: Path | None = None,
+) -> None:
+    """Backfill klines for the whole universe, from each contract's listing date.
+
+    Interruptible and resumable: partitions are immutable, so a partition that
+    exists is complete, and a restart simply skips it. Expect tens of GB and
+    hours to days — it is bandwidth-bound, not CPU-bound.
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _td
+
+    from tradelab.collectors.backfill import backfill_universe, listing_dates
+
+    archive = root or get_settings().archive_root
+    archive.mkdir(parents=True, exist_ok=True)
+    assets = listing_dates(limit=limit or None, min_history_days=min_history_days)
+    # Yesterday: today's daily archive may not be published yet.
+    end = _date.today() - _td(days=1)
+
+    typer.echo(f"{len(assets)} contracts, {timeframe}, through {end} -> {archive}")
+    total = backfill_universe(assets, end, archive, timeframe, workers)
+    typer.echo(
+        f"done: {total.days_written} days written, {total.days_skipped} already present, "
+        f"{total.days_absent} before listing, {total.rows:,} rows, "
+        f"{total.bytes_written / 2**30:.2f} GB, {len(total.issues)} issues"
+    )
+
+
 @app.command()
 def backfill(
     asset: str,

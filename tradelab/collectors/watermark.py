@@ -61,7 +61,11 @@ def start(session: Session, source: uuid.UUID, mode: str, period_start: datetime
 
 def advance(session: Session, run: IngestionRun, upto: datetime, rows: int,
             output_uri: str | None = None) -> None:
-    """Record progress. Call this ONLY after the data is durably on disk."""
+    """Record progress. Call this ONLY after the data is durably on disk.
+
+    `rows` accumulates, so this is safe to call on every flush — which is what
+    makes a long-running collector observable while it runs.
+    """
     run.watermark = upto
     run.rows_written = (run.rows_written or 0) + rows
     if output_uri:

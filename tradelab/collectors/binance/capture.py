@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -41,6 +42,10 @@ class _Buffer:
 
     def __init__(self, root: Path, kind: str, schema, flush_rows: int, flush_after: timedelta):
         self.root, self.kind, self.schema = root, kind, schema
+        # Set by the supervisor so progress is recorded on every flush rather
+        # than only at shutdown. A collector meant to run for months must be
+        # observable while it runs, not only once it stops.
+        self.on_flush: Callable[[int, datetime], None] | None = None
         self.flush_rows, self.flush_after = flush_rows, flush_after
         self.rows: list[dict] = []
         self.last_flush = datetime.now(UTC)
@@ -77,6 +82,11 @@ class _Buffer:
         self.flushed_rows += frame.height
         self.rows.clear()
         self.last_flush = datetime.now(UTC)
+        if self.on_flush is not None:
+            # Called only after the files are on disk: write first, advance
+            # second. Reversing it would let the watermark claim data that a
+            # crash never persisted.
+            self.on_flush(frame.height, frame["event_time"].max())
         return written
 
 
