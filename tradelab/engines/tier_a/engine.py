@@ -40,6 +40,10 @@ class BacktestResult:
     gross_sharpe: float
     cost_drag: float
     exposure: float
+    # Independent bets, not bars. A position held for 240 bars produces 240
+    # serially dependent returns, not 240 observations, and every significance
+    # figure computed from the bar count inherits that inflation (§7).
+    effective_n: float
 
     def as_dict(self) -> dict:
         return {k: getattr(self, k) for k in self.__slots__}
@@ -78,6 +82,13 @@ def run(
     entries = int(np.sum((traded > 0) & (np.abs(position) > 0)))
     exposure = float(np.mean(np.abs(position) > 0))
 
+    # Effective observations: completed holding periods plus the flat stretches
+    # between them, which are genuinely independent of each other. Bounded below
+    # by 1 so downstream statistics never divide by zero on a strategy that
+    # never traded.
+    flat_runs = int(np.sum(np.diff(np.concatenate([[0.0], (position == 0).astype(float)])) > 0))
+    effective_n = float(max(entries + flat_runs, 1))
+
     return BacktestResult(
         sharpe=float(net.mean() / std * np.sqrt(bars)) if std > 0 else 0.0,
         total_return=float(equity[-1] - 1.0),
@@ -88,6 +99,7 @@ def run(
         gross_sharpe=float(gross.mean() / gross_std * np.sqrt(bars)) if gross_std > 0 else 0.0,
         cost_drag=float(cost.sum()),
         exposure=exposure,
+        effective_n=effective_n,
     )
 
 

@@ -108,6 +108,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 34 | Overlapping labels were counted as independent observations, inflating the effective sample by up to 218× and every significance figure with it. | Concurrency-based uniqueness; the engine reports `effective_n` and the statistics take it instead of the bar count. The phase 3 exit criterion still passes, now under the stricter condition. See §7. |
 | 33 | Regime classification with full-sample thresholds labels the past using the future, invisibly and flatteringly. | Expanding-window quantiles over past data only; regime labels are held to §16.3's truncation invariance like any feature, and unclassifiable warmup is marked rather than guessed. See §10. |
 | 32 | PBO on net returns reads 0.000 on pure noise — not a broken estimator, but selection of minimum turnover, which persists out of sample without being alpha. | Computed on gross returns, with a turnover-correlation diagnostic so the confusion is visible; the turnover-matched random baseline is the control that catches what PBO cannot. See §8.3. |
 | 31 | The §0.1 cost table counted 250 round trips a year at a one-day hold — the equities calendar. Crypto trades 365 days, so every drag figure was understated by 46%. | Recomputed at 365 days: a one-day hold costs 47%/yr, not 30%, and the horizon band moves out to 2–7 days. The table now comes from `CostModel.annual_drag`, so it cannot drift from the engine again. |
@@ -1279,7 +1280,20 @@ The original brief goes from features to "rules" without defining what is being 
 
 **Meta-labeling**: a first model decides direction; a second decides *whether to trade* that signal at all. It separates "which way" from "with what confidence", and usually improves precision without touching the primary model.
 
-**Uniqueness and sample weights**: labels with overlapping horizons are not independent observations. Concurrency is computed and samples are weighted by uniqueness; for resampling, sequential bootstrap. Ignoring this artificially inflates the effective sample size and with it every significance figure downstream.
+**Uniqueness and sample weights**: labels with overlapping horizons are not independent observations. A label opened at t and determined at t+3d spans three days; so does the one opened an hour later, and they mostly observe the *same* three days. A label's uniqueness is the average, over the bars it spans, of one divided by how many labels span that bar; summing those gives the **effective** observation count.
+
+The magnitude is not a detail. Measured on 20,000 synthetic bars:
+
+| Max holding | Labels | Effective n | Inflation |
+|---|---|---|---|
+| 10 bars | 19,994 | 2,519 | **7.9×** |
+| 60 bars | 19,943 | 492 | **40.5×** |
+| 240 bars | 19,794 | 162 | **122×** |
+| 720 bars | 19,280 | 89 | **218×** |
+
+And it changes verdicts rather than adjusting them. The same return series at a 240-bar horizon gives a Deflated Sharpe of 1.000 and a MinTRL of 266 observations on the naive count — established beyond doubt — and a DSR of 0.024 with an infinite MinTRL on the effective count. Every significance figure in §8.3 and every power calculation in §8.8 takes the effective count, never the bar count.
+
+For resampling, sequential bootstrap: an ordinary bootstrap over overlapping labels redraws the same few periods and understates variance, producing confidence intervals narrower than the data earns.
 
 **Cost-net definition of success**: the target is always defined after fees and estimated slippage. A label based on gross return produces strategies that win on paper and lose in execution.
 

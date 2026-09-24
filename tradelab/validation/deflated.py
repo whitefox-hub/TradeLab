@@ -29,18 +29,28 @@ class SharpeStats:
     n_obs: int
 
 
-def sharpe_stats(returns: np.ndarray) -> SharpeStats:
+def sharpe_stats(returns: np.ndarray, effective_n: float | None = None) -> SharpeStats:
+    """Moments of a return series.
+
+    `effective_n` overrides the raw count with the number of INDEPENDENT
+    observations (§7). Pass it whenever the returns come from overlapping
+    positions, which is almost always: a strategy holding for 240 bars produces
+    240 serially dependent returns, and treating them as 240 observations
+    overstates every significance figure derived from them — by a factor of 122
+    in a measured case.
+    """
     returns = np.asarray(returns, dtype=np.float64)
     returns = returns[np.isfinite(returns)]
     std = returns.std(ddof=1)
     if std == 0 or returns.size < 3:
         return SharpeStats(0.0, 0.0, 3.0, returns.size)
     centred = returns - returns.mean()
+    n = round(effective_n) if effective_n is not None else int(returns.size)
     return SharpeStats(
         sharpe=float(returns.mean() / std),
         skew=float((centred**3).mean() / std**3),
         kurtosis=float((centred**4).mean() / std**4),
-        n_obs=int(returns.size),
+        n_obs=max(n, 3),
     )
 
 

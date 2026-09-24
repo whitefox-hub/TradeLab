@@ -68,7 +68,10 @@ def test_noise_survives_no_strategy() -> None:
 
     best_idx = int(np.argmax([r.sharpe for r in results]))
     best = results[best_idx]
-    stats = sharpe_stats(matrix[:, best_idx])
+    # Effective observations, not bars. A position held for 200 bars yields 200
+    # serially dependent returns; counting them as 200 observations overstates
+    # every significance figure downstream (§7).
+    stats = sharpe_stats(matrix[:, best_idx], effective_n=best.effective_n)
 
     dsr = deflated_sharpe(stats, trials=trials)
     assert dsr < 0.95, (
@@ -124,7 +127,7 @@ def test_a_real_edge_is_not_rejected() -> None:
     results, matrix, _, _ = _search(bars, periods, entries, free, "1h")
 
     best_idx = int(np.argmax([r.sharpe for r in results]))
-    stats = sharpe_stats(matrix[:, best_idx])
+    stats = sharpe_stats(matrix[:, best_idx], effective_n=results[best_idx].effective_n)
     assert abs(stats.sharpe) > 0, "the planted edge produced no signal at all"
     assert deflated_sharpe(stats, trials=len(results)) > 0.5, (
         "A large planted edge was deflated away. The validator rejects everything, "
@@ -146,7 +149,7 @@ def test_subthreshold_edge_is_inconclusive_not_pass() -> None:
     results, matrix, _, _ = _search(bars, periods, entries, BINANCE_RETAIL, "1h")
 
     best_idx = int(np.argmax([r.sharpe for r in results]))
-    stats = sharpe_stats(matrix[:, best_idx])
+    stats = sharpe_stats(matrix[:, best_idx], effective_n=results[best_idx].effective_n)
     trials = len(results)
 
     required = min_track_record_length(stats, trials=trials)
