@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Literal
 
 DataKind = Literal[
-    "trades", "ohlcv", "funding", "open_interest", "liquidations", "book_features"
+    "trades", "ohlcv", "funding", "open_interest", "liquidations", "book_features",
+    "announcements",
 ]
 
 # Data that CANNOT be backfilled: no historical REST endpoint, or a very short
@@ -34,6 +35,11 @@ class Partition:
 
     def relative_path(self) -> Path:
         parts = [self.kind]
+        if self.asset == "_all":
+            # Venue-wide sources (announcements, all-market liquidation feeds)
+            # have no single asset. The partition key stays uniform so one scan
+            # pattern covers every kind.
+            pass
         if self.timeframe:
             parts.append(f"tf={self.timeframe}")
         parts += [

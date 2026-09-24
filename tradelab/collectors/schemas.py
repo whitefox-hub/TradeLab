@@ -71,10 +71,39 @@ LIQUIDATIONS = _schema(
     pa.field("order_type", pa.string(), nullable=True),
 )
 
+#: Exchange announcements (§11.1). Not market data, so it carries its own identity
+#: fields, but the three-timestamp contract is identical and matters more here:
+#: `available_at` is publication plus a MODELLED subscriber delay, never our
+#: ingest time — backfilled announcements would otherwise all become available
+#: in 2026, which makes them useless, while using publication exactly assumes a
+#: zero-latency subscriber, which is a lie in the other direction.
+ANNOUNCEMENTS = pa.schema([
+    pa.field("event_time", US_UTC, nullable=False),      # releaseDate
+    pa.field("ingest_time", US_UTC, nullable=False),
+    pa.field("available_at", US_UTC, nullable=False),
+    pa.field("venue", pa.string(), nullable=False),
+    pa.field("revision", pa.int16(), nullable=False),
+    pa.field("article_id", pa.string(), nullable=False),
+    pa.field("code", pa.string(), nullable=False),
+    pa.field("title", pa.string(), nullable=False),
+    pa.field("catalog_id", pa.int32(), nullable=False),
+    # Closed taxonomy (§11.1). Unmatched titles get "unclassified", never a new
+    # class: emergent classes fragment the sample and make the IRF unestimable.
+    pa.field("event_class", pa.string(), nullable=False),
+    pa.field("assets", pa.list_(pa.string()), nullable=False),
+    # True when the class implies assets but the title does not name them — the
+    # "Multiple ... Perpetual Contracts" case, where they live in the body. An
+    # empty asset list on a listing event is a defect, so it is made visible
+    # rather than left to look like an event that affects nothing.
+    pa.field("needs_body", pa.bool_(), nullable=False),
+    pa.field("subscriber_delay_s", pa.int32(), nullable=False),
+])
+
 BY_KIND: dict[str, pa.Schema] = {
     "ohlcv": OHLCV,
     "trades": TRADES,
     "funding": FUNDING,
     "open_interest": OPEN_INTEREST,
     "liquidations": LIQUIDATIONS,
+    "announcements": ANNOUNCEMENTS,
 }

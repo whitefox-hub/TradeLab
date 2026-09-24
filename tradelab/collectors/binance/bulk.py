@@ -270,3 +270,87 @@ def _out_of_range(batch: Batch, column: str, rule: str) -> Issue:
         period_start=times.min(), period_end=times.max(),  # type: ignore[arg-type]
         asset=batch.asset, detail={"column": column, "rule": rule},
     )
+
+
+_AGG_COLUMNS = [
+    "agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id",
+    "transact_time", "is_buyer_maker",
+]
+
+
+class BinanceAggTradesBulk:
+    """Daily aggregated-trade archives.
+
+    Deliberately narrow in scope. At 22 MB/day for BTCUSDT, six years of one
+    asset is ~48 GB and a broad universe is a terabyte — so this is collected for
+    a handful of assets over a bounded window, purely to calibrate the tier B
+    cost model (§9.5).
+
+    The wide archive is 1m klines instead, and that is not a concession: at the
+    1-7 day horizon of §0.2, `trade_count`, `taker_buy_base` versus `volume`, and
+    `quote_volume / trade_count` already give the participation and order-flow
+    imbalance of §11.4, in a 63 KB file. Ticks add value only in fill simulation.
+    """
+
+    kind = "trades"
+    venue = VENUE
+
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        self._client = client or httpx.Client(timeout=300.0, follow_redirects=True)
+
+    @property
+    def schema(self) -> pa.Schema:
+        return schemas.TRADES
+
+    def url(self, asset: str, day: date) -> str:
+        return f"{BASE}/aggTrades/{asset}/{asset}-aggTrades-{day.isoformat()}.zip"
+
+    def fetch_day(self, asset: str, day: date) -> pl.DataFrame | None:
+        response = self._client.get(self.url(asset, day))
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            raw = archive.read(archive.namelist()[0]).decode()
+
+        has_header = raw.lstrip().startswith("agg_trade_id")
+        frame = pl.read_csv(
+            io.StringIO(raw), has_header=has_header,
+            new_columns=None if has_header else _AGG_COLUMNS,
+            infer_schema_length=10_000,
+        )
+        missing = set(_AGG_COLUMNS) - set(frame.columns)
+        if missing:
+            raise ValueError(f"Unexpected aggTrades layout for {asset}: missing {sorted(missing)}")
+
+        unit = "us" if frame["transact_time"].max() > 1e15 else "ms"  # type: ignore[operator]
+        ts = pl.from_epoch(pl.col("transact_time"), time_unit=unit).dt.replace_time_zone("UTC")
+        return frame.select(
+            event_time=ts,
+            ingest_time=pl.lit(datetime.now(UTC)),
+            available_at=ts,
+            venue=pl.lit(VENUE),
+            asset=pl.lit(asset),
+            revision=pl.lit(0, dtype=pl.Int16),
+            trade_id=pl.col("agg_trade_id").cast(pl.Int64),
+            price=pl.col("price").cast(pl.Float64),
+            qty=pl.col("quantity").cast(pl.Float64),
+            quote_qty=(pl.col("price").cast(pl.Float64) * pl.col("quantity").cast(pl.Float64)),
+            is_buyer_maker=pl.col("is_buyer_maker").cast(pl.Boolean),
+        ).sort("event_time")
+
+    def backfill(self, asset: str, start: datetime, end: datetime) -> Iterator[Batch]:
+        day = start.date()
+        while day <= end.date():
+            frame = self.fetch_day(asset, day)
+            if frame is not None and frame.height:
+                yield Batch(self.kind, VENUE, asset, frame, self.schema)
+            day += timedelta(days=1)
+
+    def validate(self, batch: Batch) -> ValidationReport:
+        return ValidationReport([
+            *check_schema(batch),
+            *check_timestamps(batch),
+            *check_duplicates(batch, ["trade_id", "asset"]),
+            *check_ranges(batch, positive=["price", "qty"], non_negative=["quote_qty"]),
+        ])
