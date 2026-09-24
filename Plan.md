@@ -160,6 +160,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 42 | Impact and direction existed as fields but with no defined unit, and a fourth event shape was missing: events that replace the baseline rather than deviate from it. | Ratings are in sigma of pre-event volatility, so model, human and outcome share one scale and calibration is computable. Regime shifts — war, venue collapse, a ban — go to §10 as a conditioning variable, since fitting a decay to them estimates a reversion that never happens. See §11.7. |
 | 41 | The operator needs to annotate events, and an in-place edit would inject hindsight straight into historical labels through the interface. | Annotations are revisions with their own `available_at`, corrections separated from judgements by whether the value was knowable at publication, and judgements cannot be backdated. Operator calibration is tallied like the agent's. See §20.5. |
 | 40 | Sign treated as the signal, and no shape for news that starts a process rather than being an event. | Sign is an input to the expected-reaction model; the residual is the signal. Three shapes — shock, schedule, process — the last a state machine whose transitions are measured separately and supersede their predecessors. See §11.7. |
 | 39 | §11 modelled shocks only, so a scheduled event's anticipation had nowhere to live, and its schedule was assumed fixed when schedules are revised. | Anticipation path keyed on time-until, versioned `schedule_revisions`, and three distinct ways a signal ends rather than one decay constant. See §11.6, §11.8. |
@@ -1080,8 +1081,19 @@ CREATE TABLE event_annotations (
   -- at the moment it is made and can never be backdated.
   available_at    timestamptz NOT NULL,
   payload         jsonb NOT NULL,        -- corrected fields, or the rating
-  rating          numeric,               -- signed expected impact, if a judgement
-  confidence      numeric,
+  -- Signed expected move in STANDARD DEVIATIONS of the asset's pre-event
+  -- volatility, not in percent and not on an arbitrary scale.
+  --
+  -- The unit is the whole point. §11.3 normalises every measured reaction to
+  -- sigma, so a rating in sigma is directly comparable to what actually
+  -- happened and can be scored. A rating of "8 out of 10 bullish" cannot be
+  -- scored against anything, which means the annotator's calibration is
+  -- unknowable — and an unmeasurable input is the one nobody ever corrects.
+  --
+  -- It is also the only unit comparable across assets: 2% on BTC and 2% on a
+  -- memecoin are different events, 2 sigma is the same event.
+  rating          numeric,               -- e.g. +2.0 means "I expect +2 sigma"
+  confidence      numeric,               -- 0-1, how sure of the rating
   author          uuid NOT NULL REFERENCES users(id),
   created_at      timestamptz NOT NULL DEFAULT now(),
   CHECK (kind IN ('correction', 'judgement')),
@@ -1132,7 +1144,10 @@ CREATE TABLE event_assets (
   revision        int NOT NULL,
   asset           text NOT NULL,
   expected_direction smallint NOT NULL,  -- -1 | 0 | +1
-  expected_magnitude numeric,            -- in bps, model output not opinion
+  -- In sigma of pre-event volatility, matching `event_annotations.rating` and
+  -- the z of `event_reactions`, so model, human and outcome are all on one
+  -- scale and the residual of §11.10 is a subtraction rather than a conversion.
+  expected_magnitude numeric,
   confidence      numeric,
   PRIMARY KEY (event_id, revision, asset)
 );
@@ -1845,6 +1860,35 @@ the model. Three of them, each needing different machinery:
 | **Shock** | Immediately, then decays | Hack, surprise CPI print | §11.5 impulse response |
 | **Schedule** | Builds before a known date, resolves at it | Unlock, expiry, FOMC | §11.6 anticipation path |
 | **Process** | Gradually, as a sequence of resolutions | Regulatory consultation, governance vote, announced intent to accumulate | below |
+| **Regime shift** | Immediately, and does not come back | War breaking out, FTX collapsing, an outright ban | §10, not §11 |
+
+#### Regime shifts do not have a reaction, they have a new baseline
+
+The fourth is the one the impulse-response framework cannot hold, and it matters
+because the examples are the events people most want to trade.
+
+Every model above estimates a **deviation from a baseline and a return to it**.
+`τ_slow` is the rate of that return. A war breaking out, a major venue collapsing
+or a jurisdiction banning the asset does not deviate from the baseline — it
+**replaces** it. Fitting a decay to such an event estimates a reversion that
+never happens, and the fitted `τ` is meaningless rather than merely imprecise.
+
+Three consequences:
+
+- **They belong to §10, not §11.** A regime shift is a change of market state, so
+  it is handled by the regime classifier — which already conditions every result
+  by regime — rather than by the reaction engine.
+- **They are market-wide**, so §11.3's cross-sectional benchmark does not exist:
+  there is no unaffected asset to difference against, and the time-series
+  benchmark is the only option.
+- **The sample is hopeless.** Wars, exchange collapses and bans number in the
+  handful, and §8.8 applies. A conditional model over a handful of occurrences
+  estimates nothing, and the honest use is as a **conditioning variable** — was
+  the market in a post-shift regime — rather than as a signal.
+
+The gap this exposes in §11.1's taxonomy is real: geopolitical events are not in
+it. They are not added as a tradeable class, because the sample forbids it. They
+are added as a regime input.
 
 #### Processes: news that starts something rather than being something
 
