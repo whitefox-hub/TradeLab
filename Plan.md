@@ -160,6 +160,8 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 44 | Macro had no screen, and nothing enforced that a consensus be recorded before its release. | Calendar, surprise in sigma, vintage availability and per-series freshness in the application; prices in Grafana. `consensus_at < scheduled_for` in the schema — a consensus recorded afterwards is a memory of one, and would make every macro surprise look predictive. See §20.6. |
+| 43 | Macro listed as one Tier 2 line, hiding that it is two different things: continuous prices used as regime inputs, and scheduled releases where consensus makes surprise computable. Revisions and session alignment were undocumented. | Split in §4.7, with the policy rate treated as surprise rather than level, vintages required where a series is revised, and joins on `available_at` rather than calendar date. |
 | 42 | Impact and direction existed as fields but with no defined unit, and a fourth event shape was missing: events that replace the baseline rather than deviate from it. | Ratings are in sigma of pre-event volatility, so model, human and outcome share one scale and calibration is computable. Regime shifts — war, venue collapse, a ban — go to §10 as a conditioning variable, since fitting a decay to them estimates a reversion that never happens. See §11.7. |
 | 41 | The operator needs to annotate events, and an in-place edit would inject hindsight straight into historical labels through the interface. | Annotations are revisions with their own `available_at`, corrections separated from judgements by whether the value was knowable at publication, and judgements cannot be backdated. Operator calibration is tallied like the agent's. See §20.5. |
 | 40 | Sign treated as the signal, and no shape for news that starts a process rather than being an event. | Sign is an input to the expected-reaction model; the residual is the signal. Three shapes — shock, schedule, process — the last a state machine whose transitions are measured separately and supersede their predecessors. See §11.7. |
@@ -406,7 +408,7 @@ The original brief lists ~18 sources. Attempting all of them at once guarantees 
 Multi-timeframe OHLCV · trades/ticks · funding rates · open interest · liquidations · spot-perp basis · point-in-time universe
 
 **Tier 2 — high value, moderate cost, phase 2**
-L2 order book (derived features) · CVD / order flow · cross-asset correlations · BTC dominance · daily macro (DXY, yields, SPX, NDX, VIX)
+L2 order book (derived features) · CVD / order flow · cross-asset correlations · BTC dominance · daily macro: policy rate, yields, DXY, gold, oil, SPX, NDX, VIX (§4.7)
 
 **Tier 3 — expensive or of uncertain value, phase 3+**
 Structured news · on-chain · options (IV, skew) · macro calendar with consensus and surprise
@@ -468,6 +470,90 @@ Requirements:
 - **Periodic comparison**: a captured window is re-backfilled days later and the two are compared bar by bar. The discrepancy is persisted as a quality metric per source, not inspected ad hoc.
 - **Where both exist, the backtest uses the live-captured version.** It is what the strategy would actually have seen.
 - A discrepancy above threshold opens a `data_quality_issues` record and blocks promotion of anything validated on that window.
+
+### 4.7 Macro: two different things wearing one label
+
+Rates, oil, gold, DXY, yields, equity indices. They arrive under one heading and
+split into two kinds that need entirely different handling.
+
+**Continuous prices** — oil, gold, DXY, yields, SPX, NDX, VIX. These are traded
+series, used as cross-asset features and as regime inputs (§10): correlation,
+rolling beta, spreads, and whether the market is in a risk-on or risk-off state.
+
+**Scheduled releases** — FOMC decisions, CPI, NFP. These are events of the
+`schedule` shape (§11.6), and they carry an advantage no other event class has:
+**consensus exists beforehand, so surprise is a number rather than an inference**.
+That is why §11.1 puts macro at the top of the classes worth modelling despite a
+thin sample.
+
+#### The policy rate is not a price, and the level is not the signal
+
+The Fed funds rate deserves separating out, because using it as a series is a
+category error that looks reasonable.
+
+It is a **level that changes at scheduled meetings**, and by the time it changes
+everyone has known for weeks what was coming — rate futures price the expected
+path continuously. A feature reading "the policy rate is 4.5%" carries almost no
+information, because the market has been trading that 4.5% since before it
+existed.
+
+What carries information is the **surprise**: the decision minus what was priced,
+and the revision of the *expected path* rather than of the current level. A
+meeting that delivers exactly what futures implied is, informationally, a
+non-event — and a model fed the level will see a large number and a large market
+move on the same day and conclude they are related.
+
+#### Macro is revised, and that is the trap
+
+Severe enough to name separately. Employment, GDP and most activity series are
+published and then **revised**, sometimes substantially, sometimes months later. A
+backtest reading today's value for a date in 2022 is reading a number that did
+not exist in 2022.
+
+This is the classic macro backtesting error and it flatters, because revisions
+move toward the truth and the truth is what subsequently happened.
+
+§4.3's three timestamps handle it only if the **vintages** are stored: the value
+as it was first published, plus each revision with its own `available_at`.
+Fortunately this is solved upstream — FRED's ALFRED serves vintage data directly,
+returning a series as it was known on a given past date, which is exactly the
+point-in-time contract this system requires.
+
+Where no vintage is available, the series is marked as such and any result
+depending on it is caveated. A revised series used as if it were real-time is not
+slightly optimistic; it is answering a different question.
+
+#### Session alignment is a look-ahead trap
+
+Crypto trades continuously; gold, oil and equity indices do not. A "daily" gold
+bar closes at a session end in New York, and the UTC day containing that close
+extends past it.
+
+Aligning a gold close to the UTC day that contains it can therefore hand a crypto
+bar information from **after** the period being predicted. The rule is the same as
+everywhere else: a macro observation carries `available_at` = its publication or
+session close plus the feed delay, and the join is on that, never on a calendar
+date. Joining on dates is how a cross-asset study produces predictability that
+evaporates in live trading.
+
+#### Sources, all free
+
+| Series | Source | Vintages |
+|---|---|---|
+| Policy rate, yields, activity data | FRED / ALFRED | **Yes** — ALFRED serves point-in-time |
+| Consensus and actual for releases | Macro calendar feeds | Partially |
+| Gold, oil, DXY, equity indices | Stooq, Yahoo daily bars | No — prices are not revised |
+
+#### An honest caveat on relevance
+
+The crypto-macro relationship is **not stationary**. It was strong through the
+2022–2023 rate cycle and much weaker in other periods. A constant beta fitted
+across the whole sample estimates an average of two different regimes and
+describes neither.
+
+So macro enters conditioned on regime (§10) rather than as a fixed relationship,
+and a study claiming a macro effect has to show it in more than one regime before
+§15's gate treats it as anything.
 
 ---
 
@@ -1067,6 +1153,38 @@ CREATE TABLE schedule_revisions (
   confidence      text,                  -- fixed | estimated | rumoured
   source          text,
   PRIMARY KEY (event_id, revision)
+);
+
+-- Macro series catalogue (§4.7). `has_vintages` is operational, not decorative:
+-- a revised series used as if it were real-time answers a different question, so
+-- results depending on one are caveated rather than quietly reported.
+CREATE TABLE macro_series (
+  code            text PRIMARY KEY,      -- FEDFUNDS, DGS10, DXY, GOLD, WTI, CPIAUCSL
+  name            text NOT NULL,
+  kind            text NOT NULL,         -- rate | yield | price | index | activity
+  source          text NOT NULL,         -- fred | alfred | stooq | manual
+  has_vintages    boolean NOT NULL,
+  is_revised      boolean NOT NULL,
+  session_close   text,                  -- e.g. '17:00 America/New_York'; null if 24/7
+  publish_lag_s   int NOT NULL DEFAULT 0
+);
+
+-- Scheduled releases: the one event family where surprise is a number rather
+-- than an inference (§11.1). Consensus is what makes it so.
+CREATE TABLE macro_releases (
+  id              uuid PRIMARY KEY,
+  series          text NOT NULL REFERENCES macro_series(code),
+  scheduled_for   timestamptz NOT NULL,
+  -- A consensus recorded after the release is not a consensus, it is a memory of
+  -- one. Enforced here rather than in the form, as with §20.5's judgements.
+  consensus       numeric,
+  consensus_at    timestamptz,
+  actual          numeric,
+  actual_at       timestamptz,           -- publication instant, not the date
+  available_at    timestamptz,           -- actual_at plus the measured feed delay
+  surprise_sigma  numeric,               -- (actual - consensus) / dispersion
+  vintage_of      uuid REFERENCES macro_releases(id),   -- revision chain
+  CHECK (consensus IS NULL OR consensus_at IS NULL OR consensus_at < scheduled_for)
 );
 
 -- Human annotations on events (§20.5). Revisions, never edits: a rating made
@@ -2750,6 +2868,7 @@ Ordered by the phase that needs them, so none is built before there is something
 | **Data quality** | Open issues, which windows are blocked and what that blocks | issue resolution | 2 |
 | **Capital ramp** | Current tier, days at tier, criteria for advancing | tier approvals (admin) | 7 |
 | **News** | Events, extracted fields, ratings with their calibration, process state | `event_annotations`, `process_transitions` (§20.5) | 9 |
+| **Macro** | Release calendar with consensus, actual and surprise; which series carry vintages; freshness per series | consensus where no feed supplies it (§20.6) | 9 |
 
 Parameter configuration deserves its own note, because it is where the interface is most likely to do damage: **signal parameters are not editable anywhere.** §12.4 makes changing one create a new strategy that re-enters the funnel, and `runs.params` is immutable in the schema. The interface exposes the operational settings of §12.4's left-hand column — sizing, risk limits, order type, alert thresholds — and displays the rest read-only.
 
@@ -2826,7 +2945,46 @@ A state change is a `process_transitions` row, and `supersedes` is set, so a
 position built on the prior state goes to zero at the transition rather than
 decaying from it (§11.8).
 
-### 20.6 What the interface must not be
+### 20.6 The macro screen, and where the boundary falls
+
+Macro is a clean illustration of §20.1's rule, because it lands on both sides of
+it.
+
+**Grafana** takes the prices: gold, oil, DXY, yields, indices. They are time
+series, they are read and not decided upon, and they cost no code.
+
+**The application** takes the calendar: which releases are scheduled, what the
+consensus is, what was actually printed, and the surprise between them. That is
+relational, it has state, and part of it is entered by a person.
+
+What the screen shows:
+
+- **Upcoming releases** with their consensus and days remaining — which is the
+  anticipation window of §11.6 made visible, since the tradeable object for a
+  scheduled event is the approach rather than the arrival.
+- **Past releases** with consensus, actual and surprise in sigma, so a macro
+  effect can be read on the same scale as everything else.
+- **Which series carry vintages**, from `macro_series.has_vintages`. Operational
+  rather than decorative: a revised series used as if it were real-time is
+  answering a different question (§4.7), and results depending on one are
+  flagged rather than quietly reported.
+- **Freshness per series**, because a stale macro feed fails silently — the
+  number is simply old, and old numbers look exactly like current ones.
+
+What the operator may enter: **consensus, where no feed supplies it.** And it
+carries the same constraint as §20.5's judgements, for the same reason.
+
+> **A consensus recorded after the release is not a consensus. It is a memory of
+> one.**
+
+The whole value of macro as an event class is that expectations existed *before*
+the print, so surprise is a number rather than a story told afterwards. A
+consensus entered once the actual is known is that story, and it would make every
+macro surprise look predictive. The check lives in the schema —
+`consensus_at < scheduled_for` — rather than in the form, which is now the third
+place this system refuses to trust a control that can be clicked past.
+
+### 20.7 What the interface must not be
 
 - **Not the kill switch's only path.** §14.1 requires it to work when the orchestrator is down; a browser is a weaker dependency still. The UI has a kill button, and a CLI kill exists that does not go through the API or the orchestrator.
 - **Not a place metrics are computed.** A figure that appears only on screen is a figure nobody can reproduce.
