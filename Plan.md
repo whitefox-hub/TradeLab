@@ -108,6 +108,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 32 | PBO on net returns reads 0.000 on pure noise — not a broken estimator, but selection of minimum turnover, which persists out of sample without being alpha. | Computed on gross returns, with a turnover-correlation diagnostic so the confusion is visible; the turnover-matched random baseline is the control that catches what PBO cannot. See §8.3. |
 | 31 | The §0.1 cost table counted 250 round trips a year at a one-day hold — the equities calendar. Crypto trades 365 days, so every drag figure was understated by 46%. | Recomputed at 365 days: a one-day hold costs 47%/yr, not 30%, and the horizon band moves out to 2–7 days. The table now comes from `CostModel.annual_drag`, so it cannot drift from the engine again. |
 | 30 | Single operator collapses the roles, removing the separation of duties that stopped a threshold being lowered and used the same day. | Replaced with a temporal control: a 24h cooling-off before an approval may cite a relaxed gate, enforced in the approval path rather than the interface. See §20.3. |
 | 29 | Operator interface never specified: no screens, no auth design, and an unresolved Grafana/application boundary. | Screen inventory by phase, the boundary rule, identity as an audit-trail requirement, and mode made non-editable by construction. See §20. |
@@ -1307,12 +1308,25 @@ CPCV produces multiple backtest paths instead of one, yielding a **distribution*
 With N evaluated trials:
 
 - **Deflated Sharpe Ratio** — adjusts the observed Sharpe for trial count, skewness, kurtosis and sample length. Returns the probability that the true Sharpe is > 0.
-- **PBO** (Probability of Backtest Overfitting) via CSCV — the probability that the configuration chosen in-sample falls below the median out-of-sample. PBO > 0.5 means the selection process is worse than choosing at random.
+- **PBO** (Probability of Backtest Overfitting) via CSCV — the probability that the configuration chosen in-sample falls below the median out-of-sample. PBO > 0.5 means the selection process is worse than choosing at random. **Computed on gross returns**, for the reason below.
 - **Hansen SPA / White's Reality Check** — tests the best model in the set against a benchmark while controlling for the full search.
 - **Romano-Wolf stepdown** — when the goal is to identify *several* surviving strategies under family-wise error control.
 - **Minimum Track Record Length** — how many observations would be needed for that Sharpe to be significant. If it exceeds the available history, the result is inconclusive no matter how high it looks.
 
 `trials_considered` comes from `studies.executed_trials`, which includes **those discarded in tier A**. Counting only the finalists is the most common way to fool yourself.
+
+#### PBO must be fed gross returns, and why that is not obvious
+
+Measured on pure noise, PBO computed on **net** returns came out at 0.000 — apparently flawless selection on data containing nothing to select. The estimator was not broken.
+
+With heterogeneous turnover, net Sharpe correlates about **−0.95** with turnover. The search therefore selects the configuration that trades least, and trading least is genuinely persistent out of sample. PBO reports that persistence accurately; it simply is not alpha. Removing costs from the same data raises PBO to 0.667, which is the answer the question was actually asking for.
+
+The consequence is a gap in the method worth stating plainly: **a low PBO is not evidence of skill when the candidates differ in turnover.** It can mean nothing more than that the cheapest configuration stays cheapest.
+
+Two controls close it, and both are already required:
+
+- PBO is computed on gross returns, and `turnover_correlation` is reported alongside it so a turnover-driven result is visible rather than silent
+- §8.4's random-entry baseline is **matched on trade count and holding distribution**, which holds turnover fixed and isolates timing. That matching was always the point of it; this is the concrete failure it catches.
 
 ### 8.4 Null baselines
 
