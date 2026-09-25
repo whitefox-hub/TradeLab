@@ -54,6 +54,10 @@
   dialog label { display:block; margin:16px 0 6px; font-size:14px; color:var(--muted);
     font-weight:550; }
   dialog input, dialog textarea { width:100%; }
+  .readout { display:flex; align-items:center; gap:12px; margin-top:16px;
+    padding:11px 14px; background:var(--panel-2); border:1px solid var(--line);
+    border-radius:8px; }
+  .readout .k { font-size:14px; color:var(--muted); font-weight:550; }
   .row { display:flex; gap:10px; margin-top:20px; }
   .row > * { flex:1; }
 </style>
@@ -99,16 +103,16 @@
     cap are different events, 2 sigma is the same event. This is the unit the measured
     reaction is normalised to, so the rating can be scored against what happened.</p>
 
+  <div class="readout">
+    <span class="k">Direction</span>
+    <span id="rate-dir" class="dir flat">rate it</span>
+  </div>
+  <p class="hint">Read from the sign of the rating rather than chosen separately.
+    Two controls for one judgement can disagree, and then nothing says which the
+    operator meant.</p>
+
   <label for="confidence">Confidence (0–1)</label>
   <input id="confidence" type="number" step="0.05" min="0" max="1" placeholder="0.60">
-
-  <label for="note">Note</label>
-  <textarea id="note" rows="3" placeholder="What makes this different from the others"></textarea>
-
-  <p class="hint">The sign of this rating is the direction: a negative number
-    marks the event bearish for its assets and a positive one bullish. There is
-    no separate control for that, because two inputs for one judgement can
-    disagree with each other.</p>
 
   <p class="hint">Recorded as a <strong>judgement</strong>, available from now. It cannot
     be backdated — a judgement dated before it was written is hindsight with a form
@@ -425,10 +429,28 @@ function openRating(event) {
   $("rate-sub").textContent =
     `${event.event_type} · ${(event.assets || []).join(" ") || "no assets"} · ` +
     event.first_seen_at.slice(0, 10);
-  $("rating").value = ""; $("confidence").value = ""; $("note").value = "";
+  $("rating").value = ""; $("confidence").value = "";
+  paintDirection();
   $("rate-err").textContent = "";
   $("rate").showModal();
 }
+
+function paintDirection() {
+  const value = Number($("rating").value);
+  const element = $("rate-dir");
+  if ($("rating").value === "" || Number.isNaN(value) || value === 0) {
+    element.className = "dir flat";
+    element.textContent = "rate it";
+  } else if (value > 0) {
+    element.className = "dir up";
+    element.textContent = "\u25b2 bullish";
+  } else {
+    element.className = "dir down";
+    element.textContent = "\u25bc bearish";
+  }
+}
+
+$("rating").addEventListener("input", paintDirection);
 
 $("cancel").onclick = () => $("rate").close();
 
@@ -438,8 +460,7 @@ $("save").onclick = async () => {
   const confidence = $("confidence").value === "" ? null : Number($("confidence").value);
   try {
     await api(`/api/events/${current.id}/annotations`, { method: "POST",
-      body: JSON.stringify({ kind: "judgement", rating, confidence,
-                             note: $("note").value || null }) });
+      body: JSON.stringify({ kind: "judgement", rating, confidence }) });
     $("rate").close();
     load();
   } catch (e) { $("rate-err").textContent = e.message; }

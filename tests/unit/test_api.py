@@ -669,6 +669,20 @@ def test_rated_counts_judgements_only(client: TestClient) -> None:
 
 
 @pytest.mark.fast
+def test_the_dialog_shows_direction_without_offering_a_second_control(
+    client: TestClient,
+) -> None:
+    """Shown live from what is typed, not chosen. A select beside the rating
+    could contradict it, and then nothing says which the operator meant."""
+    page = client.get("/news").text
+    assert 'id="rate-dir"' in page
+    assert "paintDirection" in page
+    assert '$("rating").addEventListener("input", paintDirection)' in page
+    # And no free-text note: it was neither scored nor read.
+    assert 'id="note"' not in page
+
+
+@pytest.mark.fast
 def test_direction_comes_from_the_sign_of_the_rating(client: TestClient) -> None:
     """One input, one meaning.
 
