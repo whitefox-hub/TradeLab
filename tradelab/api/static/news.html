@@ -6,8 +6,26 @@
 <title>News — TradeLab</title>
 <link rel="stylesheet" href="/static/app.css">
 <style>
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:20px 0 0; }
+  .tabs button { background:transparent; border:none; border-bottom:2px solid transparent;
+    border-radius:0; padding:10px 16px; color:var(--muted); font-weight:550;
+    font-size:15px; }
+  .tabs button:hover { color:var(--text); }
+  .tabs button.on { color:var(--text); border-bottom-color:var(--accent); }
+  .tabs .n { font-size:13px; color:var(--muted); margin-left:6px;
+    font-variant-numeric:tabular-nums; }
+  .tabs .spacer { margin-left:auto; display:flex; align-items:center; padding:6px 0; }
   .filters { display:flex; gap:12px; flex-wrap:wrap; align-items:center;
     margin:18px 0 16px; }
+  .why { font-size:13px; color:var(--muted); margin-top:3px; }
+  .why.assumed { font-style:italic; }
+  .ends { font-size:12.5px; padding:1px 8px; border-radius:20px;
+    border:1px solid var(--line); color:var(--muted); font-weight:550; }
+  .ends.decay { color:var(--warn); border-color:var(--warn); }
+  .ends.resolved { color:var(--accent); border-color:var(--accent); }
+  .ends.superseded { color:var(--down); border-color:var(--down); }
+  .hand { font-size:12px; color:var(--accent); border:1px solid var(--accent);
+    border-radius:20px; padding:0 7px; margin-left:6px; }
   .count { color:var(--muted); font-size:14.5px; margin-left:auto; }
   tr.unrated td:first-child { box-shadow:inset 3px 0 0 var(--warn); }
   .shape { font-size:13px; color:var(--muted); }
@@ -28,6 +46,13 @@
     <h1>News</h1>
     <p class="sub">Events, extracted assets, and your ratings in sigma.</p>
 
+    <div class="tabs">
+      <button id="tab-active" class="on">Still influencing<span class="n" id="n-active"></span></button>
+      <button id="tab-expired">No longer<span class="n" id="n-expired"></span></button>
+      <button id="tab-all">All<span class="n" id="n-all"></span></button>
+      <span class="spacer"><button class="primary" id="add">Add news</button></span>
+    </div>
+
     <div class="filters">
       <select id="type">
         <option value="">All types</option>
@@ -43,7 +68,8 @@
 
     <table>
       <thead><tr>
-        <th>When</th><th>Type</th><th>Assets</th><th class="num">Ratings</th><th></th>
+        <th>When</th><th>Type</th><th>Assets</th><th>Ends by</th>
+        <th class="num">Ratings</th><th></th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -77,17 +103,84 @@
   <div class="err" id="rate-err"></div>
 </dialog>
 
+<dialog id="new">
+  <h2>Add news</h2>
+  <div class="shape">Something the collectors did not catch, or cannot: a hack, a
+    regulation, a war.</div>
+
+  <label for="n-title">Headline</label>
+  <input id="n-title" placeholder="What happened">
+
+  <label for="n-type">Type</label>
+  <input id="n-type" list="types" placeholder="hack, regulation, unlock, macro_release…">
+  <datalist id="types">
+    <option value="hack"><option value="regulation"><option value="unlock">
+    <option value="macro_release"><option value="partnership"><option value="war">
+  </datalist>
+
+  <label for="n-shape">Shape</label>
+  <select id="n-shape" style="width:100%">
+    <option value="shock">shock — a single impulse that decays</option>
+    <option value="schedule">schedule — a known date the market prices toward</option>
+    <option value="process">process — resolves in steps, each able to cancel the last</option>
+  </select>
+  <p class="hint">Shape decides which machinery applies later, so it is chosen
+    here rather than inferred. A shock decays; a schedule ends discontinuously
+    when its date arrives; a process ends when it is decided or withdrawn.</p>
+
+  <label for="n-assets">Assets (space separated, optional)</label>
+  <input id="n-assets" class="mono" placeholder="BTCUSDT ETHUSDT">
+
+  <label for="n-when">When it became public</label>
+  <input id="n-when" type="datetime-local">
+  <p class="hint">Backdating the <strong>event</strong> is legitimate — it
+    happened when it happened. Backdating a <strong>rating</strong> of it is not,
+    and the database refuses that separately.</p>
+
+  <label for="n-sched">Scheduled date (only for a schedule)</label>
+  <input id="n-sched" type="datetime-local">
+
+  <div class="row">
+    <button id="n-cancel">Cancel</button>
+    <button class="primary" id="n-save">Add</button>
+  </div>
+  <div class="err" id="n-err"></div>
+</dialog>
+
 <script src="/static/app.js"></script>
 <script>
 let current = null;
+let tab = "active";
+let all = [];
 
 mount("/news", { onReady: load });
 
+for (const name of ["active", "expired", "all"]) {
+  $("tab-" + name).onclick = () => {
+    tab = name;
+    for (const other of ["active", "expired", "all"]) {
+      $("tab-" + other).classList.toggle("on", other === name);
+    }
+    draw();
+  };
+}
+
 async function load() {
   const type = $("type").value;
-  const events = await api("/api/events?limit=300" + (type ? "&event_type=" + type : ""));
-  const shown = $("only-unrated").checked ? events.filter((e) => !e.rated) : events;
-  $("count").textContent = shown.length + " of " + events.length + " events";
+  all = await api("/api/events?limit=1000" + (type ? "&event_type=" + type : ""));
+  $("n-active").textContent = all.filter((e) => e.active).length;
+  $("n-expired").textContent = all.filter((e) => !e.active).length;
+  $("n-all").textContent = all.length;
+  draw();
+}
+
+function draw() {
+  let shown = tab === "all" ? all
+            : tab === "active" ? all.filter((e) => e.active)
+            : all.filter((e) => !e.active);
+  if ($("only-unrated").checked) shown = shown.filter((e) => !e.rated);
+  $("count").textContent = shown.length + " shown";
+
   $("rows").innerHTML = "";
   for (const event of shown) {
     const tr = document.createElement("tr");
@@ -95,18 +188,59 @@ async function load() {
     const when = new Date(event.first_seen_at).toISOString().slice(0, 16).replace("T", " ");
     tr.innerHTML =
       `<td>${when}</td>` +
-      `<td>${event.event_type}<div class="shape">${event.shape}</div></td>` +
+      `<td>${event.event_type}${event.hand_entered ? '<span class="hand">by hand</span>' : ""}` +
+      `    <div class="shape">${event.shape}</div></td>` +
       `<td class="mono">${(event.assets || []).join(" ") || "—"}</td>` +
+      `<td><span class="ends ${event.ended_by}">${event.ended_by}</span>` +
+      `    <div class="why ${event.expiry_assumed ? "assumed" : ""}">${event.expiry_reason}</div></td>` +
       `<td class="num">${event.annotations || ""}</td>`;
+
     const cell = document.createElement("td");
-    const button = document.createElement("button");
-    button.textContent = event.rated ? "Add" : "Rate";
-    button.onclick = () => openRating(event);
-    cell.appendChild(button);
+    const rate = document.createElement("button");
+    rate.textContent = event.rated ? "Add" : "Rate";
+    rate.onclick = () => openRating(event);
+    cell.appendChild(rate);
+    if (event.active) {
+      const end = document.createElement("button");
+      end.textContent = "Ended";
+      end.title = "Mark as no longer information — a rumour that is denied does " +
+                  "not decay, it is cancelled";
+      end.style.marginLeft = "6px";
+      end.onclick = async () => {
+        await api(`/api/events/${event.id}/resolve`, { method: "POST" });
+        load();
+      };
+      cell.appendChild(end);
+    }
     tr.appendChild(cell);
     $("rows").appendChild(tr);
   }
 }
+
+$("add").onclick = () => {
+  $("n-err").textContent = "";
+  $("n-when").value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 16);
+  $("new").showModal();
+};
+$("n-cancel").onclick = () => $("new").close();
+
+$("n-save").onclick = async () => {
+  $("n-err").textContent = "";
+  const iso = (v) => v ? new Date(v).toISOString() : null;
+  try {
+    await api("/api/events", { method: "POST", body: JSON.stringify({
+      event_type: $("n-type").value.trim(),
+      shape: $("n-shape").value,
+      title: $("n-title").value.trim(),
+      assets: $("n-assets").value.split(/\s+/).filter(Boolean),
+      happened_at: iso($("n-when").value),
+      scheduled_for: iso($("n-sched").value),
+    }) });
+    $("new").close();
+    load();
+  } catch (e) { $("n-err").textContent = e.message; }
+};
 
 function openRating(event) {
   current = event;

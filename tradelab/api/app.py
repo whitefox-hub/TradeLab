@@ -43,6 +43,7 @@ from tradelab.api.settings_rules import RULES
 from tradelab.api.settings_rules import Invalid as InvalidSetting
 from tradelab.api.settings_rules import validate as validate_setting
 from tradelab.config import Settings
+from tradelab.news.expiry import resolve as resolve_expiry
 
 #: Shared chrome and the screens live here. Mounted rather than served per file,
 #: so adding a stylesheet does not mean adding a route.
@@ -57,6 +58,27 @@ WRITABLE = frozenset({"approval", "transition_request"})
 class SignIn(BaseModel):
     email: str
     password: str
+
+
+class NewEventRequest(BaseModel):
+    """An event the operator adds by hand. Plan.md §20.5.
+
+    The extraction will misclassify, the taxonomy will miss things, and some
+    events carry judgement no classifier can supply — a hack, a regulation, a
+    war. So the screen can add one, and what it adds is marked as hand-entered
+    rather than blended into the collected corpus, because a study that cannot
+    separate them cannot tell a measurement from an opinion.
+    """
+
+    event_type: str = Field(min_length=3, max_length=48)
+    shape: str = Field(default="shock", pattern="^(shock|schedule|process)$")
+    assets: list[str] = Field(default_factory=list, max_length=40)
+    #: When it became public, which is not when it is being typed. Backdating an
+    #: *event* is legitimate — it happened when it happened. Backdating a
+    #: *judgement* about it is not, and that is refused elsewhere (§20.5).
+    happened_at: datetime | None = None
+    scheduled_for: datetime | None = None
+    title: str = Field(min_length=3, max_length=400)
 
 
 class AnnotationRequest(BaseModel):
@@ -299,27 +321,130 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/api/events")
     def events(who: Operator = operator, session: Session = session_dep,
-               event_type: str | None = None, limit: int = 100) -> list[dict]:
-        """Newest first, with the assets and the annotation count.
+               event_type: str | None = None, status: str | None = None,
+               limit: int = 300) -> list[dict]:
+        """Every event with whether it is still information, and why.
 
-        `rated` is what the screen sorts by in practice: the useful work is the
-        events nobody has read yet, and an interface that hides which those are
-        makes the operator find them by memory.
+        `status` filters to `active` or `expired`. The distinction is §11.8's and
+        it is not "recent": a delisting scheduled three months out is old news
+        and entirely live, while a listing from this morning can already be
+        spent. Sorting by age would put those the wrong way round.
         """
         clause = "WHERE e.event_type = :t" if event_type else ""
         rows = session.execute(sa.text(
             f"SELECT e.id, e.event_type, e.shape, e.first_seen_at, e.resolved_at, "
-            f"       e.code_hash, "
+            f"       e.code_hash, e.cluster_method, "
             f"       COALESCE(array_agg(DISTINCT a.asset) FILTER "
             f"                (WHERE a.asset IS NOT NULL), '{{}}') AS assets, "
-            f"       count(DISTINCT n.id) AS annotations "
+            f"       count(DISTINCT n.id) AS annotations, "
+            f"       min(sr.scheduled_for) FILTER (WHERE sr.scheduled_for > now()) "
+            f"         AS scheduled_for, "
+            f"       (SELECT pt.state FROM process_transitions pt "
+            f"         WHERE pt.event_id = e.id "
+            f"         ORDER BY pt.sequence DESC LIMIT 1) AS latest_state "
             f"FROM events e "
             f"LEFT JOIN event_assets a ON a.event_id = e.id "
             f"LEFT JOIN event_annotations n ON n.event_id = e.id "
+            f"LEFT JOIN schedule_revisions sr ON sr.event_id = e.id "
             f"{clause} "
             f"GROUP BY e.id ORDER BY e.first_seen_at DESC LIMIT :l"
-        ), {"t": event_type, "l": min(limit, 500)}).mappings().all()
-        return [dict(r) | {"rated": r["annotations"] > 0} for r in rows]
+        ), {"t": event_type, "l": min(limit, 1000)}).mappings().all()
+
+        out = []
+        for row in rows:
+            expiry = resolve_expiry(
+                event_type=row["event_type"], shape=row["shape"],
+                first_seen_at=row["first_seen_at"], resolved_at=row["resolved_at"],
+                scheduled_for=row["scheduled_for"], latest_state=row["latest_state"],
+            )
+            if status == "active" and not expiry.active:
+                continue
+            if status == "expired" and expiry.active:
+                continue
+            out.append(dict(row) | {
+                "rated": row["annotations"] > 0,
+                "active": expiry.active,
+                "ended_by": str(expiry.ended_by),
+                "expires_at": expiry.expires_at,
+                "expiry_reason": expiry.reason,
+                # Flagged, so the screen can say the horizon is assumed rather
+                # than measured. A default presented as a finding is worse than
+                # no default (§11.5).
+                "expiry_assumed": expiry.assumed,
+                "hand_entered": str(row["cluster_method"]).startswith("manual:"),
+            })
+        return out
+
+    @app.post("/api/events", status_code=status.HTTP_201_CREATED)
+    def add_event(body: NewEventRequest, who: Operator = operator,
+                  session: Session = session_dep) -> dict[str, Any]:
+        """Add an event by hand. Plan.md §20.5.
+
+        Marked `manual:` in `cluster_method` and stamped with the operator rather
+        than a taxonomy hash, so a later study can separate what was collected
+        from what was asserted. Blending them would make a corpus in which a
+        measurement and an opinion are indistinguishable.
+        """
+        user = session.execute(
+            sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}).first()
+        event_id = uuid.uuid4()
+        happened = body.happened_at or datetime.now(UTC)
+
+        session.execute(sa.text(
+            "INSERT INTO events (id, event_type, shape, first_seen_at, "
+            "latest_revision, cluster_method, code_hash) "
+            "VALUES (:i, :t, :s, :f, 1, :c, :h)"
+        ), {"i": event_id, "t": body.event_type, "s": body.shape, "f": happened,
+            "c": f"manual:{who.email}", "h": "hand-entered"})
+
+        for asset in dict.fromkeys(a.strip().upper() for a in body.assets if a.strip()):
+            session.execute(sa.text(
+                "INSERT INTO event_assets (event_id, revision, asset, "
+                "expected_direction) VALUES (:e, 1, :a, 0) ON CONFLICT DO NOTHING"
+            ), {"e": event_id, "a": asset})
+
+        if body.scheduled_for is not None:
+            session.execute(sa.text(
+                "INSERT INTO schedule_revisions (event_id, revision, available_at, "
+                "scheduled_for, confidence, source) "
+                "VALUES (:e, 1, now(), :s, 'estimated', :src)"
+            ), {"e": event_id, "s": body.scheduled_for, "src": f"manual:{who.email}"})
+
+        # The title is the payload of a correction-kind annotation rather than a
+        # column: `events` carries what the system knows, and the prose came
+        # from a person.
+        session.execute(sa.text(
+            "INSERT INTO event_annotations (id, event_id, kind, available_at, "
+            "payload, author) VALUES (:i, :e, 'correction', :a, CAST(:p AS jsonb), :u)"
+        ), {"i": uuid.uuid4(), "e": event_id, "a": happened,
+            "p": json.dumps({"title": body.title, "entered_by_hand": True}),
+            "u": user.id})
+
+        audit(session, who.email, "event.add", "event", str(event_id),
+              {"event_type": body.event_type, "assets": body.assets})
+        session.commit()
+        return {"id": str(event_id), "first_seen_at": happened.isoformat()}
+
+    @app.post("/api/events/{event_id}/resolve")
+    def resolve_event(event_id: uuid.UUID, who: Operator = operator,
+                      session: Session = session_dep) -> dict[str, Any]:
+        """Mark an item as no longer information. Plan.md §11.8.
+
+        Supersession, in the operator's hands: a rumour that is denied does not
+        decay, it is cancelled, and nothing in a clock can know that. Recorded
+        as of now rather than backdated, for the same reason a judgement cannot
+        be backdated.
+        """
+        updated = session.execute(sa.text(
+            "UPDATE events SET resolved_at = now() "
+            "WHERE id = :i AND resolved_at IS NULL RETURNING event_type"
+        ), {"i": event_id}).first()
+        if updated is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "no such event, or it is already resolved")
+        audit(session, who.email, "event.resolve", "event", str(event_id))
+        session.commit()
+        return {"id": str(event_id), "resolved": True}
 
     @app.get("/api/events/{event_id}")
     def event_detail(event_id: uuid.UUID, who: Operator = operator,

@@ -124,7 +124,9 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     # this assertion were collapsed into one after the third went stale.
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
+        ("/api/events", "POST"),
         ("/api/events/{event_id}/annotations", "POST"),
+        ("/api/events/{event_id}/resolve", "POST"),
         ("/api/macro/releases/{release_id}/consensus", "POST"),
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
@@ -496,3 +498,38 @@ def test_a_locked_parameter_is_refused_by_name() -> None:
         # change something is the useful part.
         assert any("asset universe" in item["name"].lower()
                    for item in allowed["locked"])
+
+
+@pytest.mark.fast
+def test_a_hand_entered_event_may_be_backdated_but_a_rating_may_not() -> None:
+    """The asymmetry that keeps the corpus honest.
+
+    An event happened when it happened, so entering one from last week is
+    legitimate. A *judgement* about it is created at the moment it is made, and
+    backdating that is hindsight with a form around it.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tradelab.api.app import NewEventRequest
+
+    last_week = datetime.now(UTC) - timedelta(days=7)
+    event = NewEventRequest(event_type="hack", title="Bridge exploit",
+                            happened_at=last_week)
+    assert event.happened_at == last_week
+
+    # The annotation model accepts the field; the handler overrides it for a
+    # judgement and the database refuses a backdated one regardless.
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    assert 'datetime.now(UTC) if body.kind == "judgement"' in source
+
+
+@pytest.mark.fast
+def test_the_news_screen_separates_influencing_from_spent(client: TestClient) -> None:
+    """Tabs, not a date sort. §11.8's distinction is not about age."""
+    page = client.get("/news").text
+    assert 'id="tab-active"' in page and "Still influencing" in page
+    assert 'id="tab-expired"' in page and "No longer" in page
+    assert 'id="add"' in page, "no way to add news by hand"
+    # And the assumed horizon is labelled on screen rather than presented as
+    # measured.
+    assert "expiry_assumed" in page
