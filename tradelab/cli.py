@@ -150,6 +150,31 @@ def backfill_funding_cmd(
     )
 
 
+@app.command("materialise")
+def materialise_cmd(
+    timeframes: str = typer.Option("1h,4h", help="Comma-separated"),
+    limit: int = typer.Option(0, help="0 = every asset with funding"),
+    workers: int = 8,
+    force: bool = False,
+    root: Path | None = None,
+) -> None:
+    """Derive and persist coarser bars from the 1m archive (§9.6).
+
+    Deriving 4h from 1m costs ~30s per asset and reading the result costs 0.03s.
+    A campaign that pays the former per study cannot iterate.
+    """
+    from tradelab.orchestration.pooled import funding_universe
+    from tradelab.storage.materialise_bars import materialise_universe
+
+    archive = root or get_settings().archive_root
+    assets = funding_universe(archive, limit=limit or None)
+    tfs = tuple(t.strip() for t in timeframes.split(","))
+    typer.echo(f"{len(assets)} assets x {len(tfs)} timeframes")
+    done = materialise_universe(archive, assets, tfs, workers=workers, force=force)
+    rows = sum(d.rows for d in done)
+    typer.echo(f"materialised {len(done)} partitions, {rows:,} bars")
+
+
 @app.command()
 def quality(
     kinds: str = typer.Option("ohlcv,funding", help="Comma-separated"),

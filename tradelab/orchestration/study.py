@@ -127,7 +127,20 @@ def load_bars(
     resolution for non-stationarity is walk-forward (§8.1), which uses all the
     history without ever assuming one regime spans it.
     """
+    from tradelab.storage.materialise_bars import load_materialised
     from tradelab.storage.query import aggregate_bars
+
+    # A materialised view if one exists and is fresh: deriving 4h from 1m costs
+    # minutes per asset, and a campaign that pays that per study cannot iterate
+    # (§9.6).
+    cached = load_materialised(root, asset, timeframe)
+    if cached is not None:
+        bars = cached.sort("event_time")
+        if years is not None:
+            limit_days = int(years * 365)
+        if limit_days:
+            bars = bars.tail(limit_days * _bars_per_day(timeframe))
+        return bars
 
     # `aggregate_bars` carries the last source `event_time` alongside the bucket;
     # the bucket is the bar's own timestamp, so the source column is dropped.
