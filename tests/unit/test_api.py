@@ -622,3 +622,28 @@ def test_the_form_offers_the_fourth_shape_and_explains_it(client: TestClient) ->
     # And the screen warns that sign is not the signal, where the operator is
     # about to enter one.
     assert "residual" in page
+
+
+@pytest.mark.fast
+def test_the_type_list_is_derived_rather_than_declared(client: TestClient) -> None:
+    """A hand-written list drifts from the data the moment something is seeded.
+
+    `halving` existed in three rows and in none of the suggestions, which is the
+    defect this replaced: the screen offered a set the corpus had outgrown.
+    """
+    page = client.get("/news").text
+    assert '<datalist id="types"></datalist>' in page, "the options are hardcoded again"
+    assert "loadTypes()" in page
+    assert "/api/events/types" in page
+    # The filter shows only types with rows — filtering to one with none returns
+    # an empty table and reads as a bug.
+    assert "types.filter((t) => t.in_use)" in page
+
+
+@pytest.mark.fast
+def test_a_type_added_by_hand_refreshes_the_lists(client: TestClient) -> None:
+    """Otherwise the operator adds a type and cannot then filter by it until a
+    reload, which reads as the entry having failed."""
+    page = client.get("/news").text
+    save_block = page[page.index('$("n-save").onclick'):]
+    assert "await loadTypes();" in save_block

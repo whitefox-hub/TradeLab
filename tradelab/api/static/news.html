@@ -62,14 +62,7 @@
     </div>
 
     <div class="filters">
-      <select id="type">
-        <option value="">All types</option>
-        <option value="futures_listing">futures_listing</option>
-        <option value="spot_listing">spot_listing</option>
-        <option value="seed_tag">seed_tag</option>
-        <option value="spot_delisting">spot_delisting</option>
-        <option value="futures_delivery">futures_delivery</option>
-      </select>
+      <select id="type"><option value="">All types</option></select>
       <label class="inline"><input type="checkbox" id="only-unrated"> Unrated only</label>
       <span class="count" id="count"></span>
     </div>
@@ -121,10 +114,7 @@
 
   <label for="n-type">Type</label>
   <input id="n-type" list="types" placeholder="hack, regulation, unlock, macro_release…">
-  <datalist id="types">
-    <option value="hack"><option value="regulation"><option value="unlock">
-    <option value="macro_release"><option value="partnership"><option value="war">
-  </datalist>
+  <datalist id="types"></datalist>
 
   <label for="n-dir">Direction for those assets</label>
   <select id="n-dir" style="width:100%">
@@ -226,7 +216,22 @@ let current = null;
 let tab = "active";
 let all = [];
 
-mount("/news", { onReady: load });
+mount("/news", { onReady: async () => { await loadTypes(); load(); } });
+
+async function loadTypes() {
+  const types = await api("/api/events/types");
+
+  // The filter offers only what exists — a filter for a type with no rows
+  // returns an empty table and looks like a bug.
+  $("type").innerHTML = '<option value="">All types</option>' +
+    types.filter((t) => t.in_use).map((t) =>
+      `<option value="${t.event_type}">${t.event_type} (${t.count})</option>`).join("");
+
+  // The form offers everything, including types nothing has yet, because that
+  // is what adding one is for.
+  $("types").innerHTML = types.map((t) =>
+    `<option value="${t.event_type}">`).join("");
+}
 
 for (const name of ["active", "expired", "all"]) {
   $("tab-" + name).onclick = () => {
@@ -380,6 +385,7 @@ $("n-save").onclick = async () => {
       scheduled_for: iso($("n-sched").value),
     }) });
     $("new").close();
+    await loadTypes();
     load();
   } catch (e) { $("n-err").textContent = e.message; }
 };

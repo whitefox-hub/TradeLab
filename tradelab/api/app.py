@@ -528,6 +528,37 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         session.commit()
         return {"id": str(event_id), "resolved": True}
 
+    #: Types worth suggesting that the corpus may not contain yet. Merged with
+    #: whatever is actually in the database rather than replacing it, because a
+    #: hand-written list drifts from the data the moment something new is
+    #: ingested or seeded — which is how `halving` came to exist in three rows
+    #: and in none of the suggestions.
+    SUGGESTED_TYPES = (
+        "hack", "regulation", "war", "unlock", "halving", "macro_release",
+        "partnership", "exchange_collapse", "ban", "fork", "mainnet",
+        "listing_rumour", "treasury_purchase",
+    )
+
+    @app.get("/api/events/types")
+    def event_types(who: Operator = operator,
+                    session: Session = session_dep) -> list[dict]:
+        """Every type in use, with its count, plus the ones worth suggesting.
+
+        Derived rather than declared. The screen offers what exists and what is
+        plausible, and cannot fall behind the data.
+        """
+        rows = session.execute(sa.text(
+            "SELECT event_type, count(*) AS n FROM events "
+            "GROUP BY event_type ORDER BY n DESC"
+        )).mappings().all()
+        in_use = {r["event_type"]: r["n"] for r in rows}
+        return [
+            {"event_type": name, "count": in_use.get(name, 0),
+             "in_use": name in in_use}
+            for name in sorted(set(in_use) | set(SUGGESTED_TYPES),
+                               key=lambda k: (-in_use.get(k, 0), k))
+        ]
+
     @app.get("/api/events/{event_id}")
     def event_detail(event_id: uuid.UUID, who: Operator = operator,
                      session: Session = session_dep) -> dict:
