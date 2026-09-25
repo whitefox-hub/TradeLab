@@ -86,6 +86,16 @@ def _bybit(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> lis
     return out
 
 
+#: Measured 2026-09-25: OKX serves about 96 days of funding history and Bitget
+#: about 90, whatever is asked for. Requesting earlier returns empty rather than
+#: an error, so a caller that does not check gets a short series that looks
+#: complete. Their *price* history is fine — two years, once paginated — so the
+#: limit is on funding specifically.
+FUNDING_HISTORY_DAYS: dict[str, int | None] = {
+    "binance": None, "bybit": None, "gate": None, "okx": 96, "bitget": 90,
+}
+
+
 def _okx(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> list[Rate]:
     out: list[Rate] = []
     cursor = end_ms
