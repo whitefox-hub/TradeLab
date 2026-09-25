@@ -344,11 +344,12 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         clause = "WHERE e.event_type = :t" if event_type else ""
         rows = session.execute(sa.text(
             f"SELECT e.id, e.event_type, e.shape, e.first_seen_at, e.resolved_at, "
-            f"       e.code_hash, e.cluster_method, "
+            f"       e.headline, e.code_hash, e.cluster_method, "
             f"       COALESCE(array_agg(DISTINCT a.asset) FILTER "
             f"                (WHERE a.asset IS NOT NULL), '{{}}') AS assets, "
             f"       max(a.expected_direction) AS direction, "
-            f"       count(DISTINCT n.id) AS annotations, "
+            f"       count(DISTINCT n.id) FILTER (WHERE n.kind = 'judgement') "
+            f"         AS annotations, "
             f"       min(sr.scheduled_for) FILTER (WHERE sr.scheduled_for > now()) "
             f"         AS scheduled_for, "
             f"       (SELECT pt.state FROM process_transitions pt "
@@ -410,10 +411,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         happened = body.happened_at or datetime.now(UTC)
 
         session.execute(sa.text(
-            "INSERT INTO events (id, event_type, shape, first_seen_at, "
+            "INSERT INTO events (id, event_type, shape, first_seen_at, headline, "
             "latest_revision, cluster_method, code_hash) "
-            "VALUES (:i, :t, :s, :f, 1, :c, :h)"
+            "VALUES (:i, :t, :s, :f, :hl, 1, :c, :h)"
         ), {"i": event_id, "t": body.event_type, "s": body.shape, "f": happened,
+            "hl": body.title,
             "c": f"manual:{who.email}", "h": "hand-entered"})
 
         for asset in dict.fromkeys(a.strip().upper() for a in body.assets if a.strip()):
@@ -649,6 +651,20 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 ) from error
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 message.split("\n")[0]) from error
+
+        # The rating already carries direction: it is signed sigma. Rather than
+        # ask for the same judgement twice through a second control that could
+        # disagree with it, the sign of the rating sets `expected_direction` for
+        # the event's assets. One input, one meaning.
+        #
+        # Only for judgements, and only when a rating was given: a correction
+        # repairs a parse failure and says nothing about which way the price
+        # should go.
+        if body.kind == "judgement" and body.rating is not None:
+            session.execute(sa.text(
+                "UPDATE event_assets SET expected_direction = :d "
+                "WHERE event_id = :e"
+            ), {"d": (body.rating > 0) - (body.rating < 0), "e": event_id})
 
         audit(session, who.email, f"annotation.{body.kind}", "event", str(event_id),
               {"rating": body.rating, "confidence": body.confidence})

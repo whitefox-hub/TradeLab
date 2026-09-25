@@ -730,6 +730,14 @@ class Event(Base):
     event_type: Mapped[str] = mapped_column(String(48), nullable=False)
     shape: Mapped[str] = mapped_column(String(16), nullable=False, server_default="shock")
     first_seen_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    #: What the event says, in the words it arrived in.
+    #:
+    #: A column rather than an annotation. `event_annotations` holds what a
+    #: *person* asserted about an event — a correction or a judgement — and a
+    #: collected headline is neither: it is the event's own text. Filing it as an
+    #: annotation would also make every collected event look annotated, which is
+    #: precisely the flag the screen uses to find the ones nobody has read.
+    headline: Mapped[str | None] = mapped_column(Text)
     latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     resolved_at: Mapped[datetime | None] = mapped_column(TS)
     cluster_method: Mapped[str] = mapped_column(Text, nullable=False)

@@ -101,14 +101,21 @@ def main() -> int:
         for record in rows.iter_rows(named=True):
             key = f"article:{record['article_id']}"
             if key in existing:
+                # Backfill a headline onto rows written before the column
+                # existed, so re-running repairs rather than only skipping.
+                connection.execute(sa.text(
+                    "UPDATE events SET headline = :hl "
+                    "WHERE cluster_method = :c AND headline IS NULL"
+                ), {"hl": record["title"], "c": key})
                 skipped += 1
                 continue
             event_id = uuid.uuid4()
             connection.execute(sa.text(
                 "INSERT INTO events (id, event_type, shape, first_seen_at, "
-                "latest_revision, cluster_method, code_hash) "
-                "VALUES (:i, :t, :s, :f, 1, :c, :h)"
+                "headline, latest_revision, cluster_method, code_hash) "
+                "VALUES (:i, :t, :s, :f, :hl, 1, :c, :h)"
             ), {"i": event_id, "t": record["cls"], "s": SHAPES[record["cls"]],
+                "hl": record["title"],
                 # `available_at`, not `event_time`: the modelled subscriber delay
                 # is when this could first have been acted on (§11.2).
                 "f": record["available_at"], "c": key, "h": code_hash})

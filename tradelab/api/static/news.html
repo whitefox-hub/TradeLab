@@ -27,7 +27,9 @@
   .ends.decay { color:var(--warn); border-color:var(--warn); }
   .ends.resolved { color:var(--accent); border-color:var(--accent); }
   .ends.superseded { color:var(--down); border-color:var(--down); }
-  .dir { font-weight:700; font-size:15px; }
+  .headline { font-weight:550; line-height:1.4; }
+  .meta { font-size:13px; color:var(--muted); margin-top:3px; }
+  .dir { font-weight:700; font-size:15px; white-space:nowrap; }
   .dir.up { color:var(--up); } .dir.down { color:var(--down); }
   .dir.flat { color:var(--muted); font-weight:550; }
   .regime { font-size:12px; color:var(--down); border:1px solid var(--down);
@@ -69,8 +71,8 @@
 
     <table>
       <thead><tr>
-        <th>When</th><th>Type</th><th>Sign</th><th>Assets</th><th>Ends by</th>
-        <th class="num">Ratings</th><th></th>
+        <th>When</th><th>Headline</th><th>For the price</th><th>Assets</th>
+        <th>Ends by</th><th class="num">Ratings</th><th></th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -92,6 +94,11 @@
 
   <label for="note">Note</label>
   <textarea id="note" rows="3" placeholder="What makes this different from the others"></textarea>
+
+  <p class="hint">The sign of this rating is the direction: a negative number
+    marks the event bearish for its assets and a positive one bullish. There is
+    no separate control for that, because two inputs for one judgement can
+    disagree with each other.</p>
 
   <p class="hint">Recorded as a <strong>judgement</strong>, available from now. It cannot
     be backdated — a judgement dated before it was written is hindsight with a form
@@ -264,13 +271,22 @@ function draw() {
     const tr = document.createElement("tr");
     if (!event.rated) tr.className = "unrated";
     const when = new Date(event.first_seen_at).toISOString().slice(0, 16).replace("T", " ");
+    const escape = (text) => (text || "").replace(/[<>&"]/g,
+      (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]);
+    const sign = event.direction > 0
+      ? '<span class="dir up">&#9650; up</span>'
+      : event.direction < 0
+        ? '<span class="dir down">&#9660; down</span>'
+        : '<span class="dir flat">not set</span>';
+
     tr.innerHTML =
       `<td>${when}</td>` +
-      `<td>${event.event_type}${event.hand_entered ? '<span class="hand">by hand</span>' : ""}` +
-      `    ${event.shape === "regime_shift" ? '<span class="regime">regime</span>' : ""}` +
-      `    <div class="shape">${event.shape}</div></td>` +
-      `<td><span class="dir ${event.direction > 0 ? "up" : event.direction < 0 ? "down" : "flat"}">` +
-      `    ${event.direction > 0 ? "▲ bullish" : event.direction < 0 ? "▼ bearish" : "—"}</span></td>` +
+      `<td><div class="headline">${escape(event.headline) || "<em>no headline</em>"}</div>` +
+      `    <div class="meta">${event.event_type} · ${event.shape}` +
+      `      ${event.hand_entered ? '<span class="hand">by hand</span>' : ""}` +
+      `      ${event.shape === "regime_shift" ? '<span class="regime">regime</span>' : ""}` +
+      `    </div></td>` +
+      `<td>${sign}</td>` +
       `<td class="mono">${(event.assets || []).join(" ") || "—"}</td>` +
       `<td><span class="ends ${event.ended_by}">${event.ended_by}</span>` +
       `    <div class="why ${event.expiry_assumed ? "assumed" : ""}">${event.expiry_reason}</div></td>` +
@@ -392,9 +408,10 @@ $("n-save").onclick = async () => {
 
 function openRating(event) {
   current = event;
-  $("rate-title").textContent = event.event_type;
+  $("rate-title").textContent = event.headline || event.event_type;
   $("rate-sub").textContent =
-    (event.assets || []).join(" ") + " · " + event.first_seen_at.slice(0, 10);
+    `${event.event_type} · ${(event.assets || []).join(" ") || "no assets"} · ` +
+    event.first_seen_at.slice(0, 10);
   $("rating").value = ""; $("confidence").value = ""; $("note").value = "";
   $("rate-err").textContent = "";
   $("rate").showModal();

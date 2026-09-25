@@ -647,3 +647,48 @@ def test_a_type_added_by_hand_refreshes_the_lists(client: TestClient) -> None:
     page = client.get("/news").text
     save_block = page[page.index('$("n-save").onclick'):]
     assert "await loadTypes();" in save_block
+
+
+@pytest.mark.fast
+def test_the_headline_is_a_column_not_an_annotation() -> None:
+    """`event_annotations` holds what a *person* asserted about an event. A
+    collected headline is the event's own words, and filing it there would also
+    make every collected event look annotated — which is the flag the screen
+    uses to find the ones nobody has read."""
+    from tradelab.registry.models import Event
+
+    assert "headline" in Event.__table__.columns
+
+
+@pytest.mark.fast
+def test_rated_counts_judgements_only(client: TestClient) -> None:
+    """Once the ingestor writes titles, counting every annotation would mark the
+    whole corpus as read on the first import."""
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    assert "FILTER (WHERE n.kind = 'judgement')" in source
+
+
+@pytest.mark.fast
+def test_direction_comes_from_the_sign_of_the_rating(client: TestClient) -> None:
+    """One input, one meaning.
+
+    The rating is already signed sigma, so a second control for direction could
+    disagree with it — and then nothing says which the operator meant.
+    """
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    assert "UPDATE event_assets SET expected_direction" in source
+    assert '(body.rating > 0) - (body.rating < 0)' in source
+    # And only for a judgement: a correction repairs a parse failure and says
+    # nothing about which way the price should go.
+    assert 'if body.kind == "judgement" and body.rating is not None:' in source
+
+
+@pytest.mark.fast
+def test_the_table_shows_the_headline_and_escapes_it(client: TestClient) -> None:
+    """Titles arrive from a venue feed, so they are untrusted text going into
+    innerHTML."""
+    page = client.get("/news").text
+    assert "For the price" in page
+    assert "event.headline" in page
+    assert "const escape = (text)" in page
+    assert "escape(event.headline)" in page
