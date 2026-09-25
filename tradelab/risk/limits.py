@@ -139,20 +139,20 @@ class RiskEngine:
         account = self.account
         limits = self.limits
 
-        # Account-level conditions first: an order is irrelevant if the run
-        # should already have stopped.
+        # `reduce_only` first, ahead of the halt check and everything else.
+        # Getting flat is the one action a halted run still needs to take, and
+        # refusing it here left `kill()` as the only exit — which reaches the
+        # adapter directly and so leaves exits entirely unchecked. An order that
+        # can only reduce a position cannot breach a limit by being allowed.
+        if order.reduce_only:
+            return Decision(allowed=True)
+
         if account.halted:
             return _refuse(Breach.HALTED, account.halt_reason)
 
         loss_check = self.check_account(at)
         if not loss_check.allowed:
             return loss_check
-
-        # `reduce_only` orders are exempt from everything that follows. Blocking
-        # a position-reducing order on an exposure limit would trap the system
-        # in the breach it is trying to leave.
-        if order.reduce_only:
-            return Decision(allowed=True)
 
         if mid_price is not None and mid_price > 0:
             deviation = abs(price - mid_price) / mid_price * Decimal(10_000)

@@ -39,6 +39,13 @@ class Ack:
 class VenueAdapter(ABC):
     mode: ExecutionMode
 
+    @property
+    def fills(self) -> list[Fill]:
+        """Fills observed so far. Part of the interface, not an implementation
+        detail of one adapter: the engine folds positions from this, and an
+        adapter that does not expose it stops position tracking silently."""
+        return []
+
     @abstractmethod
     def submit(self, order: Order, at: datetime) -> Ack: ...
 
@@ -67,9 +74,13 @@ class SimulatedAdapter(VenueAdapter):
     prices: dict[str, Decimal] = field(default_factory=dict)
     half_spread_bps: Decimal = Decimal(1)
     taker_fee: Decimal = Decimal("0.0005")
-    fills: list[Fill] = field(default_factory=list)
+    _fills: list[Fill] = field(default_factory=list)
     _held: dict[str, Decimal] = field(default_factory=dict)
     rejections: list[Ack] = field(default_factory=list)
+
+    @property
+    def fills(self) -> list[Fill]:
+        return self._fills
 
     def submit(self, order: Order, at: datetime) -> Ack:
         instrument = self.instruments.get(order.asset)
@@ -89,12 +100,12 @@ class SimulatedAdapter(VenueAdapter):
         fill_price = instrument.round_price(price + slip * order.side.sign)
         fee = quantity * fill_price * self.taker_fee
 
-        self.fills.append(Fill(order.asset, order.side, quantity, fill_price, fee,
-                               at, order.client_order_id))
+        self._fills.append(Fill(order.asset, order.side, quantity, fill_price, fee,
+                                at, order.client_order_id))
         self._held[order.asset] = (
             self._held.get(order.asset, Decimal(0)) + quantity * order.side.sign
         )
-        return Ack(order.client_order_id, OrderStatus.FILLED, f"sim-{len(self.fills)}")
+        return Ack(order.client_order_id, OrderStatus.FILLED, f"sim-{len(self._fills)}")
 
     def _reject(self, order: Order, reason: str) -> Ack:
         ack = Ack(order.client_order_id, OrderStatus.REJECTED, reason=reason)
@@ -123,6 +134,13 @@ class HaltedAdapter(VenueAdapter):
     @property
     def mode(self) -> ExecutionMode:  # type: ignore[override]
         return self.inner.mode
+
+    @property
+    def fills(self) -> list[Fill]:
+        """Delegated, and this is load-bearing. Without it the engine's fill
+        folding silently stopped the moment a run halted — so positions froze
+        exactly while the system was trying to flatten them."""
+        return self.inner.fills
 
     def submit(self, order: Order, at: datetime) -> Ack:
         if not order.reduce_only:
