@@ -73,7 +73,11 @@ def evaluate(
     """
     t = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     reasons: list[str] = []
-    metrics: dict = {}
+    # Recorded before any early exit. The trial counter is monotonic and feeds
+    # every later verdict (§8.3), so a study that stops early still spent its
+    # configurations — and a record that omits them makes the count
+    # unauditable precisely where it is least obvious that any were spent.
+    metrics: dict = {"trials_considered": trials, "n_oos_trades": n_oos_trades}
 
     # Sample size first. Below the minimum there is nothing to judge, and a
     # verdict of `fail` would imply the evidence pointed the other way.
@@ -81,7 +85,7 @@ def evaluate(
         return GateEvaluation(
             Verdict.INCONCLUSIVE,
             [f"{n_oos_trades} out-of-sample trades, below the {t['min_oos_trades']} minimum"],
-            {"n_oos_trades": n_oos_trades},
+            metrics,
         )
 
     dsr = deflated_sharpe(stats, trials=trials)
@@ -90,7 +94,6 @@ def evaluate(
     benchmark = expected_max_sharpe(trials, variance)
     metrics |= {
         "deflated_sharpe": dsr,
-        "trials_considered": trials,
         "min_trl_obs": required_obs,
         "n_obs": stats.n_obs,
         "sharpe_annualised": stats.sharpe * float(np.sqrt(bars_per_year)),
