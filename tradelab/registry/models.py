@@ -373,3 +373,256 @@ class LifecycleTransition(Base):
     occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
 
     __table_args__ = (Index("ix_transitions_strategy", "strategy_id", "occurred_at"),)
+
+
+# --------------------------------------------------------------------------
+# Execution. Plan.md §12, §14. Added for phases 5-8, which were started ahead
+# of the validation gate that normally precedes them.
+# --------------------------------------------------------------------------
+
+
+class RiskLimitConfig(Base):
+    """Versioned limit sets, referenced rather than embedded (§14.1).
+
+    Embedding the numbers in `runs` would make a limit change invisible: two
+    runs would show the same config and behave differently. A reference plus
+    `valid_from` makes the change a row someone can point at.
+    """
+
+    __tablename__ = "risk_limit_configs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    max_open_positions: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_positions_per_cluster: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_open_orders: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_position_notional: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    max_position_notional: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    min_position_pct_equity: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    max_position_pct_equity: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    min_seconds_between_entries: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_gross_exposure: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    max_net_exposure: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    max_leverage: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    max_daily_loss: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    max_drawdown_from_peak: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    max_orders_per_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_consecutive_errors: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_price_deviation_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(TS, nullable=False)
+
+
+class Run(Base):
+    """One execution in any mode (§12).
+
+    `risk_limit_config_id` is NOT NULL in every mode on purpose. A run that
+    could exist without limits would be a run whose limiter is first exercised
+    in production.
+    """
+
+    __tablename__ = "runs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("strategies.id"), nullable=False)
+    promoted_from: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("experiments.id"))
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    venue: Mapped[str] = mapped_column(ForeignKey("venues.code"), nullable=False)
+    #: Immutable. Changing a parameter creates a new run, never an edit (§12.4).
+    params: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    initial_capital: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    base_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    risk_limit_config_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("risk_limit_configs.id"), nullable=False)
+    cost_model_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("cost_models.id"), nullable=False)
+    capital_tier: Mapped[str | None] = mapped_column(String(4))
+    code_version: Mapped[str] = mapped_column(Text, nullable=False)
+    image_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    config_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    halt_reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(TS)
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('backtest','simulator','testnet','live')", name="ck_runs_mode"),
+        CheckConstraint(
+            "capital_tier IS NULL OR capital_tier IN ('L0','L1','L2','L3')",
+            name="ck_runs_tier"),
+        Index("ix_runs_strategy_mode", "strategy_id", "mode"),
+    )
+
+
+class Intent(Base):
+    """What the strategy wanted. Append-only, written before any order (§14.3)."""
+
+    __tablename__ = "intents"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    asset: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_position: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    reason: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    #: Which rule blocked it, if any. A veto is a decision and belongs here.
+    vetoed_by: Mapped[str | None] = mapped_column(Text)
+    #: Survives venue-level netting, so per-strategy attribution stays possible
+    #: when two strategies want opposite positions in one asset (§13.4).
+    attributed_to: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("strategies.id"))
+
+    __table_args__ = (Index("ix_intents_run_time", "run_id", "decided_at"),)
+
+
+class OrderRow(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    intent_id: Mapped[int | None] = mapped_column(ForeignKey("intents.id"))
+    #: Deterministic, which is what makes a retry after a timeout idempotent.
+    client_order_id: Mapped[str] = mapped_column(Text, nullable=False)
+    venue_order_id: Mapped[str | None] = mapped_column(Text)
+    asset: Mapped[str] = mapped_column(String(32), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    order_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    qty: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    limit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    #: Decision time and send time are separate columns because their difference
+    #: is what makes divergence attributable to timing rather than to fills.
+    intent_ts: Mapped[datetime] = mapped_column(TS, nullable=False)
+    sent_ts: Mapped[datetime | None] = mapped_column(TS)
+    ack_ts: Mapped[datetime | None] = mapped_column(TS)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "client_order_id", name="uq_orders_client_id"),
+    )
+
+
+class FillRow(Base):
+    __tablename__ = "fills"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id"), nullable=False)
+    fill_ts: Mapped[datetime] = mapped_column(TS, nullable=False)
+    qty: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    #: Kept alongside the realised price so per-trade slippage is a stored fact
+    #: rather than a reconstruction from a price series recorded elsewhere.
+    expected_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    fee: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    liquidity: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("liquidity IN ('maker','taker')", name="ck_fills_liquidity"),
+    )
+
+
+class PositionRow(Base):
+    __tablename__ = "positions"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    asset: Mapped[str] = mapped_column(String(32), primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(TS, primary_key=True)
+    qty: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    avg_entry: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    unrealised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    realised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    funding_paid: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+
+
+class Balance(Base):
+    __tablename__ = "balances"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(TS, primary_key=True)
+    currency: Mapped[str] = mapped_column(String(16), primary_key=True)
+    equity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    free: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    used_margin: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+
+
+class RiskEvent(Base):
+    """Every time a limit fired. The risk engine writes here; nothing else does."""
+
+    __tablename__ = "risk_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    rule: Mapped[str] = mapped_column(Text, nullable=False)
+    observed: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    limit_value: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('veto','halt','reduce_only','kill')", name="ck_risk_action"),
+        Index("ix_risk_events_run", "run_id", "occurred_at"),
+    )
+
+
+class PositionReconciliation(Base):
+    """Our position view against the venue's (§14.2).
+
+    Distinct from `reconciliations`, which compares *returns*. Conflating the
+    two loses the distinction between "we hold something different from what
+    they hold" and "we earned something different from what we expected".
+    """
+
+    __tablename__ = "position_reconciliations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    asset: Mapped[str] = mapped_column(String(32), nullable=False)
+    qty_internal: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    qty_venue: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    balance_internal: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    balance_venue: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    discrepancy: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    action_taken: Mapped[str | None] = mapped_column(String(16))
+
+
+class Reconciliation(Base):
+    """Daily return divergence between execution modes (§12.5)."""
+
+    __tablename__ = "reconciliations"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    day: Mapped[datetime] = mapped_column(TS, primary_key=True)
+    ref_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    return_observed: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    return_reference: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    divergence_ci_low: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    divergence_ci_high: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    #: {costs, timing, fills, data}. Knowing *that* two series diverge is
+    #: useless; the decomposition is what says which one to fix (§12.5).
+    attribution: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    verdict: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("ref_kind IN ('backtest','simulator')", name="ck_recon_ref"),
+        CheckConstraint("verdict IN ('ok','warn','breach')", name="ck_recon_verdict"),
+    )
+
+
+class CapitalRampEvent(Base):
+    """Tier changes, with the evidence that justified them (§14.5)."""
+
+    __tablename__ = "capital_ramp_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    from_tier: Mapped[str | None] = mapped_column(String(4))
+    to_tier: Mapped[str] = mapped_column(String(4), nullable=False)
+    capital: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    #: True when §14.1's minimum-viable floor raised the tier above its nominal
+    #: fraction. Worth storing: a floored tier is not the tier §14.5 describes.
+    floored: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False)
