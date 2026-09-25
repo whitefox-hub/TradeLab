@@ -5,52 +5,78 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Macro — TradeLab</title>
 <style>
-  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e9ef;
-    --muted:#8b93a4; --accent:#5b9dff; --up:#3fb950; --down:#f85149; --warn:#d29922; }
-  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
-    --bg:#f6f7f9; --panel:#fff; --line:#e1e4e8; --text:#1b1f24; --muted:#656d76; --accent:#0969da; } }
+  :root {
+    --bg:#0d1017; --panel:#171b24; --panel-2:#1e232e; --line:#2f3644;
+    --text:#f0f3f8; --muted:#a7b0c0; --accent:#6ba6ff; --up:#4ac26b;
+    --down:#ff6b63; --warn:#e3a72c;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg:#f7f8fa; --panel:#fff; --panel-2:#f0f2f5; --line:#d6dae1;
+      --text:#12161c; --muted:#4e5766; --accent:#0a62d0;
+    }
+  }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
-    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { padding:16px; border-bottom:1px solid var(--line); display:flex;
-    gap:16px; align-items:baseline; flex-wrap:wrap; }
-  h1 { font-size:18px; margin:0; font-weight:600; }
-  h2 { font-size:14px; margin:28px 0 10px; font-weight:600; }
-  nav a { color:var(--muted); text-decoration:none; margin-right:14px; }
-  nav a.on { color:var(--text); }
-  .who { margin-left:auto; font-size:12px; color:var(--muted); }
-  main { padding:16px; max-width:1100px; margin:0 auto; }
-  table { width:100%; border-collapse:collapse; }
-  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
-  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase;
-    letter-spacing:.04em; }
+    font:16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex;
+    gap:22px; align-items:center; flex-wrap:wrap; }
+  .brand { font-size:17px; font-weight:650; color:var(--text); text-decoration:none; }
+  nav a { color:var(--muted); text-decoration:none; margin-right:18px; font-size:15px;
+    font-weight:520; }
+  nav a:hover { color:var(--text); }
+  nav a.on { color:var(--text); border-bottom:2px solid var(--accent); padding-bottom:3px; }
+  .session { margin-left:auto; display:flex; align-items:center; gap:12px;
+    font-size:14px; color:var(--muted); }
+  h1 { font-size:24px; margin:0 0 4px; font-weight:640; }
+  h2 { font-size:18px; margin:32px 0 12px; font-weight:620; }
+  main { padding:24px 20px 56px; max-width:1180px; margin:0 auto; }
+  table { width:100%; border-collapse:collapse; font-size:15px; }
+  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; font-size:13px; text-transform:uppercase;
+    letter-spacing:.05em; }
+  tbody tr:hover { background:var(--panel); }
   td.num { font-variant-numeric:tabular-nums; text-align:right; }
-  .tag { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--line); }
+  button,input { font:inherit; border-radius:8px; border:1px solid var(--line);
+    padding:8px 12px; background:var(--panel-2); color:var(--text); }
+  input:focus,button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  button { cursor:pointer; font-weight:550; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.ghost { background:transparent; color:var(--muted); padding:6px 12px; }
+  button.ghost:hover { color:var(--text); border-color:var(--muted); }
+  .hint { font-size:14px; color:var(--muted); margin:10px 0 0; max-width:74ch;
+    line-height:1.6; }
+  .err { color:var(--down); font-size:14.5px; margin-top:10px; }
+  .empty { color:var(--muted); padding:16px 0; font-size:15px; }
+  .tag { font-size:12.5px; padding:2px 9px; border-radius:20px;
+    border:1px solid var(--line); color:var(--muted); font-weight:550; }
   .tag.risk { color:var(--warn); border-color:var(--warn); }
-  .tag.ok { color:var(--muted); }
-  .stale { color:var(--down); }
-  button,input { background:var(--panel); color:var(--text); border:1px solid var(--line);
-    border-radius:6px; padding:6px 10px; font:inherit; }
-  button { cursor:pointer; } button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .hint { font-size:12px; color:var(--muted); margin:6px 0 0; }
-  .err { color:var(--down); font-size:13px; margin-top:8px; }
-  .empty { color:var(--muted); padding:12px 0; }
+  .stale { color:var(--down); font-weight:600; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Macro</h1>
-  <nav><a href="/news">News</a><a href="/macro" class="on">Macro</a></nav>
-  <span class="who" id="who"></span>
+  <a href="/trade_lab" class="brand">TradeLab</a>
+  <nav>
+    <a href="/news">News</a>
+    <a href="/macro" class="on">Macro</a>
+  </nav>
+  <div class="session">
+    <span id="who"></span>
+    <button class="ghost" id="bye" hidden>Sign out</button>
+  </div>
 </header>
 
 <main>
   <div id="need-auth" class="empty" hidden>
-    Not signed in. <a href="/news" style="color:var(--accent)">Sign in on the news screen</a>,
-    then come back.
+    Not signed in. <a href="/trade_lab" style="color:var(--accent)">Sign in</a>, then
+    come back.
   </div>
 
   <div id="app" hidden>
+    <h1>Macro</h1>
+
     <h2>Series</h2>
     <table>
       <thead><tr>
@@ -68,7 +94,7 @@
     <table>
       <thead><tr>
         <th>Series</th><th>Scheduled</th><th class="num">Days ahead</th>
-        <th class="num">Consensus</th><th></th>
+        <th class="num">Consensus</th><th>Record</th>
       </tr></thead>
       <tbody id="upcoming"></tbody>
     </table>
@@ -112,7 +138,7 @@ async function load() {
       <td>${s.kind}</td>
       <td>${s.source}</td>
       <td>${s.point_in_time_safe
-            ? '<span class="tag ok">safe</span>'
+            ? '<span class="tag">safe</span>'
             : '<span class="tag risk">revised, no vintages</span>'}</td>
       <td class="num">${s.observations}</td>
       <td class="num ${s.days_old > 45 ? "stale" : ""}">${fmt(s.days_old, 0)}d</td>
@@ -127,9 +153,9 @@ async function load() {
       <td><input size="8" id="c-${u.id}" placeholder="consensus">
           <button data-id="${u.id}">Save</button></td>
     </tr>`).join("")
-    : `<tr><td colspan="5" class="empty">No future releases scheduled. The
-        collector loads observations that have already printed; a forward
-        calendar needs a source that publishes one.</td></tr>`;
+    : `<tr><td colspan="5" class="empty">No future releases scheduled. The collector
+        loads observations that have already printed; a forward calendar needs a
+        source that publishes one, and none of the free feeds does.</td></tr>`;
 
   for (const button of $("upcoming").querySelectorAll("button")) {
     button.onclick = async () => {
@@ -153,10 +179,16 @@ async function load() {
     </tr>`).join("");
 }
 
+$("bye").onclick = async () => {
+  await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
+  location.href = "/trade_lab";
+};
+
 api("/api/me")
   .then((me) => { $("who").textContent = me.email + " · " + me.role;
+                  $("bye").hidden = false;
                   $("app").hidden = false; load(); })
-  .catch(() => { $("need-auth").hidden = false; });
+  .catch(() => { $("need-auth").hidden = false; $("who").textContent = "not signed in"; });
 </script>
 </body>
 </html>
