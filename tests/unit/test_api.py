@@ -111,9 +111,18 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
         for method in getattr(route, "methods", set())
         if method in {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    # Only three writes exist: sign in, sign out, and recording an approval.
+    # The complete set of writes this surface is allowed. §20.1 permits
+    # approvals and lifecycle transitions; §20.5 adds event annotations, which
+    # are an *observation recorded with its time* rather than a computed figure,
+    # and are therefore not an exception to "the application computes nothing".
+    #
+    # This list is meant to fail when a route is added. Extending it is the
+    # moment to ask whether the new write belongs on this surface at all, and
+    # that question is the reason the assertion is written as equality rather
+    # than as a subset.
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
+        ("/api/events/{event_id}/annotations", "POST"),
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
     ], f"a new write route appeared: {writable}"
@@ -238,3 +247,62 @@ def test_the_cooling_off_is_enforced_by_the_database(monkeypatch) -> None:
                                {"a": fresh_gate, "b": aged_gate})
             connection.execute(sa_.text("DELETE FROM users WHERE id = :i"),
                                {"i": operator_id})
+
+
+@pytest.mark.fast
+def test_the_news_screen_is_served_without_a_session(client: TestClient) -> None:
+    """The page itself is not sensitive; the data behind it is.
+
+    Gating the HTML too would mean the sign-in form lives somewhere else, and
+    every endpoint it calls already refuses without a session.
+    """
+    response = client.get("/news")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
+@pytest.mark.fast
+def test_the_screen_calls_only_endpoints_that_exist(client: TestClient) -> None:
+    """A screen referring to a route nobody implemented fails in the browser,
+    where nothing watches. Checked here instead."""
+    import re
+
+    page = client.get("/news").text
+    called = set(re.findall(r'["`](/api/[a-z/]+)', page))
+    known = {route.path for route in client.app.routes}
+    for path in called:
+        assert any(path == p or p.startswith(path) for p in known), f"{path} has no route"
+
+
+@pytest.mark.fast
+def test_the_rating_field_is_bounded_and_signed() -> None:
+    """Sigma, signed, and not an open range. A rating of 400 is a typo, and
+    storing it would move every calibration statistic computed from it."""
+    from tradelab.api.app import AnnotationRequest
+
+    assert AnnotationRequest(kind="judgement", rating=-2.5).rating == -2.5
+    with pytest.raises(ValueError):
+        AnnotationRequest(kind="judgement", rating=400)
+    with pytest.raises(ValueError):
+        AnnotationRequest(kind="judgement", confidence=1.4)
+    with pytest.raises(ValueError):
+        AnnotationRequest(kind="guess")
+
+
+@pytest.mark.fast
+def test_a_judgement_cannot_carry_a_caller_supplied_time() -> None:
+    """The model accepts `available_at` for corrections only; the handler
+    overrides it for judgements, and the database refuses a backdated one
+    regardless. Three layers, because this is the invariant that makes the
+    ratings worth collecting."""
+    from datetime import UTC, datetime, timedelta
+
+    from tradelab.api.app import AnnotationRequest
+
+    body = AnnotationRequest(kind="judgement", rating=1.0,
+                             available_at=datetime.now(UTC) - timedelta(days=5))
+    # The field parses, and the handler ignores it. Asserted on the source so a
+    # future edit that starts honouring it fails here.
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    assert 'datetime.now(UTC) if body.kind == "judgement"' in source
+    assert body.available_at is not None

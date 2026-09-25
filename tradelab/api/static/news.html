@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News — TradeLab</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #e6e9ef;
+    --muted: #8b93a4; --accent: #5b9dff; --up: #3fb950; --down: #f85149;
+    --warn: #d29922;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f7f9; --panel: #fff; --line: #e1e4e8; --text: #1b1f24;
+      --muted: #656d76; --accent: #0969da;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 16px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .mode { margin-left: auto; font-size: 12px; color: var(--muted); }
+  main { padding: 16px; max-width: 1100px; margin: 0 auto; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  button, select, input, textarea {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px; font: inherit; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .04em; }
+  tr.unrated td:first-child { border-left: 2px solid var(--warn); }
+  .assets { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .shape { font-size: 11px; color: var(--muted); }
+  .rating { font-variant-numeric: tabular-nums; }
+  .rating.pos { color: var(--up); } .rating.neg { color: var(--down); }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px; max-width: 460px; width: 92vw; }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  label { display: block; margin: 12px 0 4px; font-size: 12px; color: var(--muted); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .err { color: var(--down); margin-top: 10px; font-size: 13px; }
+  #signin { max-width: 320px; margin: 60px auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>News</h1>
+  <span class="shape" id="count"></span>
+  <span class="mode" id="who"></span>
+</header>
+
+<main>
+  <div id="signin" hidden>
+    <label>Email</label><input id="email" type="email" autocomplete="username">
+    <label>Password</label><input id="password" type="password" autocomplete="current-password">
+    <div class="row" style="margin-top:14px"><button class="primary" id="go">Sign in</button></div>
+    <div class="hint">A single operator. Signing in is the deliberate act before a
+      decision can be recorded, not a check of who you are.</div>
+    <div class="err" id="signin-err"></div>
+  </div>
+
+  <div id="app" hidden>
+    <div class="filters">
+      <select id="type">
+        <option value="">All types</option>
+        <option value="futures_listing">futures_listing</option>
+        <option value="spot_listing">spot_listing</option>
+        <option value="seed_tag">seed_tag</option>
+        <option value="spot_delisting">spot_delisting</option>
+        <option value="futures_delivery">futures_delivery</option>
+      </select>
+      <label style="margin:0;display:flex;align-items:center;gap:6px;color:var(--text)">
+        <input type="checkbox" id="only-unrated" style="width:auto"> Unrated only
+      </label>
+    </div>
+    <table>
+      <thead><tr>
+        <th>When</th><th>Type</th><th>Assets</th><th>Ratings</th><th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+
+<dialog id="rate">
+  <h2 style="margin:0 0 4px;font-size:16px" id="rate-title">Rate event</h2>
+  <div class="shape" id="rate-sub"></div>
+
+  <label>Expected move, in sigma of pre-event volatility</label>
+  <input id="rating" type="number" step="0.25" min="-10" max="10" placeholder="-2.0 … +2.0">
+  <div class="hint">Signed, and in sigma rather than percent: 2% on BTC and 2% on a
+    small cap are different events, 2 sigma is the same event. This is the unit
+    the measured reaction is normalised to, so the rating can be scored against
+    what actually happened.</div>
+
+  <label>Confidence (0–1)</label>
+  <input id="confidence" type="number" step="0.05" min="0" max="1" placeholder="0.60">
+
+  <label>Note</label>
+  <textarea id="note" rows="3" placeholder="What makes this different from the others"></textarea>
+
+  <div class="hint">Recorded as a <strong>judgement</strong>, available from now.
+    It cannot be backdated — a judgement dated before it was written is hindsight
+    with a form around it, and the database refuses it.</div>
+
+  <div class="row" style="margin-top:16px">
+    <button id="cancel">Cancel</button>
+    <button class="primary" id="save">Record</button>
+  </div>
+  <div class="err" id="rate-err"></div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let current = null;
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" }, ...options,
+  });
+  if (response.status === 401) { showSignIn(); throw new Error("unauthenticated"); }
+  if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
+  return response.status === 204 ? null : response.json();
+}
+
+function showSignIn() { $("signin").hidden = false; $("app").hidden = true; }
+
+$("go").onclick = async () => {
+  $("signin-err").textContent = "";
+  try {
+    const me = await api("/api/session", { method: "POST", body: JSON.stringify({
+      email: $("email").value, password: $("password").value }) });
+    $("who").textContent = me.email + " · " + me.role;
+    $("signin").hidden = true; $("app").hidden = false;
+    load();
+  } catch (error) { $("signin-err").textContent = error.message; }
+};
+
+async function load() {
+  const type = $("type").value;
+  const events = await api("/api/events?limit=300" + (type ? "&event_type=" + type : ""));
+  const onlyUnrated = $("only-unrated").checked;
+  const shown = onlyUnrated ? events.filter((e) => !e.rated) : events;
+  $("count").textContent = shown.length + " of " + events.length + " events";
+  $("rows").innerHTML = "";
+  for (const event of shown) {
+    const tr = document.createElement("tr");
+    if (!event.rated) tr.className = "unrated";
+    const when = new Date(event.first_seen_at).toISOString().slice(0, 16).replace("T", " ");
+    tr.innerHTML =
+      `<td>${when}</td>` +
+      `<td>${event.event_type}<div class="shape">${event.shape}</div></td>` +
+      `<td class="assets">${(event.assets || []).join(" ") || "—"}</td>` +
+      `<td class="rating">${event.annotations || ""}</td>`;
+    const cell = document.createElement("td");
+    const button = document.createElement("button");
+    button.textContent = event.rated ? "Add" : "Rate";
+    button.onclick = () => openRating(event);
+    cell.appendChild(button);
+    tr.appendChild(cell);
+    $("rows").appendChild(tr);
+  }
+}
+
+function openRating(event) {
+  current = event;
+  $("rate-title").textContent = event.event_type;
+  $("rate-sub").textContent =
+    (event.assets || []).join(" ") + " · " + event.first_seen_at.slice(0, 10);
+  $("rating").value = ""; $("confidence").value = ""; $("note").value = "";
+  $("rate-err").textContent = "";
+  $("rate").showModal();
+}
+
+$("cancel").onclick = () => $("rate").close();
+
+$("save").onclick = async () => {
+  $("rate-err").textContent = "";
+  const rating = $("rating").value === "" ? null : Number($("rating").value);
+  const confidence = $("confidence").value === "" ? null : Number($("confidence").value);
+  try {
+    await api(`/api/events/${current.id}/annotations`, {
+      method: "POST",
+      body: JSON.stringify({ kind: "judgement", rating, confidence,
+                             note: $("note").value || null }),
+    });
+    $("rate").close();
+    load();
+  } catch (error) { $("rate-err").textContent = error.message; }
+};
+
+$("type").onchange = load;
+$("only-unrated").onchange = load;
+
+api("/api/me")
+  .then((me) => { $("who").textContent = me.email + " · " + me.role;
+                  $("app").hidden = false; load(); })
+  .catch(() => {});
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+"""Promote captured announcements into annotatable events. Plan.md §11.1, §11.7.
+
+The Parquet archive holds what the venue published. `events` holds what the
+system treats as an occurrence — which is not the same thing, and the gap is
+where the judgement lives:
+
+* One announcement can name several assets, and one asset can appear in several
+  announcements. The event is the occurrence, `event_assets` carries the names.
+* `shape` decides which machinery applies later (§11.7), so it is assigned here
+  from the event class rather than left for a model to infer.
+* `code_hash` records which version of the taxonomy produced the row. Today's
+  taxonomy finds a third more listings than yesterday's did, and a corpus that
+  cannot say which parser built it cannot be compared across time.
+
+Idempotent by `article_id`: re-running after a taxonomy change updates nothing
+and inserts only what is new. Corrections are annotations, never edits.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+import polars as pl
+import sqlalchemy as sa
+
+from tradelab.collectors.binance import announcements as taxonomy
+from tradelab.config import Settings
+
+#: Which §11.7 shape each announcement class behaves as.
+#:
+#: A listing is a single impulse. A delisting is announced with a date and the
+#: market prices toward it, so it is a schedule. Nothing in this corpus is a
+#: process yet — regulation is, and it arrives from a different source.
+SHAPES: dict[str, str] = {
+    "futures_listing": "shock",
+    "spot_listing": "shock",
+    "seed_tag": "shock",
+    "futures_delivery": "schedule",
+    "futures_delisting": "schedule",
+    "spot_delisting": "schedule",
+    "margin_change": "shock",
+    "trading_halt": "shock",
+    "trading_resume": "shock",
+}
+
+INGESTED = frozenset(SHAPES)
+
+
+def taxonomy_hash() -> str:
+    """Version the parser, not the file. Two runs of the same patterns agree."""
+    source = Path(taxonomy.__file__).read_bytes()
+    return hashlib.sha256(source).hexdigest()[:16]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path("data/parquet"))
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    rows = pl.read_parquet(
+        args.root / "announcements" / "venue=binance" / "asset=_all" / "**/*.parquet"
+    )
+    rows = rows.with_columns(
+        pl.col("title").map_elements(taxonomy.classify, return_dtype=pl.Utf8).alias("cls"),
+        pl.col("title").map_elements(
+            taxonomy.extract_assets, return_dtype=pl.List(pl.Utf8)).alias("assets"),
+    ).filter(pl.col("cls").is_in(list(INGESTED)))
+
+    code_hash = taxonomy_hash()
+    print(f"{rows.height} classified announcements, taxonomy {code_hash}")
+    if args.dry_run:
+        print(rows.group_by("cls").len().sort("len", descending=True))
+        return 0
+
+    engine = sa.create_engine(Settings().database_url)
+    inserted = skipped = 0
+    with engine.begin() as connection:
+        existing = set(connection.execute(sa.text(
+            "SELECT cluster_method FROM events WHERE cluster_method LIKE 'article:%'"
+        )).scalars().all())
+
+        for record in rows.iter_rows(named=True):
+            key = f"article:{record['article_id']}"
+            if key in existing:
+                skipped += 1
+                continue
+            event_id = uuid.uuid4()
+            connection.execute(sa.text(
+                "INSERT INTO events (id, event_type, shape, first_seen_at, "
+                "latest_revision, cluster_method, code_hash) "
+                "VALUES (:i, :t, :s, :f, 1, :c, :h)"
+            ), {"i": event_id, "t": record["cls"], "s": SHAPES[record["cls"]],
+                # `available_at`, not `event_time`: the modelled subscriber delay
+                # is when this could first have been acted on (§11.2).
+                "f": record["available_at"], "c": key, "h": code_hash})
+
+            for asset in record["assets"] or []:
+                connection.execute(sa.text(
+                    "INSERT INTO event_assets (event_id, revision, asset, "
+                    "expected_direction) VALUES (:e, 1, :a, 0) "
+                    "ON CONFLICT DO NOTHING"
+                ), {"e": event_id, "a": taxonomy.base_ticker(asset)})
+            inserted += 1
+
+    print(f"inserted {inserted}, already present {skipped}")
+    print(f"as of {datetime.now(UTC).isoformat(timespec='seconds')}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

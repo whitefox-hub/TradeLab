@@ -17,13 +17,16 @@ the error this design is most concerned with.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
 from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -46,6 +49,28 @@ WRITABLE = frozenset({"approval", "transition_request"})
 class SignIn(BaseModel):
     email: str
     password: str
+
+
+class AnnotationRequest(BaseModel):
+    """A human's reading of an event. Plan.md §20.5.
+
+    `rating` is in **sigma of the asset's pre-event volatility**, signed. Not
+    percent, not a 1-10 scale. §11.3 normalises every measured reaction to
+    sigma, so a rating in sigma can be scored against what actually happened —
+    which is what makes the annotator's calibration knowable, and an input
+    nobody can score is the one nobody ever corrects.
+
+    `available_at` is accepted only for corrections. A judgement is available
+    when it is made, and the database refuses a backdated one regardless of what
+    is sent here.
+    """
+
+    kind: str = Field(pattern="^(correction|judgement)$")
+    rating: float | None = Field(default=None, ge=-10.0, le=10.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    available_at: datetime | None = None
+    note: str | None = None
 
 
 class ApprovalRequest(BaseModel):
@@ -91,7 +116,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "INSERT INTO audit_log (actor, action, subject_kind, subject_id, payload) "
             "VALUES (:a, :ac, :k, :s, CAST(:p AS jsonb))"
         ), {"a": actor, "ac": action, "k": kind, "s": subject,
-            "p": None if payload is None else __import__("json").dumps(payload)})
+            "p": None if payload is None else json.dumps(payload)})
 
     # -- session ------------------------------------------------------------
 
@@ -235,6 +260,141 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
               str(body.subject_id), {"gate_config_id": str(body.gate_config_id or "")})
         session.commit()
         return {"id": str(approval_id), "recorded_at": datetime.now(UTC).isoformat()}
+
+    # -- events -------------------------------------------------------------
+
+    @app.get("/api/events")
+    def events(who: Operator = operator, session: Session = session_dep,
+               event_type: str | None = None, limit: int = 100) -> list[dict]:
+        """Newest first, with the assets and the annotation count.
+
+        `rated` is what the screen sorts by in practice: the useful work is the
+        events nobody has read yet, and an interface that hides which those are
+        makes the operator find them by memory.
+        """
+        clause = "WHERE e.event_type = :t" if event_type else ""
+        rows = session.execute(sa.text(
+            f"SELECT e.id, e.event_type, e.shape, e.first_seen_at, e.resolved_at, "
+            f"       e.code_hash, "
+            f"       COALESCE(array_agg(DISTINCT a.asset) FILTER "
+            f"                (WHERE a.asset IS NOT NULL), '{{}}') AS assets, "
+            f"       count(DISTINCT n.id) AS annotations "
+            f"FROM events e "
+            f"LEFT JOIN event_assets a ON a.event_id = e.id "
+            f"LEFT JOIN event_annotations n ON n.event_id = e.id "
+            f"{clause} "
+            f"GROUP BY e.id ORDER BY e.first_seen_at DESC LIMIT :l"
+        ), {"t": event_type, "l": min(limit, 500)}).mappings().all()
+        return [dict(r) | {"rated": r["annotations"] > 0} for r in rows]
+
+    @app.get("/api/events/{event_id}")
+    def event_detail(event_id: uuid.UUID, who: Operator = operator,
+                     session: Session = session_dep) -> dict:
+        row = session.execute(sa.text(
+            "SELECT id, event_type, shape, first_seen_at, resolved_at, code_hash "
+            "FROM events WHERE id = :i"), {"i": event_id}).mappings().first()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such event")
+        assets = session.execute(sa.text(
+            "SELECT asset, expected_direction, expected_magnitude, confidence "
+            "FROM event_assets WHERE event_id = :i ORDER BY asset"),
+            {"i": event_id}).mappings().all()
+        annotations = session.execute(sa.text(
+            "SELECT n.id, n.kind, n.rating, n.confidence, n.payload, n.available_at, "
+            "       n.created_at, u.email AS author "
+            "FROM event_annotations n JOIN users u ON u.id = n.author "
+            "WHERE n.event_id = :i ORDER BY n.created_at DESC"),
+            {"i": event_id}).mappings().all()
+        schedule = session.execute(sa.text(
+            "SELECT revision, available_at, scheduled_for, confidence, source "
+            "FROM schedule_revisions WHERE event_id = :i ORDER BY revision"),
+            {"i": event_id}).mappings().all()
+        return {
+            **dict(row),
+            "assets": [dict(a) for a in assets],
+            "annotations": [dict(a) for a in annotations],
+            # Every date the event was ever believed to have, not just the last.
+            # Showing only the current one is how a reader reconstructs a
+            # timeline the market never had (§11.6).
+            "schedule_revisions": [dict(s) for s in schedule],
+        }
+
+    @app.post("/api/events/{event_id}/annotations",
+              status_code=status.HTTP_201_CREATED)
+    def annotate(event_id: uuid.UUID, body: AnnotationRequest,
+                 who: Operator = operator,
+                 session: Session = session_dep) -> dict[str, Any]:
+        """Record a reading. Plan.md §20.5.
+
+        This writes to the registry and therefore belongs to the application
+        rather than to Grafana — a rating needs an actor and a time, which is
+        the whole reason this surface requires a session.
+
+        It does not break §20.1's rule that the application computes nothing: a
+        rating is not a computed metric, it is an **observation recorded with
+        the time it was made**. The system still calculates nothing here. It
+        records what someone asserted and when.
+        """
+        user = session.execute(
+            sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}
+        ).first()
+        if user is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "no such operator")
+
+        exists = session.execute(
+            sa.text("SELECT 1 FROM events WHERE id = :i"), {"i": event_id}).first()
+        if exists is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such event")
+
+        # A judgement is available when it is made. Accepting a client-supplied
+        # time here would let the caller choose; the database refuses a
+        # backdated judgement anyway, so this only decides whether the refusal
+        # is a 400 or a 500.
+        available_at = (
+            datetime.now(UTC) if body.kind == "judgement"
+            else (body.available_at or datetime.now(UTC))
+        )
+        annotation_id = uuid.uuid4()
+        payload = dict(body.payload)
+        if body.note:
+            payload["note"] = body.note
+
+        try:
+            session.execute(sa.text(
+                "INSERT INTO event_annotations (id, event_id, kind, available_at, "
+                "payload, rating, confidence, author) "
+                "VALUES (:i, :e, :k, :a, CAST(:p AS jsonb), :r, :c, :u)"
+            ), {"i": annotation_id, "e": event_id, "k": body.kind,
+                "a": available_at, "p": json.dumps(payload), "r": body.rating,
+                "c": body.confidence, "u": user.id})
+        except sa.exc.DBAPIError as error:
+            session.rollback()
+            message = str(getattr(error, "orig", error))
+            if "ck_judgement_is_not_backdated" in message:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "a judgement cannot be dated before it was written (§20.5)",
+                ) from error
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                message.split("\n")[0]) from error
+
+        audit(session, who.email, f"annotation.{body.kind}", "event", str(event_id),
+              {"rating": body.rating, "confidence": body.confidence})
+        session.commit()
+        return {"id": str(annotation_id), "available_at": available_at.isoformat()}
+
+    # -- the screen ---------------------------------------------------------
+
+    @app.get("/news", include_in_schema=False)
+    def news_screen() -> FileResponse:
+        """Served by the API rather than built as a separate front end, for now.
+
+        §20 describes fifteen screens and a React application; this is the one
+        that writes data the research depends on, so it exists before the build
+        tooling does. The markup calls the same endpoints a React client would,
+        so replacing it later changes the view and not the contract.
+        """
+        return FileResponse(Path(__file__).parent / "static" / "news.html")
 
     @app.get("/api/health")
     def health() -> dict:
