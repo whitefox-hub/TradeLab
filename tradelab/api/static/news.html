@@ -7,11 +7,14 @@
 <link rel="stylesheet" href="/static/app.css">
 <style>
   .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:20px 0 0; }
-  .tabs button { background:transparent; border:none; border-bottom:2px solid transparent;
-    border-radius:0; padding:10px 16px; color:var(--muted); font-weight:550;
-    font-size:15px; }
-  .tabs button:hover { color:var(--text); }
-  .tabs button.on { color:var(--text); border-bottom-color:var(--accent); }
+  /* Scoped to the tabs themselves. Written unscoped first, it stripped the
+     background off the Add button sitting in the same bar and left it looking
+     like a link. */
+  .tabs button.tab { background:transparent; border:none;
+    border-bottom:2px solid transparent; border-radius:0; padding:10px 16px;
+    color:var(--muted); font-weight:550; font-size:15px; }
+  .tabs button.tab:hover { color:var(--text); }
+  .tabs button.tab.on { color:var(--text); border-bottom-color:var(--accent); }
   .tabs .n { font-size:13px; color:var(--muted); margin-left:6px;
     font-variant-numeric:tabular-nums; }
   .tabs .spacer { margin-left:auto; display:flex; align-items:center; padding:6px 0; }
@@ -47,9 +50,9 @@
     <p class="sub">Events, extracted assets, and your ratings in sigma.</p>
 
     <div class="tabs">
-      <button id="tab-active" class="on">Still influencing<span class="n" id="n-active"></span></button>
-      <button id="tab-expired">No longer<span class="n" id="n-expired"></span></button>
-      <button id="tab-all">All<span class="n" id="n-all"></span></button>
+      <button id="tab-active" class="tab on">Still influencing<span class="n" id="n-active"></span></button>
+      <button id="tab-expired" class="tab">No longer<span class="n" id="n-expired"></span></button>
+      <button id="tab-all" class="tab">All<span class="n" id="n-all"></span></button>
       <span class="spacer"><button class="primary" id="add">Add news</button></span>
     </div>
 
@@ -147,6 +150,26 @@
   <div class="err" id="n-err"></div>
 </dialog>
 
+<dialog id="confirm-end">
+  <h2>Mark as no longer information?</h2>
+  <div class="shape" id="end-sub"></div>
+
+  <p class="hint">This records <strong>supersession</strong>: the item did not
+    decay, it stopped being true. A rumour that is denied goes to zero at the
+    denial rather than fading from it, and no clock can know that — which is why
+    it is a button and not a timer.</p>
+
+  <p class="hint">It moves to <em>No longer</em> immediately and there is no undo
+    on this screen. The row stays in the database with the time it was marked, so
+    the record survives the mistake even though the screen cannot reverse it.</p>
+
+  <div class="row">
+    <button id="end-cancel">Cancel</button>
+    <button class="danger" id="end-confirm">Mark as ended</button>
+  </div>
+  <div class="err" id="end-err"></div>
+</dialog>
+
 <script src="/static/app.js"></script>
 <script>
 let current = null;
@@ -197,25 +220,46 @@ function draw() {
 
     const cell = document.createElement("td");
     const rate = document.createElement("button");
+    rate.className = "accent";
     rate.textContent = event.rated ? "Add" : "Rate";
     rate.onclick = () => openRating(event);
     cell.appendChild(rate);
     if (event.active) {
       const end = document.createElement("button");
+      end.className = "danger";
       end.textContent = "Ended";
       end.title = "Mark as no longer information — a rumour that is denied does " +
                   "not decay, it is cancelled";
       end.style.marginLeft = "6px";
-      end.onclick = async () => {
-        await api(`/api/events/${event.id}/resolve`, { method: "POST" });
-        load();
-      };
+      end.onclick = () => openEnding(event);
       cell.appendChild(end);
     }
     tr.appendChild(cell);
     $("rows").appendChild(tr);
   }
 }
+
+let ending = null;
+
+function openEnding(event) {
+  ending = event;
+  $("end-sub").textContent =
+    `${event.event_type} · ${(event.assets || []).join(" ") || "no assets"} · ` +
+    `seen ${event.first_seen_at.slice(0, 10)}`;
+  $("end-err").textContent = "";
+  $("confirm-end").showModal();
+}
+
+$("end-cancel").onclick = () => $("confirm-end").close();
+
+$("end-confirm").onclick = async () => {
+  $("end-err").textContent = "";
+  try {
+    await api(`/api/events/${ending.id}/resolve`, { method: "POST" });
+    $("confirm-end").close();
+    load();
+  } catch (e) { $("end-err").textContent = e.message; }
+};
 
 $("add").onclick = () => {
   $("n-err").textContent = "";

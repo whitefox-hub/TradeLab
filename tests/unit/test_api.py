@@ -533,3 +533,40 @@ def test_the_news_screen_separates_influencing_from_spent(client: TestClient) ->
     # And the assumed horizon is labelled on screen rather than presented as
     # measured.
     assert "expiry_assumed" in page
+
+
+@pytest.mark.fast
+def test_row_actions_carry_their_weight_in_colour(client: TestClient) -> None:
+    """One advances the work, one ends something. A row of identical grey boxes
+    makes the operator read the labels every time, and read them wrong once."""
+    page = client.get("/news").text
+    assert 'rate.className = "accent"' in page
+    assert 'end.className = "danger"' in page
+
+    css = client.get("/static/app.css").text
+    assert "button.accent" in css and "button.danger" in css
+
+
+@pytest.mark.fast
+def test_the_tab_styling_does_not_capture_every_button_in_the_bar(
+    client: TestClient,
+) -> None:
+    """Written unscoped, it stripped the background off the Add button sitting
+    in the same bar and left it looking like a link."""
+    page = client.get("/news").text
+    assert ".tabs button.tab {" in page
+    assert ".tabs button {" not in page, "the rule is unscoped again"
+    # And the Add button keeps its own class rather than inheriting the tabs'.
+    assert '<button class="primary" id="add">' in page
+
+
+@pytest.mark.fast
+def test_ending_an_item_asks_first(client: TestClient) -> None:
+    """It moves the row to another tab and there is no undo on the screen, so it
+    is not a single click."""
+    page = client.get("/news").text
+    assert 'id="confirm-end"' in page
+    assert "openEnding(event)" in page
+    # The dialog says what the action means, not just "are you sure".
+    assert "supersession" in page.lower()
+    assert "no undo" in page.lower()

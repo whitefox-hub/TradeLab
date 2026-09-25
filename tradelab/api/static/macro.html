@@ -126,7 +126,7 @@ async function load() {
       <td class="num">${fmt(u.days_ahead, 1)}</td>
       <td class="num">${fmt(u.consensus)}</td>
       <td><input size="8" id="c-${u.id}" placeholder="consensus">
-          <button data-id="${u.id}">Save</button></td>
+          <button class="accent" data-id="${u.id}">Save</button></td>
     </tr>`).join("")
     : `<tr><td colspan="5" class="empty">No future releases scheduled. The collector
         loads observations that have already printed; a forward calendar needs a

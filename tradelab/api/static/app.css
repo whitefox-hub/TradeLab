@@ -91,6 +91,15 @@ button { cursor:pointer; font-weight:550; }
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
 button.ghost { background:transparent; color:var(--muted); padding:6px 12px; }
 button.ghost:hover { color:var(--text); border-color:var(--muted); }
+/* Actions carry their weight in colour: one advances the work, one ends
+   something. A row of identical grey boxes makes the operator read the labels
+   every time, and read them wrong once. */
+button.accent { background:transparent; color:var(--accent); border-color:var(--accent);
+  font-weight:600; }
+button.accent:hover { background:color-mix(in srgb, var(--accent) 15%, transparent); }
+button.danger { background:transparent; color:var(--down); border-color:var(--down);
+  font-weight:600; }
+button.danger:hover { background:color-mix(in srgb, var(--down) 15%, transparent); }
 label.inline { display:flex; align-items:center; gap:8px; color:var(--text);
   font-size:15px; }
 label.inline input { width:auto; }
