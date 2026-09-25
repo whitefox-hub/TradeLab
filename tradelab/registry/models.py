@@ -626,3 +626,71 @@ class CapitalRampEvent(Base):
     floored: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+
+
+# --------------------------------------------------------------------------
+# Operator interface. Plan.md §20.
+# --------------------------------------------------------------------------
+
+
+class Approval(Base):
+    """A recorded decision. Plan.md §20.1, §20.3.
+
+    The interface writes here and to `lifecycle_transitions`, and nowhere else.
+    Everything else it shows was computed by a worker and persisted, because a
+    figure that exists only on screen is a figure nobody can reproduce.
+
+    `gate_config_id` is the load-bearing column. With one operator there is no
+    separation of duties: nothing stops lowering a threshold and approving under
+    it three minutes later, and that loop is the characteristic failure of a solo
+    laboratory. So the separation becomes temporal — an approval may not cite a
+    gate config younger than 24 hours — and it is enforced here rather than in
+    the interface, so it cannot be clicked past.
+    """
+
+    __tablename__ = "approvals"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    subject_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    approved_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    decision: Mapped[str] = mapped_column(String(8), nullable=False)
+    #: Which bar this approval relies on. Nullable only for `gate_change`
+    #: approvals, which are approving the bar itself rather than acting on one.
+    gate_config_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gate_configs.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "subject_kind IN ('strategy','capital_tier','gate_change')",
+            name="ck_approvals_subject"),
+        CheckConstraint("decision IN ('approve','reject')", name="ck_approvals_decision"),
+        # A gate change is approving the bar; everything else is acting on one
+        # and must say which.
+        CheckConstraint(
+            "subject_kind = 'gate_change' OR gate_config_id IS NOT NULL",
+            name="ck_approvals_cites_a_gate"),
+        Index("ix_approvals_subject", "subject_kind", "subject_id"),
+    )
+
+
+class AuditLog(Base):
+    """Actor, action, subject and time for every write. Plan.md §20.3.
+
+    What makes "threshold lowered 14:02, approval 14:05" legible six months
+    later. Append-only by convention and by the absence of any update path.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSONB)
+    occurred_at: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("ix_audit_time", "occurred_at"),)
