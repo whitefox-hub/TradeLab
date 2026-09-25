@@ -59,7 +59,12 @@ body {
 .side .foot .email { color:var(--text); font-weight:550; word-break:break-all;
   display:block; margin-bottom:8px; }
 
-.content { min-width:0; padding:28px 28px 64px; max-width:1180px; }
+/* Full width. The cap was there to keep prose readable, but these screens are
+   mostly tables, and a table that stops short of the window wastes the column
+   the headline needs. Prose keeps its own limit through `.hint` and `.prose`,
+   which is where the constraint belongs. */
+.content { min-width:0; padding:28px 28px 64px; width:100%; }
+.prose { max-width:74ch; }
 
 @media (max-width: 760px) {
   .layout { grid-template-columns:1fr; }
@@ -109,6 +114,11 @@ label.inline input { width:auto; }
 table { width:100%; border-collapse:collapse; font-size:15px; }
 th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line);
   vertical-align:top; }
+/* The action column sized itself from its contents and wrapped the buttons onto
+   separate lines, which reads as two rows of one control rather than one row of
+   two. */
+td.actions { white-space:nowrap; text-align:right; }
+td.actions button + button { margin-left:8px; }
 th { color:var(--muted); font-weight:600; font-size:13px; text-transform:uppercase;
   letter-spacing:.05em; }
 tbody tr:hover { background:var(--panel); }

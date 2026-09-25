@@ -692,3 +692,23 @@ def test_the_table_shows_the_headline_and_escapes_it(client: TestClient) -> None
     assert "event.headline" in page
     assert "const escape = (text)" in page
     assert "escape(event.headline)" in page
+
+
+@pytest.mark.fast
+def test_the_content_area_is_not_capped(client: TestClient) -> None:
+    """A table that stops short of the window wastes the column the headline
+    needs. Prose keeps its own limit through `.hint`, which is where a reading
+    width belongs — on the text, not on the layout."""
+    css = client.get("/static/app.css").text
+    assert ".content { min-width:0; padding:28px 28px 64px; width:100%; }" in css
+    assert "max-width:1180px" not in css
+    assert ".hint { font-size:14px; color:var(--muted); margin:10px 0 0; max-width:74ch;" in css
+
+
+@pytest.mark.fast
+def test_the_row_actions_sit_on_one_line(client: TestClient) -> None:
+    """The column sized itself from its contents and wrapped the two buttons
+    onto separate lines, which reads as two rows of one control."""
+    css = client.get("/static/app.css").text
+    assert "td.actions { white-space:nowrap;" in css
+    assert 'cell.className = "actions";' in client.get("/news").text

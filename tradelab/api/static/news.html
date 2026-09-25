@@ -27,6 +27,14 @@
   .ends.decay { color:var(--warn); border-color:var(--warn); }
   .ends.resolved { color:var(--accent); border-color:var(--accent); }
   .ends.superseded { color:var(--down); border-color:var(--down); }
+  /* The headline takes what the fixed columns leave. Without a hint the browser
+     shares width by content, and a long asset list can squeeze the one column
+     the operator is actually reading. */
+  th:nth-child(1), td:nth-child(1) { width:1%; white-space:nowrap; }
+  th:nth-child(3), td:nth-child(3) { width:1%; white-space:nowrap; }
+  th:nth-child(4), td:nth-child(4) { width:1%; }
+  th:nth-child(5), td:nth-child(5) { width:22%; }
+  th:nth-child(6), td:nth-child(6) { width:1%; text-align:right; }
   .headline { font-weight:550; line-height:1.4; }
   .meta { font-size:13px; color:var(--muted); margin-top:3px; }
   .dir { font-weight:700; font-size:15px; white-space:nowrap; }
@@ -293,6 +301,7 @@ function draw() {
       `<td class="num">${event.annotations || ""}</td>`;
 
     const cell = document.createElement("td");
+    cell.className = "actions";
     if (event.active) {
       // Rating belongs only here. A judgement recorded after an item stopped
       // influencing can never be scored against a forward reaction, so it
@@ -308,7 +317,6 @@ function draw() {
       end.textContent = "Ended";
       end.title = "Mark as no longer information — a rumour that is denied does " +
                   "not decay, it is cancelled";
-      end.style.marginLeft = "6px";
       end.onclick = () => openEnding(event);
       cell.appendChild(end);
     } else if (event.reopenable) {
