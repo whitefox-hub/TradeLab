@@ -164,47 +164,57 @@ def test_subthreshold_edge_is_inconclusive_not_pass() -> None:
 
 @pytest.mark.slow
 def test_selection_never_sees_the_evaluation_window() -> None:
-    """Configuration is chosen on training data, and only then evaluated.
+    """Configurations are scored on training bars only. Plan.md §8.7.
 
     This failed silently for several days while a comment above the offending
     line asserted the opposite — the worst shape a defect can take, because a
     reader who checks the documentation concludes the invariant holds.
 
-    The test constructs data where the two windows disagree: a signal that works
-    in the first half and reverses in the second. A selector peeking at the
-    evaluation window picks the configuration that wins there; one restricted to
-    training cannot.
+    Stated as an identity rather than as a symptom: replace the held-out window
+    with an unrelated price path, leave the training bars untouched, and every
+    screening score must come back bit-identical. Scored on the full series,
+    all of them move.
+
+    The previous version of this test asserted that out-of-sample Sharpe stayed
+    below 3.0 on data whose relationship reversed halfway. It never once
+    exercised the defect. The study produced 70 out-of-sample trades, under the
+    gate's minimum of 100, so the gate returned before writing
+    `sharpe_annualised` and the assertion reduced to `0 < 3.0`. Putting the leak
+    back confirmed it: the test still passed.
     """
+    import numpy as np
+
     from tradelab.orchestration.study import StudySpec, run_study
-    from tradelab.validation.synthetic import make_edge
+    from tradelab.validation.synthetic import make_noise
 
-    bars, _ = make_edge(n=20_000, seed=23, edge_sharpe=2.5, signal_period=100)
-    # Reverse the second half, so what worked in training is wrong in the test
-    # window and vice versa.
-    close = bars["close"].to_numpy().astype(np.float64)
-    half = len(close) // 2
-    flipped = close.copy()
-    flipped[half:] = close[half] ** 2 / close[half:]
-    bars = bars.with_columns(
-        close=pl.Series(flipped),
-        high=pl.Series(flipped * 1.001),
-        low=pl.Series(flipped * 0.999),
-        open=pl.Series(np.concatenate([[flipped[0]], flipped[:-1]])),
+    oos_fraction = 0.3
+    base = make_noise(n=6_000, seed=41)
+    close = base["close"].to_numpy().astype(np.float64)
+    split = int(len(close) * (1 - oos_fraction))
+
+    other = make_noise(n=6_000, seed=999)["close"].to_numpy().astype(np.float64)
+    alt = close.copy()
+    alt[split:] = close[split - 1] * other[split:] / other[split - 1]
+    perturbed = base.with_columns(
+        close=pl.Series(alt), high=pl.Series(alt * 1.001), low=pl.Series(alt * 0.999),
+        open=pl.Series(np.concatenate([[alt[0]], alt[:-1]])),
     )
+    assert np.array_equal(close[:split], alt[:split]), "training bars must be identical"
 
-    spec = StudySpec(
-        name="leak-probe", params=tuple(range(10, 40, 4)),
-        entries=tuple(np.arange(55.0, 75.0, 2.0)), min_trades=30,
-        # Verifying the selection boundary, not power. Waived explicitly, which
-        # is the distinction §8.8's check exists to force.
-        require_power=False,
-    )
-    result = run_study(bars, spec)
+    def scores(frame):
+        spec = StudySpec(
+            name="leak-probe", params=tuple(range(10, 40, 4)),
+            entries=tuple(np.arange(55.0, 75.0, 4.0)), min_trades=15,
+            oos_fraction=oos_fraction,
+            # Verifying the selection boundary, not power. Waived explicitly,
+            # which is the distinction §8.8's check exists to force.
+            require_power=False,
+        )
+        return np.array([r["sharpe"] for r in run_study(frame, spec).tier_a_rows])
 
-    # The honest outcome on data whose relationship reverses is a poor
-    # out-of-sample figure. A selector with the test set in hand would have
-    # found the configuration that survives the reversal and reported it well.
-    assert result.gate.metrics.get("sharpe_annualised", 0) < 3.0, (
-        "the out-of-sample figure is implausibly good on data whose relationship "
-        "reverses halfway; selection is seeing the evaluation window"
+    a, b = scores(base), scores(perturbed)
+    moved = int(np.sum(a != b))
+    assert moved == 0, (
+        f"{moved} of {len(a)} screening scores changed when only the held-out "
+        f"window was altered; selection is reading the evaluation window"
     )

@@ -20,39 +20,77 @@ import pytest
 from tradelab.engines.tier_a.costs import BINANCE_RETAIL, CostModel
 from tradelab.engines.tier_a.engine import run
 from tradelab.orchestration.study import StudySpec, run_study
-from tradelab.validation.synthetic import make_edge, make_noise
+from tradelab.validation.synthetic import make_noise
 
 
-def _reversing(n: int = 12_000, seed: int = 23) -> pl.DataFrame:
-    """Data whose relationship inverts halfway.
+def _same_training_different_future(
+    n: int = 6_000, seed: int = 41, other_seed: int = 999, oos_fraction: float = 0.3,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Two frames with byte-identical training bars and unrelated held-out bars.
 
-    A selector peeking at the evaluation window finds what survives the
-    inversion; one restricted to training cannot. Without the inversion the test
-    passes with the leak present, which is exactly what happened.
+    The held-out window is replaced by an independent path spliced on at the
+    same price, so nothing about the training window changes — not one float.
     """
-    bars, _ = make_edge(n=n, seed=seed, edge_sharpe=2.5, signal_period=100)
-    close = bars["close"].to_numpy().astype(np.float64)
-    half = len(close) // 2
-    flipped = close.copy()
-    flipped[half:] = close[half] ** 2 / close[half:]
-    return bars.with_columns(
-        close=pl.Series(flipped),
-        high=pl.Series(flipped * 1.001),
-        low=pl.Series(flipped * 0.999),
-        open=pl.Series(np.concatenate([[flipped[0]], flipped[:-1]])),
+    base = make_noise(n=n, seed=seed)
+    close = base["close"].to_numpy().astype(np.float64)
+    split = int(len(close) * (1 - oos_fraction))
+
+    other = make_noise(n=n, seed=other_seed)["close"].to_numpy().astype(np.float64)
+    alt = close.copy()
+    alt[split:] = close[split - 1] * other[split:] / other[split - 1]
+    perturbed = base.with_columns(
+        close=pl.Series(alt), high=pl.Series(alt * 1.001), low=pl.Series(alt * 0.999),
+        open=pl.Series(np.concatenate([[alt[0]], alt[:-1]])),
     )
+    assert np.array_equal(close[:split], alt[:split])  # the premise of the test
+    return base, perturbed
 
 
 @pytest.mark.medium
-def test_selection_cannot_see_the_evaluation_window() -> None:
-    """The defect that motivated this file."""
-    spec = StudySpec(name="probe", params=tuple(range(10, 40, 6)),
-                     entries=tuple(np.arange(55.0, 75.0, 4.0)), min_trades=20,
-                     require_power=False)
-    result = run_study(_reversing(), spec)
-    assert result.gate.metrics.get("sharpe_annualised", 0.0) < 3.0, (
-        "implausibly good out-of-sample figure on data whose relationship "
-        "reverses; selection is seeing the evaluation window"
+def test_selection_scores_do_not_move_when_only_the_future_changes() -> None:
+    """The ordering invariant stated directly, rather than through a proxy.
+
+    If the screening loop scores configurations on the training window, then
+    replacing the held-out window with unrelated data cannot change a single
+    score. If it scores the full series, every score moves. There is no
+    threshold to choose and no fixture behaviour to reason about: the expected
+    difference is exactly zero.
+
+    This replaced a test that asserted a poor out-of-sample Sharpe on data whose
+    relationship reversed halfway. That test never worked. Reinstating the leak
+    left it passing, for two compounding reasons:
+
+      * it read `gate.metrics.get("sharpe_annualised", 0.0)`, and the gate
+        returns early below its trade minimum without ever writing that key, so
+        the comparison was `0.0 < 3.0`;
+      * the fixture did not reverse anything a threshold rule can feel. An
+        inverted price path is the same cycle at a different phase, and RSI
+        finds it either way — measured out-of-sample Sharpe was 53.1 with the
+        leak fixed and 53.3 with it present.
+
+    Selection bias is also harder to see downstream than it looks, because §8.5
+    promotes the neighbourhood median rather than the peak. Under the leak the
+    chosen parameters here are *unchanged* while all forty scores move. Any test
+    watching the winner, or the winner's performance, would still be blind.
+    """
+    from tradelab.orchestration.study import run_study
+
+    base, perturbed = _same_training_different_future()
+    spec = dict(name="inv", params=tuple(range(10, 40, 4)),
+                entries=tuple(np.arange(55.0, 75.0, 4.0)),
+                min_trades=15, oos_fraction=0.3, require_power=False)
+
+    scores = [
+        np.array([row["sharpe"] for row in run_study(frame, StudySpec(**spec)).tier_a_rows])
+        for frame in (base, perturbed)
+    ]
+    moved = int(np.sum(scores[0] != scores[1]))
+    assert len(scores[0]) == 40, "the grid changed; the counts below are stale"
+    assert moved == 0, (
+        f"{moved} of {len(scores[0])} selection scores changed when only the "
+        f"held-out window was altered (largest move "
+        f"{np.max(np.abs(scores[0] - scores[1])):.4f}). Selection is reading the "
+        f"evaluation window."
     )
 
 

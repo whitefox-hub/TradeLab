@@ -99,6 +99,13 @@ class StudyResult:
     best: BacktestResult | None
     best_params: dict
     gate: GateEvaluation
+    # The held-out evaluation, kept rather than discarded into the gate. The
+    # gate short-circuits below the trade minimum and its metrics dict then has
+    # no `sharpe_annualised` at all, so anything reading the out-of-sample
+    # figure through `gate.metrics.get(...)` silently reads its own default.
+    # Two leak regression tests did exactly that and passed with the leak
+    # reinstated, which is a worse state than having no test.
+    oos: BacktestResult | None = None
     stability: dict = field(default_factory=dict)
     robustness: dict = field(default_factory=dict)
     pbo: float | None = None
@@ -364,7 +371,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
 
     return StudyResult(
         spec=spec, executed_trials=executed, n_bars=len(close), best=best,
-        best_params=stability.peak_params, gate=gate, pbo=pbo.pbo,
+        best_params=stability.peak_params, gate=gate, oos=oos_result, pbo=pbo.pbo,
         stability={
             "peak_score": stability.peak_score,
             "robust_score": stability.robust_score,
