@@ -628,6 +628,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         "history_years": "How many years of history a study may draw on.",
         "rebalance_minutes": "How often a running strategy re-evaluates.",
         "alert_drawdown_pct": "Drawdown at which an alert is raised.",
+        "event_retention_days": "How far back the event corpus is kept. Lowering "
+                                "it removes older events on the next prune; "
+                                "raising it rebuilds them from the announcement "
+                                "archive, which is the source of truth.",
     }
 
     LOCKED = {

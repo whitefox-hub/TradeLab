@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -29,6 +29,7 @@ import sqlalchemy as sa
 
 from tradelab.collectors.binance import announcements as taxonomy
 from tradelab.config import Settings
+from tradelab.news.retention import retention_days
 
 #: Which §11.7 shape each announcement class behaves as.
 #:
@@ -60,6 +61,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path("data/parquet"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--retention-days", type=int, default=None,
+                        help="Override the stored window. Raising it rebuilds "
+                             "events a prune removed.")
     args = parser.parse_args()
 
     rows = pl.read_parquet(
@@ -71,13 +75,23 @@ def main() -> int:
             taxonomy.extract_assets, return_dtype=pl.List(pl.Utf8)).alias("assets"),
     ).filter(pl.col("cls").is_in(list(INGESTED)))
 
+    # The same window `prune_events.py` deletes by. Without this the prune
+    # undoes itself on the next run, which is worse than not pruning because it
+    # looks done.
+    engine = sa.create_engine(Settings().database_url)
+    with engine.connect() as connection:
+        days = args.retention_days or retention_days(connection)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    before = rows.height
+    rows = rows.filter(pl.col("available_at") >= cutoff)
+    print(f"retention {days}d: {before - rows.height} older announcements skipped")
+
     code_hash = taxonomy_hash()
     print(f"{rows.height} classified announcements, taxonomy {code_hash}")
     if args.dry_run:
         print(rows.group_by("cls").len().sort("len", descending=True))
         return 0
 
-    engine = sa.create_engine(Settings().database_url)
     inserted = skipped = 0
     with engine.begin() as connection:
         existing = set(connection.execute(sa.text(

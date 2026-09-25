@@ -99,6 +99,21 @@ def _rebalance_minutes(value: dict) -> None:
         )
 
 
+def _event_retention(value: dict) -> None:
+    days = value.get("days")
+    if isinstance(days, bool) or not isinstance(days, int):
+        raise Invalid(f"days must be a whole number, got {days!r}")
+    if days < 30:
+        raise Invalid(
+            "days must be at least 30. Below a month the corpus cannot carry an "
+            "event class through a full cycle, and §11.5 needs the history to fit "
+            "an impulse response on."
+        )
+    ceiling = max_history_years() * 366
+    if days > ceiling:
+        raise Invalid(f"days must be at most {ceiling}, the archive's own span")
+
+
 def _alert_drawdown(value: dict) -> None:
     pct = value.get("pct")
     if isinstance(pct, bool) or not isinstance(pct, int | float):
@@ -121,6 +136,8 @@ RULES: dict[str, Rule] = {
                               "whole minutes, 60 to 10080"),
     "alert_drawdown_pct": Rule(("pct",), _alert_drawdown,
                                "a percentage above 1 and at most 100"),
+    "event_retention_days": Rule(("days",), _event_retention,
+                                 "whole days, 30 to the archive's span"),
 }
 
 
