@@ -1,0 +1,200 @@
+"""Clustering and allocation across strategies. Plan.md §13.
+
+Two rules shape this module and both are refusals:
+
+* Naive mean-variance is rejected. It is unstable when expected returns are
+  estimated rather than known, and it concentrates capital into whichever
+  strategy holds the luckiest estimate — estimation error is the dominant error
+  here, so the allocator must be robust to it rather than optimal under it.
+* The trial counter does not stop at the strategy boundary (§13.3). A portfolio
+  assembled from the best of N validated strategies carries exactly the
+  selection bias §8.3 exists to correct, so a marginal strategy clears a
+  *higher* bar than the first did, not a lower one.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import squareform
+
+
+@dataclass(frozen=True, slots=True)
+class Clustering:
+    labels: dict[str, int]
+    n_obs: int
+    #: Correlations converge toward 1 under stress, so the number that matters
+    #: for risk is the crisis-regime one, never the average (§13.1).
+    regime: str = "all"
+
+    @property
+    def reliable(self) -> bool:
+        """A correlation estimated on 20 overlapping trades is noise (§13.1)."""
+        return self.n_obs >= 60
+
+    def clusters(self) -> dict[int, list[str]]:
+        out: dict[int, list[str]] = {}
+        for name, label in self.labels.items():
+            out.setdefault(label, []).append(name)
+        return {k: sorted(v) for k, v in sorted(out.items())}
+
+
+def cluster_strategies(
+    returns: dict[str, np.ndarray], threshold: float = 0.5, regime: str = "all",
+) -> Clustering:
+    """Hierarchical clustering on correlation distance. A cluster is one bet.
+
+    Measured on realised return series, never on parameters, features or asset
+    overlap: two strategies can share no features and be perfectly correlated,
+    and two can share every feature and be uncorrelated (§13.1).
+    """
+    names = sorted(returns)
+    if len(names) < 2:
+        return Clustering({n: 0 for n in names}, len(next(iter(returns.values()), [])), regime)
+
+    matrix = np.array([returns[n] for n in names])
+    corr = np.corrcoef(matrix)
+    corr = np.nan_to_num(corr, nan=0.0)
+    np.fill_diagonal(corr, 1.0)
+    distance = np.sqrt(np.clip(0.5 * (1 - corr), 0, None))
+    np.fill_diagonal(distance, 0.0)
+    # Enforce exact symmetry: squareform rejects a matrix that is asymmetric by
+    # floating-point noise, which corrcoef routinely produces.
+    distance = (distance + distance.T) / 2
+
+    labels = fcluster(linkage(squareform(distance, checks=False), method="average"),
+                      t=threshold, criterion="distance")
+    return Clustering(
+        {name: int(label) for name, label in zip(names, labels, strict=True)},
+        n_obs=matrix.shape[1], regime=regime,
+    )
+
+
+def inverse_variance_weights(returns: dict[str, np.ndarray]) -> dict[str, float]:
+    variances = {n: float(np.var(r, ddof=1)) for n, r in returns.items()}
+    inverse = {n: (1.0 / v if v > 0 else 0.0) for n, v in variances.items()}
+    total = sum(inverse.values())
+    if total == 0:
+        return dict.fromkeys(returns, 1.0 / len(returns))
+    return {n: w / total for n, w in inverse.items()}
+
+
+def allocate(
+    returns: dict[str, np.ndarray], clustering: Clustering,
+    max_per_strategy: float = 0.4, max_per_cluster: float = 0.6,
+) -> dict[str, float]:
+    """Capital across clusters first, then within them (§13.2).
+
+    Equal risk contribution between clusters, inverse variance inside each. The
+    caps are applied afterwards and are independent of what the allocator wants,
+    which is the point of having them: an optimiser that can be overridden only
+    when it agrees with you is not a constraint.
+    """
+    clusters = clustering.clusters()
+    if not clusters:
+        return {}
+
+    # Between clusters: inverse variance of the cluster's equal-weight return,
+    # so a cluster of five correlated strategies does not get five shares.
+    cluster_returns = {
+        label: np.mean([returns[n] for n in members], axis=0)
+        for label, members in clusters.items()
+    }
+    cluster_weights = inverse_variance_weights(cluster_returns)
+
+    weights: dict[str, float] = {}
+    for label, members in clusters.items():
+        within = inverse_variance_weights({n: returns[n] for n in members})
+        for name in members:
+            weights[name] = cluster_weights[label] * within[name]
+
+    return _apply_caps(weights, clusters, max_per_strategy, max_per_cluster)
+
+
+def _apply_caps(
+    weights: dict[str, float], clusters: dict[int, list[str]],
+    max_per_strategy: float, max_per_cluster: float,
+) -> dict[str, float]:
+    """Cap, then redistribute the freed mass to whoever is not yet capped.
+
+    Normalising *after* capping would undo it — the capped entry is scaled back
+    up along with everyone else, and the cap becomes decoration. So the excess
+    is handed to the uncapped instead, and the loop repeats because a
+    redistribution can push a second entry over its own cap.
+
+    When every entry is capped the weights sum to less than one, and that is the
+    correct answer rather than a bug to normalise away: caps that force
+    under-allocation mean the remainder is held as cash.
+    """
+    total = sum(weights.values())
+    capped = {n: w / total for n, w in weights.items()} if total else dict(weights)
+
+    fixed: set[str] = set()
+    for _ in range(len(capped) + 1):
+        over = [n for n, w in capped.items() if w > max_per_strategy + 1e-12
+                and n not in fixed]
+        if not over:
+            break
+        freed = sum(capped[n] - max_per_strategy for n in over)
+        for name in over:
+            capped[name] = max_per_strategy
+            fixed.add(name)
+        movable = {n: w for n, w in capped.items() if n not in fixed}
+        headroom = sum(movable.values())
+        if not movable or headroom <= 0:
+            break  # nothing left to receive it; the remainder stays unallocated
+        for name, weight in movable.items():
+            capped[name] = weight + freed * weight / headroom
+
+    # Cluster caps last, scaling the cluster down without giving the excess to
+    # anyone: a cluster cap exists to limit one bet, not to move it elsewhere.
+    for members in clusters.values():
+        cluster_total = sum(capped[n] for n in members)
+        if cluster_total > max_per_cluster:
+            scale = max_per_cluster / cluster_total
+            for name in members:
+                capped[name] *= scale
+    return capped
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioTrials:
+    """§13.3: every promotion is a trial at the portfolio level."""
+
+    promotions: int
+    performance_driven_reallocations: int
+
+    @property
+    def total(self) -> int:
+        return self.promotions + self.performance_driven_reallocations
+
+    def deflated_sharpe(self, portfolio_sharpe: float, n_obs: int) -> float:
+        """Portfolio Sharpe deflated by the portfolio's own trial count.
+
+        Reporting an undeflated portfolio Sharpe is the same error as reporting
+        an undeflated strategy Sharpe, one level up and usually unnoticed because
+        the strategies were each deflated already.
+        """
+        from tradelab.validation.deflated import SharpeStats, deflated_sharpe
+
+        stats = SharpeStats(sharpe=portfolio_sharpe, n_obs=n_obs, skew=0.0, kurtosis=3.0)
+        return deflated_sharpe(stats, trials=max(self.total, 1))
+
+
+def joint_capacity(individual: dict[str, float], overlap: dict[str, float]) -> float:
+    """Portfolio capacity, which is not the sum of the parts (§13.5).
+
+    Two strategies trading the same asset draw on the same liquidity and their
+    combined flow competes with itself. `overlap` gives each strategy's share of
+    flow in contested names; capacity is reduced by that contested portion
+    rather than added across strategies.
+    """
+    if not individual:
+        return 0.0
+    uncontested = sum(c * (1 - overlap.get(n, 0.0)) for n, c in individual.items())
+    contested = min(
+        (c for n, c in individual.items() if overlap.get(n, 0.0) > 0), default=0.0
+    )
+    return uncontested + contested
