@@ -79,6 +79,83 @@ Stated plainly, because the number matters more than the ambition.
 
 This section is the honest answer to "I want profitability": the fastest route to *profit* is not the fastest route to *evidence*, and without evidence there is no profit, only variance that has not revealed itself yet.
 
+### 0.4a What the evidence horizon actually permits
+
+Added after three inconclusive campaigns, all inconclusive for the same reason.
+This section governs §0.4 and should be read before it.
+
+**The smallest annualised Sharpe a study can resolve depends on the calendar
+span of the data, and not at all on how many bets it contains.**
+
+Measured with `scripts/triage_hypotheses.py` on this system's own power module,
+holding the span at 6.8 years and varying the betting frequency:
+
+| Observations | Bets per year | Resolvable Sharpe |
+|---|---|---|
+| 82 | 12 | 0.637 |
+| 530 | 78 | 0.632 |
+| 2,482 | 365 | 0.631 |
+| 59,568 | 8,760 | 0.631 |
+
+A 726-fold increase in sample size moves the detection threshold by less than
+one percent. Holding frequency fixed and varying the span instead:
+
+| Years | Resolvable Sharpe |
+|---|---|
+| 1 | 1.656 |
+| 3 | 0.952 |
+| 7 | 0.622 |
+| 15 | 0.425 |
+| 30 | 0.300 |
+
+The rule is **resolvable annualised Sharpe ≈ 1.65 / √years** at one trial. It is
+not an artefact of this implementation; it is the standard result that the
+t-statistic of an annualised Sharpe scales with the length of the record and not
+with sampling frequency, because the estimate's noise and the annualisation
+factor scale together.
+
+**What this invalidates.** §0.4 ranked its hypotheses partly on how many
+independent events each could produce, and said of new listings that a fresh
+cross-section "raises statistical power by construction". For *annualised
+Sharpe* that is false. Sequential events do not lower the bar. PREREG-001 and
+PREREG-002 were both spent discovering this the expensive way.
+
+**What this leaves.** With roughly seven years of perpetual history, no single
+pre-registered hypothesis can resolve an annualised Sharpe below about 0.62.
+Three responses, and only three:
+
+1. **Wait.** The threshold falls as 1/√years and nothing else moves it. Reaching
+   0.42 means fifteen years of history.
+2. **Search less.** Already at one trial, which is the floor. Twelve trials would
+   put the threshold at 1.19.
+3. **Raise the signal instead of lowering the bar.** This is the only lever that
+   acts quickly, and it is the one §0.4 should have been ordered by.
+
+**Breadth raises the achievable Sharpe; it does not lower the detectable one.**
+`IR ≈ IC × √BR` counts bets held *at the same time*, not one after another. A
+strategy holding fifty weakly-correlated positions concurrently multiplies its
+information ratio by about seven against a single-name version of the same
+signal, and its track record still spans the same seven years. That is how a
+real effect gets above 0.62 — not by finding more events, but by holding more of
+them simultaneously.
+
+So the operative question for every hypothesis is **how many uncorrelated
+positions can be open at once**, and §0.4's ordering is corrected accordingly:
+
+| Hypothesis | Concurrent bets | Verdict |
+|---|---|---|
+| 3. Cross-venue funding dispersion | many, one per asset per venue pair | **favoured** |
+| 1. Capacity-constrained assets | many, one per name in a 120-name cross-section | **favoured** |
+| 5. Event reaction residual | several, overlapping event windows | viable |
+| 4. Post-liquidation-cascade reversion | few, cascades cluster in time | weak |
+| 2. New listings | **one at a time** | parked — see research/RESULT-002 |
+
+New listings fail this test badly. A listing is held alone for seven days, so
+breadth is approximately one no matter how many listings accumulate. That, and
+not the cross-venue confound, is the deeper reason PREREG-001 could not have
+succeeded: at breadth one, the signal would have had to carry an annualised
+Sharpe above 0.62 by itself.
+
 ### 0.4 Where the edge is hypothesised to live
 
 A **skill** advantage requires being better than competitors with more people and
@@ -105,10 +182,25 @@ Where to look, in order:
    strategy with $2m of capacity — not unwillingness, it simply does not move
    their needle while consuming the same research. Perpetuals ranked 30–150 by
    volume are effectively empty of institutional money.
-2. **New listings.** Each is a fresh event, so 50–200 listings across venues in
-   six years give a genuinely independent cross-section — which is exactly what
-   six years of BTC does not, being one correlated path. This raises statistical
-   power by construction, not by assumption.
+2. **New listings.** Each is a fresh event, so a listing cohort is a genuinely
+   independent cross-section — which is exactly what six years of BTC is not,
+   being one correlated path. One venue yields far more than this section
+   originally estimated: 583 Binance futures listings between 2019 and 2026, not
+   50–200.
+
+   **Amended after PREREG-001/002 (research/RESULT-002).** The claim that
+   listings pool *across venues* is withdrawn. Listings are not exchangeable
+   between venues: the set of tokens listed on venue B and not on venue A is
+   selected by A's rejection of them, and that selection runs along asset quality
+   — the same dimension the hypothesis measures. Measured on Bybit, the 417
+   tokens Binance never listed were also concentrated in a different era, two
+   thirds of them inside nine months.
+
+   So the cross-section is independent *within* a venue and confounded *across*
+   venues. More observations here come from time, not from stacking venues:
+   roughly 78 Binance listings a year. Reaching the ~900 observations a Sharpe of
+   0.5 needs at one trial is a matter of waiting, and that is the honest cost of
+   this hypothesis.
 3. **Cross-venue funding dispersion.** The same asset with different funding on
    eight exchanges. It requires fragmented margin and reconciliation in several
    places, which is precisely why institutions avoid it.
