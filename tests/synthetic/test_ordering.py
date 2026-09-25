@@ -134,3 +134,84 @@ def test_trials_counted_are_the_whole_grid() -> None:
     result = run_study(bars, spec)
     assert result.executed_trials == spec.planned_trials == 6
     assert result.gate.metrics.get("trials_considered", 0) == 6
+
+
+@pytest.mark.fast
+def test_walk_forward_never_offers_future_indices_to_the_selector() -> None:
+    """The framework's half of the contract.
+
+    `select(lo, hi)` is user-supplied and can cheat; what must hold is that the
+    bounds it receives never overlap the window it is about to be evaluated on,
+    and that the purge gap is genuinely absent from both sides.
+    """
+    from tradelab.validation.walkforward import run_walk_forward
+
+    purge = 120
+    seen: list[tuple[int, int, int, int]] = []
+
+    def select(lo: int, hi: int) -> tuple[dict, int]:
+        seen.append((lo, hi, -1, -1))
+        return {"k": 1}, 3
+
+    def evaluate(params: dict, lo: int, hi: int) -> np.ndarray:
+        train_lo, train_hi, _, _ = seen[-1]
+        seen[-1] = (train_lo, train_hi, lo, hi)
+        return np.zeros(hi - lo)
+
+    run_walk_forward(select, evaluate, n=12_000, n_windows=4, purge_bars=purge)
+
+    assert seen, "no windows were produced"
+    for train_lo, train_hi, test_lo, test_hi in seen:
+        assert train_hi <= test_lo, "training reached into the evaluation window"
+        assert test_lo - train_hi == purge, "the purge gap was not left empty"
+        assert train_lo < train_hi < test_lo < test_hi
+
+
+@pytest.mark.fast
+def test_funding_is_charged_at_settlements_not_every_bar() -> None:
+    """Funding is a payment at an instant, not a level that persists.
+
+    Forward-filling it would charge every bar instead of three a day — a 6x
+    overstatement on hourly bars, applied silently to every long-biased result.
+    """
+    n = 2_400
+    close = np.full(n, 100.0)
+    settlements = np.zeros(n)
+    settlements[::8] = 1e-4                     # one per eight bars
+    carried = np.full(n, 1e-4)                  # what forward-filling would give
+
+    correct = run(close, np.ones(n), CostModel(0, 0, 0, 0), funding=settlements,
+                  already_lagged=True)
+    wrong = run(close, np.ones(n), CostModel(0, 0, 0, 0), funding=carried,
+                already_lagged=True)
+
+    assert wrong.funding_drag == pytest.approx(correct.funding_drag * 8, rel=0.02)
+
+
+@pytest.mark.medium
+def test_pooled_reports_the_score_it_did_not_select_on() -> None:
+    """In-sample chooses, out-of-sample reports, and they must differ.
+
+    Selecting on the out-of-sample score and then quoting it is choosing with the
+    test set in hand and citing the test as evidence.
+    """
+    from tradelab.orchestration.pooled import PooledConfig, PooledResult
+
+    rng = np.random.default_rng(7)
+    configs = [
+        PooledConfig(
+            params={"period": p, "entry": 1.0},
+            pooled_returns=rng.normal(0.0, 0.01, 500),
+            is_returns=rng.normal(0.001 * (p == 20), 0.01, 500),
+            per_asset_sharpe={"A": 0.1}, total_trades=100, effective_n=50.0,
+        )
+        for p in (10, 20, 30)
+    ]
+    result = PooledResult(configs=configs, assets=["A"], trials=3)
+
+    chosen = result.best()
+    assert chosen.params["period"] == 20, "selection did not use the in-sample score"
+    assert chosen.sharpe != chosen.is_sharpe, (
+        "the reported figure is the one selection used; they must be different "
+        "windows"
+    )

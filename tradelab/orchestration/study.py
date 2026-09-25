@@ -211,6 +211,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     results: list[BacktestResult] = []
     params: list[dict] = []
     gross_matrix: list[np.ndarray] = []
+    net_matrix: list[np.ndarray] = []
     turnover: list[float] = []
     surface_points: list[tuple[dict, float]] = []
 
@@ -236,6 +237,13 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             lagged = np.concatenate([[0.0], position[:-1]])
             traded = np.abs(np.diff(np.concatenate([[0.0], lagged])))
             gross_matrix.append(lagged * returns)
+            # Net is kept alongside gross and they are not interchangeable.
+            # PBO takes gross (§8.3); the verdict takes net, because net is what
+            # the strategy earns.
+            net_row = lagged * returns - traded * spec.costs.per_side
+            if funding is not None:
+                net_row = net_row - lagged * funding
+            net_matrix.append(net_row)
             turnover.append(float(traded.sum()))
             # Scored NET, because net is what gets traded. Gross selection
             # picks whatever costs destroy: measured on 4,000 synthetic bars, a
@@ -273,8 +281,11 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     chosen = params.index(stability.peak_params)
     best = results[chosen]
 
-    net = gross_matrix[chosen].copy()
-    oos = net[split:]
+    # NET, not gross. An earlier version took `gross_matrix[chosen]` into a
+    # variable named `net` and judged on it, so every verdict was reached on
+    # returns that had paid neither fees nor funding — and two cost models gave
+    # Sharpe ratios identical to sixteen digits, which is what exposed it.
+    oos = net_matrix[chosen][split:]
     chosen_signal = features[spec.column(stability.peak_params[spec.param_name])]
     oos_result = run(
         close[split:],
