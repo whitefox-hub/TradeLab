@@ -412,18 +412,37 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         numbers look exactly like current ones. So the age of the newest
         observation is returned on every row rather than left to be noticed.
         """
+        # The latest value and the one before it, so the screen can show where a
+        # series stands. Both are stored numbers read back, not a series drawn:
+        # §20.1 keeps time series in Grafana, and a current reading is a fact
+        # rather than a chart.
         rows = session.execute(sa.text(
+            "WITH ranked AS ("
+            "  SELECT series, actual, scheduled_for, "
+            "         row_number() OVER (PARTITION BY series "
+            "                            ORDER BY scheduled_for DESC) AS rn "
+            "  FROM macro_releases WHERE actual IS NOT NULL) "
             "SELECT s.code, s.name, s.kind, s.source, s.has_vintages, s.is_revised, "
             "       s.session_close, s.publish_lag_s, "
             "       max(r.scheduled_for) AS latest, "
             "       count(r.id) AS observations, "
-            "       EXTRACT(EPOCH FROM (now() - max(r.scheduled_for)))/86400 AS days_old "
-            "FROM macro_series s LEFT JOIN macro_releases r ON r.series = s.code "
+            "       EXTRACT(EPOCH FROM (now() - max(r.scheduled_for)))/86400 AS days_old, "
+            "       max(CASE WHEN k.rn = 1 THEN k.actual END) AS value, "
+            "       max(CASE WHEN k.rn = 2 THEN k.actual END) AS previous, "
+            "       max(CASE WHEN k.rn = 1 THEN k.scheduled_for END) AS value_at "
+            "FROM macro_series s "
+            "LEFT JOIN macro_releases r ON r.series = s.code "
+            "LEFT JOIN ranked k ON k.series = s.code AND k.rn <= 2 "
             "GROUP BY s.code ORDER BY s.kind, s.code"
         )).mappings().all()
         return [
             dict(r) | {
                 "days_old": float(r["days_old"]) if r["days_old"] is not None else None,
+                # The change between the last two prints, in the series' own
+                # units. Not annualised, not normalised — that would be a
+                # computed figure, and this surface does not compute.
+                "change": (float(r["value"]) - float(r["previous"]))
+                if r["value"] is not None and r["previous"] is not None else None,
                 # A revised series with no vintages cannot be read as it was
                 # known at the time, and a study using it is answering a
                 # different question (§4.7). Surfaced, not buried in a column.

@@ -419,3 +419,39 @@ def test_the_dashboard_no_longer_carries_a_second_sign_in_form(client: TestClien
     that keeps working against a stale endpoint."""
     page = client.get("/home").text
     assert 'type="password"' not in page
+
+
+@pytest.mark.integration
+def test_the_indicator_cards_carry_a_value_and_a_change() -> None:
+    """The screen the operator asked for shows where each series stands.
+
+    Reading the last two stored prints is not a computed figure and not a chart;
+    the history behind them is a time series and stays in Grafana (§20.1).
+    """
+    import sqlalchemy as sa_
+
+    from tradelab.api.security import Sessions, new_secret
+    from tradelab.config import Settings
+
+    engine = sa_.create_engine(Settings().database_url)
+    email = engine.connect().execute(
+        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
+    if email is None:
+        pytest.skip("no operator row")
+
+    secret = new_secret()
+    with pytest.MonkeyPatch().context() as patch:
+        patch.setenv("TRADELAB_SESSION_SECRET", secret)
+        app = create_app(engine=engine)
+        client = TestClient(app)
+        client.cookies.set("tradelab_session", Sessions(secret).issue(email))
+        rows = client.get("/api/macro/series").json()
+
+    assert rows, "no macro series loaded"
+    priced = [r for r in rows if r["value"] is not None]
+    assert priced, "every series came back without a value"
+    for row in priced:
+        assert "change" in row
+        assert "value_at" in row
+        # The flag the screen colours the card by.
+        assert isinstance(row["point_in_time_safe"], bool)

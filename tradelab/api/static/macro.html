@@ -5,14 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Macro — TradeLab</title>
 <link rel="stylesheet" href="/static/app.css">
+<style>
+  .indicators { display:grid; gap:14px; margin:20px 0 8px;
+    grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); }
+  .ind { padding:16px 18px; background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; }
+  .ind .code { font-size:12.5px; color:var(--muted); font-weight:620;
+    letter-spacing:.05em; text-transform:uppercase; }
+  .ind .v { font-size:27px; font-weight:650; font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em; margin:4px 0 2px; }
+  .ind .chg { font-size:14.5px; font-variant-numeric:tabular-nums; font-weight:550; }
+  .ind .chg.up { color:var(--up); } .ind .chg.down { color:var(--down); }
+  .ind .chg.flat { color:var(--muted); }
+  .ind .n { font-size:13.5px; color:var(--muted); margin-top:8px; line-height:1.45; }
+  .ind .when { font-size:12.5px; color:var(--muted); margin-top:6px; }
+  .ind.stale-card { border-color:var(--down); }
+</style>
 </head>
 <body>
 <div class="layout">
   <main class="content">
-    <h1>Macro</h1>
-    <p class="sub">Series freshness, release calendar, consensus before the print.</p>
+    <h1>Indicators</h1>
+    <p class="sub">Where each series stands, how stale it is, and what was expected
+      before it printed.</p>
 
-    <h2>Series</h2>
+    <div class="indicators" id="indicators"></div>
+    <p class="hint">Latest stored reading and its change against the print before it,
+      in the series' own units. The values are read back rather than computed, and the
+      history behind them is a time series — which belongs in Grafana, not here.</p>
+
+    <h2>Catalogue</h2>
     <table>
       <thead><tr>
         <th>Code</th><th>Name</th><th>Kind</th><th>Source</th>
@@ -56,8 +78,34 @@ mount("/macro", { onReady: load });
 const fmt = (v, d = 2) => v === null || v === undefined ? "—" : Number(v).toFixed(d);
 const day = (s) => s ? s.slice(0, 10) : "—";
 
+function card(s) {
+  const change = s.change;
+  const arrow = change === null ? "" : change > 0 ? "▲" : change < 0 ? "▼" : "•";
+  const cls = change === null ? "flat" : change > 0 ? "up" : change < 0 ? "down" : "flat";
+  const shown = s.value === null || s.value === undefined
+    ? "—" : Number(s.value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const stale = s.days_old > 45;
+  return `
+    <div class="ind ${stale ? "stale-card" : ""}">
+      <div class="code">${s.code}</div>
+      <div class="v">${shown}</div>
+      <div class="chg ${cls}">${arrow} ${change === null ? "—" : fmt(change, 3)}</div>
+      <div class="n">${s.name}</div>
+      <div class="when ${stale ? "stale" : ""}">
+        ${day(s.value_at)} · ${fmt(s.days_old, 0)}d old${stale ? " · stale" : ""}
+      </div>
+    </div>`;
+}
+
 async function load() {
   const series = await api("/api/macro/series");
+  // The ones asked for by name first, then the rest. A screen that sorts
+  // alphabetically buries the rate behind the CPI.
+  const order = ["FEDFUNDS", "WTI", "GOLD", "DGS10", "DTWEXBGS", "CPIAUCSL"];
+  const rank = (code) => { const i = order.indexOf(code); return i < 0 ? 999 : i; };
+  const ranked = [...series].sort((a, b) => rank(a.code) - rank(b.code));
+  $("indicators").innerHTML = ranked.map(card).join("");
+
   $("series").innerHTML = series.map((s) => `
     <tr>
       <td><strong>${s.code}</strong></td>
