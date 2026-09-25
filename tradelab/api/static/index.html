@@ -77,14 +77,6 @@
     </div>
 
     <div class="session">
-      <div id="out">
-        <label for="email">Email</label>
-        <input id="email" type="email" autocomplete="username">
-        <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="current-password">
-        <button class="primary" id="go">Sign in</button>
-        <div class="err" id="err"></div>
-      </div>
       <div id="in" hidden>
         <div class="signed">
           <span class="dot"></span>
@@ -135,32 +127,24 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-function signedIn(me) {
-  $("out").hidden = true; $("in").hidden = false;
-  $("email-out").textContent = me.email;
-  $("role-out").textContent = me.role;
-}
-function signedOut() { $("out").hidden = false; $("in").hidden = true; }
-
-$("go").onclick = async () => {
-  $("err").textContent = "";
-  const r = await fetch("/api/session", { method: "POST", credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: $("email").value, password: $("password").value }) });
-  if (!r.ok) { $("err").textContent = (await r.json()).detail || "sign in failed"; return; }
-  signedIn(await r.json());
-};
-
-$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") $("go").click(); });
-
 $("bye").onclick = async () => {
   await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
-  signedOut();
+  location.href = "/login";
 };
 
+// The dashboard shows nothing useful without a session, so an unauthenticated
+// visitor is sent to sign in rather than shown a page of cards that all 401.
 fetch("/api/me", { credentials: "same-origin" })
-  .then((r) => r.ok ? r.json() : null)
-  .then((me) => me ? signedIn(me) : signedOut());
+  .then((r) => {
+    if (!r.ok) { location.replace("/login?next=/trade_lab"); return null; }
+    return r.json();
+  })
+  .then((me) => {
+    if (!me) return;
+    $("in").hidden = false;
+    $("email-out").textContent = me.email;
+    $("role-out").textContent = me.role;
+  });
 </script>
 </body>
 </html>

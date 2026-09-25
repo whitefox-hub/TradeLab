@@ -358,3 +358,39 @@ def test_the_entry_point_links_the_screens_that_exist(client: TestClient) -> Non
     assert linked, "the entry point links nothing"
     for path in linked:
         assert path in served, f"{path} is offered but not served"
+
+
+@pytest.mark.fast
+def test_the_login_page_is_served_without_a_session(client: TestClient) -> None:
+    """Gating the sign-in page behind a session is the classic loop."""
+    response = client.get("/login")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
+@pytest.mark.fast
+def test_the_login_redirect_cannot_leave_this_origin(client: TestClient) -> None:
+    """`next` survives a deep link through sign-in, and an open redirect on a
+    login page is how a session gets handed to somewhere else."""
+    page = client.get("/login").text
+    assert 'next.startsWith("/") && !next.startsWith("//")' in page, (
+        "the next parameter is not constrained to a same-origin path"
+    )
+
+
+@pytest.mark.fast
+def test_the_screens_send_an_unauthenticated_visitor_to_login(client: TestClient) -> None:
+    """Not to the dashboard, which would 401 every card, and not to an empty
+    table with no explanation of why it is empty."""
+    for path in ("/news", "/macro"):
+        page = client.get(path).text
+        assert "/login?next=" in page, f"{path} does not point at the sign-in page"
+    assert 'location.replace("/login?next=/trade_lab")' in client.get("/trade_lab").text
+
+
+@pytest.mark.fast
+def test_the_dashboard_no_longer_carries_a_second_sign_in_form(client: TestClient) -> None:
+    """One place to sign in. Two forms drift, and the one nobody uses is the one
+    that keeps working against a stale endpoint."""
+    page = client.get("/trade_lab").text
+    assert 'type="password"' not in page

@@ -499,6 +499,16 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     # -- the screen ---------------------------------------------------------
 
+    @app.get("/login", include_in_schema=False)
+    def login_screen() -> FileResponse:
+        """The sign-in page. Unauthenticated screens send visitors here.
+
+        It carries a `next` parameter so a deep link survives the detour, and
+        honours it only when it is a path on this origin — an open redirect on a
+        login page is how a session gets handed to somewhere else.
+        """
+        return FileResponse(Path(__file__).parent / "static" / "login.html")
+
     @app.get("/trade_lab", include_in_schema=False)
     def home() -> FileResponse:
         """The entry point. Screens hang off it rather than being reached by

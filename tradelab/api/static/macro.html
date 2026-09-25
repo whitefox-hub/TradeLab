@@ -70,8 +70,8 @@
 
 <main>
   <div id="need-auth" class="empty" hidden>
-    Not signed in. <a href="/trade_lab" style="color:var(--accent)">Sign in</a>, then
-    come back.
+    Not signed in. <a href="/login?next=/macro" style="color:var(--accent)">Sign
+    in</a> to continue.
   </div>
 
   <div id="app" hidden>
@@ -181,7 +181,7 @@ async function load() {
 
 $("bye").onclick = async () => {
   await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
-  location.href = "/trade_lab";
+  location.href = "/login";
 };
 
 api("/api/me")

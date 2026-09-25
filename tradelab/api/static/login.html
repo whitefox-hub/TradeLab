@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — TradeLab</title>
+<style>
+  :root {
+    --bg:#0d1017; --panel:#171b24; --panel-2:#1e232e; --line:#2f3644;
+    --text:#f0f3f8; --muted:#a7b0c0; --accent:#6ba6ff; --down:#ff6b63;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg:#f7f8fa; --panel:#fff; --panel-2:#f0f2f5; --line:#d6dae1;
+      --text:#12161c; --muted:#4e5766; --accent:#0a62d0;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); min-height:100vh;
+    display:grid; place-items:center; padding:24px;
+    font:16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  .card { width:100%; max-width:400px; background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:32px; }
+  h1 { font-size:24px; margin:0 0 6px; font-weight:650; letter-spacing:-.01em; }
+  .sub { color:var(--muted); margin:0 0 26px; font-size:15px; }
+  label { display:block; font-size:14px; color:var(--muted); margin:0 0 6px;
+    font-weight:550; }
+  input { width:100%; font:inherit; border-radius:8px; border:1px solid var(--line);
+    padding:10px 13px; background:var(--panel-2); color:var(--text); margin-bottom:16px; }
+  input:focus,button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  button { width:100%; font:inherit; font-weight:600; cursor:pointer; border-radius:8px;
+    border:1px solid var(--accent); padding:11px; background:var(--accent); color:#fff; }
+  button[disabled] { opacity:.6; cursor:default; }
+  .err { color:var(--down); font-size:14.5px; margin-top:14px; min-height:1.2em; }
+  .note { margin-top:26px; padding-top:20px; border-top:1px solid var(--line);
+    color:var(--muted); font-size:13.5px; line-height:1.6; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>TradeLab</h1>
+  <p class="sub">Sign in to continue</p>
+
+  <form id="form">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+    <button type="submit" id="go">Sign in</button>
+  </form>
+  <div class="err" id="err" role="alert"></div>
+
+  <p class="note">A single operator, so this is not establishing who you are. It is a
+    deliberate act before a decision can be recorded, and every write is stored with
+    an actor and a time.</p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const next = new URLSearchParams(location.search).get("next") || "/trade_lab";
+
+$("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("err").textContent = "";
+  $("go").disabled = true;
+  try {
+    const response = await fetch("/api/session", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: $("email").value, password: $("password").value }),
+    });
+    if (!response.ok) {
+      $("err").textContent = (await response.json()).detail || "sign in failed";
+      return;
+    }
+    // Only ever a path on this origin. An open redirect on a login page is how a
+    // session gets handed to somewhere else.
+    location.href = next.startsWith("/") && !next.startsWith("//") ? next : "/trade_lab";
+  } catch {
+    $("err").textContent = "could not reach the server";
+  } finally {
+    $("go").disabled = false;
+  }
+});
+
+// Already signed in? Then this page has nothing to do.
+fetch("/api/me", { credentials: "same-origin" })
+  .then((r) => { if (r.ok) location.replace("/trade_lab"); });
+</script>
+</body>
+</html>
