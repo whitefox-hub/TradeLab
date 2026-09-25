@@ -207,7 +207,16 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
         signal = features[spec.column(value)].to_numpy().astype(np.float64)
         for entry in spec.entries:
             position = threshold_position(signal, float(entry)) * spec.direction
-            result = run(close, position, spec.costs, spec.timeframe, funding=funding)
+            # Scored on the TRAINING window only. An earlier version passed the
+            # full series here while the comment below asserted it did not,
+            # which is the worst shape a defect can take: the documentation
+            # states the invariant and the code violates it, so a reader who
+            # checks the comment concludes it holds. Every result produced
+            # before this was selection-contaminated — the evaluation was out of
+            # sample, but the configuration had been chosen with the test set in
+            # hand.
+            result = run(close[:split], position[:split], spec.costs, spec.timeframe,
+                         funding=funding[:split] if funding is not None else None)
             results.append(result)
             params.append({spec.param_name: value, "entry": float(entry)})
 
@@ -215,11 +224,9 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             traded = np.abs(np.diff(np.concatenate([[0.0], lagged])))
             gross_matrix.append(lagged * returns)
             turnover.append(float(traded.sum()))
-            # In-sample score only: selecting on the full series would be
-            # choosing with the test set in hand. Configurations that did not
-            # trade enough are scored -inf rather than omitted, so the surface
-            # keeps its shape for the stability analysis (§8.5) while remaining
-            # unselectable.
+            # Configurations that did not trade enough are scored -inf rather
+            # than omitted, so the surface keeps its shape for the stability
+            # analysis (§8.5) while remaining unselectable.
             eligible = result.n_trades >= spec.min_trades
             surface_points.append((
                 {spec.param_name: value, "entry": float(entry)},

@@ -19,6 +19,7 @@ whole project exists to prevent.
 from __future__ import annotations
 
 import numpy as np
+import polars as pl
 import pytest
 
 from tradelab.engines.tier_a.costs import BINANCE_RETAIL, CostModel
@@ -158,4 +159,49 @@ def test_subthreshold_edge_is_inconclusive_not_pass() -> None:
         f"A sub-threshold edge was reported as established: DSR={dsr:.3f}, "
         f"MinTRL={required:.0f} against {stats.n_obs} observations. The correct "
         f"answer here is `inconclusive`."
+    )
+
+
+@pytest.mark.slow
+def test_selection_never_sees_the_evaluation_window() -> None:
+    """Configuration is chosen on training data, and only then evaluated.
+
+    This failed silently for several days while a comment above the offending
+    line asserted the opposite — the worst shape a defect can take, because a
+    reader who checks the documentation concludes the invariant holds.
+
+    The test constructs data where the two windows disagree: a signal that works
+    in the first half and reverses in the second. A selector peeking at the
+    evaluation window picks the configuration that wins there; one restricted to
+    training cannot.
+    """
+    from tradelab.orchestration.study import StudySpec, run_study
+    from tradelab.validation.synthetic import make_edge
+
+    bars, _ = make_edge(n=20_000, seed=23, edge_sharpe=2.5, signal_period=100)
+    # Reverse the second half, so what worked in training is wrong in the test
+    # window and vice versa.
+    close = bars["close"].to_numpy().astype(np.float64)
+    half = len(close) // 2
+    flipped = close.copy()
+    flipped[half:] = close[half] ** 2 / close[half:]
+    bars = bars.with_columns(
+        close=pl.Series(flipped),
+        high=pl.Series(flipped * 1.001),
+        low=pl.Series(flipped * 0.999),
+        open=pl.Series(np.concatenate([[flipped[0]], flipped[:-1]])),
+    )
+
+    spec = StudySpec(
+        name="leak-probe", params=tuple(range(10, 40, 4)),
+        entries=tuple(np.arange(55.0, 75.0, 2.0)), min_trades=30,
+    )
+    result = run_study(bars, spec)
+
+    # The honest outcome on data whose relationship reverses is a poor
+    # out-of-sample figure. A selector with the test set in hand would have
+    # found the configuration that survives the reversal and reported it well.
+    assert result.gate.metrics.get("sharpe_annualised", 0) < 3.0, (
+        "the out-of-sample figure is implausibly good on data whose relationship "
+        "reverses halfway; selection is seeing the evaluation window"
     )

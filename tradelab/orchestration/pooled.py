@@ -38,8 +38,18 @@ from tradelab.features.materialise import materialise
 
 @dataclass
 class PooledConfig:
+    """One configuration, scored separately in and out of sample.
+
+    Both are kept because they answer different questions and mixing them is how
+    selection leakage enters. `is_sharpe` is what a configuration may be CHOSEN
+    on; `sharpe` is what the chosen one is REPORTED as. Picking the best
+    out-of-sample score and then quoting that score is choosing with the test set
+    in hand and then citing the test as evidence.
+    """
+
     params: dict
-    pooled_returns: np.ndarray
+    pooled_returns: np.ndarray          # out of sample
+    is_returns: np.ndarray              # in sample, for selection only
     per_asset_sharpe: dict[str, float]
     total_trades: int
     effective_n: float
@@ -48,6 +58,11 @@ class PooledConfig:
     def sharpe(self) -> float:
         std = self.pooled_returns.std(ddof=1)
         return float(self.pooled_returns.mean() / std) if std > 0 else 0.0
+
+    @property
+    def is_sharpe(self) -> float:
+        std = self.is_returns.std(ddof=1) if self.is_returns.size > 1 else 0.0
+        return float(self.is_returns.mean() / std) if std > 0 else 0.0
 
     @property
     def breadth(self) -> float:
@@ -71,7 +86,8 @@ class PooledResult:
     field_names: list[str] = field(default_factory=list)
 
     def best(self) -> PooledConfig:
-        return max(self.configs, key=lambda c: c.sharpe)
+        """Selected on IN-SAMPLE score. Its out-of-sample figure is the result."""
+        return max(self.configs, key=lambda c: c.is_sharpe)
 
     def most_consistent(self) -> PooledConfig:
         """Highest breadth, tie-broken by Sharpe.
@@ -80,7 +96,7 @@ class PooledResult:
         forty assets with a modest Sharpe is a different claim from one carried
         by a single outlier.
         """
-        return max(self.configs, key=lambda c: (round(c.breadth, 2), c.sharpe))
+        return max(self.configs, key=lambda c: (round(c.breadth, 2), c.is_sharpe))
 
 
 def run_pooled(
@@ -126,6 +142,7 @@ def run_pooled(
     for value in values:
         for entry in entries:
             pooled: list[np.ndarray] = []
+            in_sample: list[np.ndarray] = []
             per_asset: dict[str, float] = {}
             trades = 0
             effective = 0.0
@@ -147,6 +164,17 @@ def run_pooled(
                     net = net - lagged * funding[split:]
 
                 pooled.append(net)
+
+                # The same computation on the training window, for selection.
+                is_returns = np.zeros(split)
+                is_returns[1:] = np.diff(close[:split]) / close[:split - 1]
+                is_lagged = np.concatenate([[0.0], position[:split - 1]])
+                is_traded = np.abs(np.diff(np.concatenate([[0.0], is_lagged])))
+                is_net = is_lagged * is_returns - is_traded * costs.per_side
+                if funding is not None:
+                    is_net = is_net - is_lagged * funding[:split]
+                in_sample.append(is_net)
+
                 per_asset[asset] = result.sharpe
                 trades += result.n_trades
                 effective += result.effective_n
@@ -155,6 +183,7 @@ def run_pooled(
                 configs.append(PooledConfig(
                     params={param_name: value, "entry": float(entry)},
                     pooled_returns=np.concatenate(pooled),
+                    is_returns=np.concatenate(in_sample) if in_sample else np.zeros(0),
                     per_asset_sharpe=per_asset, total_trades=trades,
                     effective_n=effective,
                 ))
@@ -195,8 +224,9 @@ def funding_universe(root: Path, limit: int | None = None) -> list[str]:
 
 def summarise(result: PooledResult) -> pl.DataFrame:
     return pl.DataFrame([
-        {**c.params, "sharpe": c.sharpe, "breadth": c.breadth,
+        {**c.params, "is_sharpe": c.is_sharpe, "oos_sharpe": c.sharpe,
+         "breadth": c.breadth,
          "trades": c.total_trades, "effective_n": c.effective_n,
          "assets": len(c.per_asset_sharpe)}
         for c in result.configs
-    ]).sort("sharpe", descending=True)
+    ]).sort("is_sharpe", descending=True)
