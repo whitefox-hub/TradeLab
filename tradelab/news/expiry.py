@@ -66,6 +66,20 @@ DEFAULT_DECAY_HOURS = 72.0
 TERMINAL_STATES = frozenset({"decided", "implemented", "withdrawn"})
 
 
+#: Endings the operator may reverse, and the ones they may not.
+#:
+#: A decayed item can be reopened because its horizon is an *assumption* — §11.5
+#: has not measured one yet, so an operator saying "this still matters" is real
+#: information rather than an override of a finding. A manual resolution can be
+#: reopened because a person made it and a person can be wrong.
+#:
+#: A passed schedule cannot. The date arrived; that is not a model output to
+#: disagree with. Nor can a terminal process state, which ends at a transition
+#: that would have to be superseded by another transition rather than by a
+#: button.
+REOPENABLE: frozenset[str] = frozenset({"decay", "manual"})
+
+
 @dataclass(frozen=True, slots=True)
 class Expiry:
     ended_by: EndedBy
@@ -78,6 +92,9 @@ class Expiry:
     #: account for is one they will override by feel.
     reason: str
     assumed: bool = False
+    #: Whether this ending is one a person may take back, and why not when not.
+    reopenable: bool = False
+    not_reopenable_because: str = ""
 
 
 def resolve(
@@ -88,6 +105,7 @@ def resolve(
     resolved_at: datetime | None = None,
     scheduled_for: datetime | None = None,
     latest_state: str | None = None,
+    reactivated_until: datetime | None = None,
     now: datetime | None = None,
 ) -> Expiry:
     """Which of §11.8's three endings applies, and whether it has happened yet.
@@ -104,6 +122,7 @@ def resolve(
         return Expiry(
             EndedBy.RESOLVED, resolved_at, active=resolved_at > now,
             reason=f"marked resolved on {resolved_at.date()}",
+            reopenable=True,
         )
 
     # 2. Superseded by a terminal process state. Goes to zero at the transition
@@ -113,6 +132,10 @@ def resolve(
             EndedBy.SUPERSEDED, None, active=False,
             reason=f"process reached {latest_state!r}; the signal ends at the "
                    f"transition rather than fading from it",
+            not_reopenable_because=(
+                "a process ends at a transition, so reversing it needs another "
+                "transition rather than a button"
+            ),
         )
 
     # 3. Scheduled, and the anticipation ends when the date arrives — whatever
@@ -126,14 +149,30 @@ def resolve(
                 else f"the scheduled date passed on {scheduled_for.date()}; "
                      f"the thing anticipated no longer lies ahead"
             ),
+            not_reopenable_because=(
+                "" if scheduled_for > now else
+                "the date arrived, which is not a model output to disagree with"
+            ),
         )
 
     # 4. Otherwise it decays, on an assumed horizon until §11.5 measures one.
     hours = ASSUMED_DECAY_HOURS.get(event_type, DEFAULT_DECAY_HOURS)
     expires = first_seen_at + timedelta(hours=hours)
+
+    # An operator can push the clock out, and doing so is information rather
+    # than an override: the horizon above is assumed, not measured, so a person
+    # saying the item still matters is the better estimate of the two.
+    if reactivated_until is not None and reactivated_until > now:
+        return Expiry(
+            EndedBy.OPEN, reactivated_until, active=True,
+            reason=f"reopened by hand until {reactivated_until.date()}, over an "
+                   f"assumed {hours:.0f}h horizon",
+            assumed=True, reopenable=True,
+        )
+
     return Expiry(
         EndedBy.DECAY if expires <= now else EndedBy.OPEN,
         expires, active=expires > now,
         reason=f"assumed {hours:.0f}h decay for {event_type}, not yet measured",
-        assumed=True,
+        assumed=True, reopenable=True,
     )

@@ -150,6 +150,30 @@
   <div class="err" id="n-err"></div>
 </dialog>
 
+<dialog id="confirm-back">
+  <h2>Put it back among those that influence?</h2>
+  <div class="shape" id="back-sub"></div>
+
+  <p class="hint" id="back-why"></p>
+
+  <label for="back-hours">For how long</label>
+  <select id="back-hours" style="width:100%">
+    <option value="24">24 hours</option>
+    <option value="72" selected>3 days</option>
+    <option value="168">1 week</option>
+    <option value="336">2 weeks</option>
+  </select>
+  <p class="hint">Recorded as a correction with your name and the time, over the
+    assumed horizon — not by rewinding a column. The sequence stays readable:
+    ended, then reopened, by whom.</p>
+
+  <div class="row">
+    <button id="back-cancel">Cancel</button>
+    <button class="accent" id="back-confirm">Still matters</button>
+  </div>
+  <div class="err" id="back-err"></div>
+</dialog>
+
 <dialog id="confirm-end">
   <h2>Mark as no longer information?</h2>
   <div class="shape" id="end-sub"></div>
@@ -219,12 +243,16 @@ function draw() {
       `<td class="num">${event.annotations || ""}</td>`;
 
     const cell = document.createElement("td");
-    const rate = document.createElement("button");
-    rate.className = "accent";
-    rate.textContent = event.rated ? "Add" : "Rate";
-    rate.onclick = () => openRating(event);
-    cell.appendChild(rate);
     if (event.active) {
+      // Rating belongs only here. A judgement recorded after an item stopped
+      // influencing can never be scored against a forward reaction, so it
+      // cannot calibrate anything — which is the whole point of collecting it.
+      const rate = document.createElement("button");
+      rate.className = "accent";
+      rate.textContent = event.rated ? "Add" : "Rate";
+      rate.onclick = () => openRating(event);
+      cell.appendChild(rate);
+
       const end = document.createElement("button");
       end.className = "danger";
       end.textContent = "Ended";
@@ -233,6 +261,19 @@ function draw() {
       end.style.marginLeft = "6px";
       end.onclick = () => openEnding(event);
       cell.appendChild(end);
+    } else if (event.reopenable) {
+      const back = document.createElement("button");
+      back.className = "accent";
+      back.textContent = "Still matters";
+      back.title = "Put it back among those that influence. The decay horizon is " +
+                   "assumed, not measured, so your judgement is the better estimate";
+      back.onclick = () => openReopen(event);
+      cell.appendChild(back);
+    } else {
+      const why = document.createElement("span");
+      why.className = "why";
+      why.textContent = event.not_reopenable_because;
+      cell.appendChild(why);
     }
     tr.appendChild(cell);
     $("rows").appendChild(tr);
@@ -240,6 +281,33 @@ function draw() {
 }
 
 let ending = null;
+let reviving = null;
+
+function openReopen(event) {
+  reviving = event;
+  $("back-sub").textContent =
+    `${event.event_type} · ${(event.assets || []).join(" ") || "no assets"} · ` +
+    `seen ${event.first_seen_at.slice(0, 10)}`;
+  $("back-why").textContent = event.expiry_assumed
+    ? "This item expired on an assumed horizon that nothing has measured yet, so " +
+      "your reading of it is the better of the two estimates."
+    : "You marked this ended. Reopening records that you changed your mind, and " +
+      "both entries stay.";
+  $("back-err").textContent = "";
+  $("confirm-back").showModal();
+}
+
+$("back-cancel").onclick = () => $("confirm-back").close();
+
+$("back-confirm").onclick = async () => {
+  $("back-err").textContent = "";
+  try {
+    await api(`/api/events/${reviving.id}/reopen?hours=${$("back-hours").value}`,
+              { method: "POST" });
+    $("confirm-back").close();
+    load();
+  } catch (e) { $("back-err").textContent = e.message; }
+};
 
 function openEnding(event) {
   ending = event;

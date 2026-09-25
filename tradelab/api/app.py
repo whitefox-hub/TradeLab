@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -341,7 +341,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             f"         AS scheduled_for, "
             f"       (SELECT pt.state FROM process_transitions pt "
             f"         WHERE pt.event_id = e.id "
-            f"         ORDER BY pt.sequence DESC LIMIT 1) AS latest_state "
+            f"         ORDER BY pt.sequence DESC LIMIT 1) AS latest_state, "
+            f"       (SELECT (an.payload->>'reactivated_until')::timestamptz "
+            f"         FROM event_annotations an WHERE an.event_id = e.id "
+            f"          AND an.payload ? 'reactivated_until' "
+            f"         ORDER BY an.created_at DESC LIMIT 1) AS reactivated_until "
             f"FROM events e "
             f"LEFT JOIN event_assets a ON a.event_id = e.id "
             f"LEFT JOIN event_annotations n ON n.event_id = e.id "
@@ -356,6 +360,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 event_type=row["event_type"], shape=row["shape"],
                 first_seen_at=row["first_seen_at"], resolved_at=row["resolved_at"],
                 scheduled_for=row["scheduled_for"], latest_state=row["latest_state"],
+                reactivated_until=row["reactivated_until"],
             )
             if status == "active" and not expiry.active:
                 continue
@@ -371,6 +376,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 # than measured. A default presented as a finding is worse than
                 # no default (§11.5).
                 "expiry_assumed": expiry.assumed,
+                "reopenable": expiry.reopenable,
+                "not_reopenable_because": expiry.not_reopenable_because,
                 "hand_entered": str(row["cluster_method"]).startswith("manual:"),
             })
         return out
@@ -424,6 +431,69 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
               {"event_type": body.event_type, "assets": body.assets})
         session.commit()
         return {"id": str(event_id), "first_seen_at": happened.isoformat()}
+
+    @app.post("/api/events/{event_id}/reopen")
+    def reopen_event(event_id: uuid.UUID, hours: int = 72,
+                     who: Operator = operator,
+                     session: Session = session_dep) -> dict[str, Any]:
+        """Put an item back among those that still influence. Plan.md §11.8.
+
+        Two endings can be taken back and two cannot, and the difference is
+        whether the system was asserting something or observing it.
+
+        A **decayed** item can be reopened because its horizon is assumed —
+        §11.5 has not measured one — so an operator saying it still matters is
+        the better of two estimates rather than an override of a finding. A
+        **manual resolution** can be reopened because a person made it.
+
+        A **passed schedule** cannot: the date arrived, and that is not a model
+        output to disagree with. Nor can a **terminal process state**, which
+        ended at a transition and would need another transition to reverse.
+
+        The reopening is stored as a correction annotation rather than by
+        rewinding a column, so the sequence — ended, reopened, by whom, when —
+        survives. Overwriting would leave a row that has never been anything
+        but active.
+        """
+        row = session.execute(sa.text(
+            "SELECT e.event_type, e.shape, e.first_seen_at, e.resolved_at, "
+            "       (SELECT min(sr.scheduled_for) FROM schedule_revisions sr "
+            "         WHERE sr.event_id = e.id) AS scheduled_for, "
+            "       (SELECT pt.state FROM process_transitions pt "
+            "         WHERE pt.event_id = e.id "
+            "         ORDER BY pt.sequence DESC LIMIT 1) AS latest_state "
+            "FROM events e WHERE e.id = :i"
+        ), {"i": event_id}).mappings().first()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such event")
+
+        expiry = resolve_expiry(
+            event_type=row["event_type"], shape=row["shape"],
+            first_seen_at=row["first_seen_at"], resolved_at=row["resolved_at"],
+            scheduled_for=row["scheduled_for"], latest_state=row["latest_state"],
+        )
+        if not expiry.reopenable:
+            raise HTTPException(status.HTTP_409_CONFLICT, expiry.not_reopenable_because)
+
+        user = session.execute(
+            sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}).first()
+        until = datetime.now(UTC) + timedelta(hours=max(1, min(hours, 720)))
+
+        session.execute(sa.text("UPDATE events SET resolved_at = NULL WHERE id = :i"),
+                        {"i": event_id})
+        session.execute(sa.text(
+            "INSERT INTO event_annotations (id, event_id, kind, available_at, "
+            "payload, author) VALUES (:i, :e, 'correction', now(), "
+            "CAST(:p AS jsonb), :u)"
+        ), {"i": uuid.uuid4(), "e": event_id,
+            "p": json.dumps({"reactivated_until": until.isoformat(),
+                             "over": expiry.reason}),
+            "u": user.id})
+
+        audit(session, who.email, "event.reopen", "event", str(event_id),
+              {"until": until.isoformat()})
+        session.commit()
+        return {"id": str(event_id), "active_until": until.isoformat()}
 
     @app.post("/api/events/{event_id}/resolve")
     def resolve_event(event_id: uuid.UUID, who: Operator = operator,

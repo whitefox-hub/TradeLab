@@ -114,3 +114,43 @@ def test_the_horizons_sit_inside_the_tradeable_band() -> None:
     open on information the cost model says cannot be monetised."""
     for event_type, hours in ASSUMED_DECAY_HOURS.items():
         assert 1 <= hours <= 336, f"{event_type} at {hours}h is outside hours-to-days"
+
+
+@pytest.mark.fast
+def test_only_the_endings_the_system_asserted_can_be_taken_back() -> None:
+    """The difference is whether the system was asserting or observing.
+
+    A decay horizon is an assumption §11.5 has not measured, so an operator
+    disagreeing with it is the better of two estimates. A date that arrived is
+    not a model output to disagree with.
+    """
+    decayed = resolve(event_type="futures_listing", shape="shock",
+                      first_seen_at=NOW - timedelta(days=10), now=NOW)
+    manual = resolve(event_type="hack", shape="shock", first_seen_at=NOW,
+                     resolved_at=NOW - timedelta(hours=1), now=NOW)
+    passed = resolve(event_type="unlock", shape="schedule",
+                     first_seen_at=NOW - timedelta(days=30),
+                     scheduled_for=NOW - timedelta(days=1), now=NOW)
+    withdrawn = resolve(event_type="regulation", shape="process",
+                        first_seen_at=NOW, latest_state="withdrawn", now=NOW)
+
+    assert decayed.reopenable and manual.reopenable
+    assert not passed.reopenable and not withdrawn.reopenable
+    # And each refusal says why, because a disabled control with no reason is
+    # one the operator works around.
+    assert "date arrived" in passed.not_reopenable_because
+    assert "transition" in withdrawn.not_reopenable_because
+
+
+@pytest.mark.fast
+def test_a_reopened_item_is_active_over_its_assumed_horizon() -> None:
+    reopened = resolve(event_type="futures_listing", shape="shock",
+                       first_seen_at=NOW - timedelta(days=30),
+                       reactivated_until=NOW + timedelta(days=3), now=NOW)
+    assert reopened.active
+    assert "reopened by hand" in reopened.reason
+    # An expired reactivation does not keep it alive for ever.
+    lapsed = resolve(event_type="futures_listing", shape="shock",
+                     first_seen_at=NOW - timedelta(days=30),
+                     reactivated_until=NOW - timedelta(days=1), now=NOW)
+    assert not lapsed.active

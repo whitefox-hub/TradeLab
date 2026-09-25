@@ -126,6 +126,7 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
         ("/api/approvals", "POST"),
         ("/api/events", "POST"),
         ("/api/events/{event_id}/annotations", "POST"),
+        ("/api/events/{event_id}/reopen", "POST"),
         ("/api/events/{event_id}/resolve", "POST"),
         ("/api/macro/releases/{release_id}/consensus", "POST"),
         ("/api/session", "DELETE"),
@@ -570,3 +571,27 @@ def test_ending_an_item_asks_first(client: TestClient) -> None:
     # The dialog says what the action means, not just "are you sure".
     assert "supersession" in page.lower()
     assert "no undo" in page.lower()
+
+
+@pytest.mark.fast
+def test_rating_is_offered_only_while_an_item_still_influences(
+    client: TestClient,
+) -> None:
+    """A judgement recorded after an item stopped influencing can never be
+    scored against a forward reaction, so it calibrates nothing — which is the
+    entire reason for collecting ratings in sigma."""
+    page = client.get("/news").text
+    rate_block = page[page.index("if (event.active) {"):page.index("} else if (event.reopenable)")]
+    assert "openRating(event)" in rate_block, "Rate moved out of the active branch"
+    assert "Still matters" not in rate_block
+
+
+@pytest.mark.fast
+def test_an_ending_that_cannot_be_reversed_says_so_in_the_row(
+    client: TestClient,
+) -> None:
+    """A control that is simply absent reads as an oversight; one that states
+    its reason reads as a decision."""
+    page = client.get("/news").text
+    assert "not_reopenable_because" in page
+    assert 'id="confirm-back"' in page
