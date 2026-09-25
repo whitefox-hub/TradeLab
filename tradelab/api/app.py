@@ -90,6 +90,19 @@ class ConsensusRequest(BaseModel):
     note: str | None = None
 
 
+class SettingRequest(BaseModel):
+    """A change to an operator setting. Plan.md §12.4, §20.4.
+
+    `rationale` is required and not a formality. §20.3 makes the same demand of
+    gate thresholds, for the same reason: a change with no stated reason is one
+    nobody can review, and six months later the audit log can only say what
+    happened if the reason is next to it.
+    """
+
+    value: dict[str, Any]
+    rationale: str = Field(min_length=8)
+
+
 class ApprovalRequest(BaseModel):
     subject_kind: str = Field(pattern="^(strategy|capital_tier|gate_change)$")
     subject_id: uuid.UUID
@@ -400,6 +413,100 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
               {"rating": body.rating, "confidence": body.confidence})
         session.commit()
         return {"id": str(annotation_id), "available_at": available_at.isoformat()}
+
+    # -- parameters ----------------------------------------------------------
+
+    #: Settings the operator may change, and what each one does NOT reach.
+    #:
+    #: §12.4 draws a hard line: signal parameters, entry and exit rules, feature
+    #: selection, label definitions and a strategy's asset universe cannot be
+    #: tuned, because touching any of them creates a new strategy that re-enters
+    #: screening. This surface exposes only the other column, and the read-only
+    #: half is shown beside it rather than hidden — knowing why you cannot change
+    #: something is the useful part.
+    EDITABLE = {
+        "research_universe": "Which assets are collected and studied. Not a "
+                             "strategy's universe, which is part of its identity.",
+        "history_years": "How many years of history a study may draw on.",
+        "rebalance_minutes": "How often a running strategy re-evaluates.",
+        "alert_drawdown_pct": "Drawdown at which an alert is raised.",
+    }
+
+    LOCKED = {
+        "Signal parameters": "periods, thresholds, feature parameters",
+        "Entry and exit rules": "including take profit and stop loss in the logic",
+        "Feature selection": "which features a strategy reads",
+        "Label definition": "how an outcome is defined",
+        "A strategy's asset universe": "distinct from the research universe above",
+    }
+
+    @app.get("/api/settings")
+    def settings_list(who: Operator = operator,
+                      session: Session = session_dep) -> dict[str, Any]:
+        """Current value per key, with its reason and when it was set.
+
+        Read from the newest row rather than from a mutable column: settings are
+        appended, so every result issued under an older value stays readable.
+        """
+        rows = session.execute(sa.text(
+            "SELECT DISTINCT ON (s.key) s.key, s.value, s.rationale, s.valid_from, "
+            "       u.email AS changed_by "
+            "FROM app_settings s LEFT JOIN users u ON u.id = s.changed_by "
+            "ORDER BY s.key, s.valid_from DESC"
+        )).mappings().all()
+        current = {r["key"]: dict(r) for r in rows}
+        return {
+            "editable": [
+                {"key": key, "description": description,
+                 **(current.get(key) or {"value": None, "rationale": None,
+                                         "valid_from": None, "changed_by": None})}
+                for key, description in EDITABLE.items()
+            ],
+            "locked": [{"name": name, "detail": detail}
+                       for name, detail in LOCKED.items()],
+        }
+
+    @app.get("/api/settings/{key}/history")
+    def setting_history(key: str, who: Operator = operator,
+                        session: Session = session_dep) -> list[dict]:
+        rows = session.execute(sa.text(
+            "SELECT s.value, s.rationale, s.valid_from, u.email AS changed_by "
+            "FROM app_settings s LEFT JOIN users u ON u.id = s.changed_by "
+            "WHERE s.key = :k ORDER BY s.valid_from DESC LIMIT 50"
+        ), {"k": key}).mappings().all()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/settings/{key}", status_code=status.HTTP_201_CREATED)
+    def record_setting(key: str, body: SettingRequest, who: Operator = operator,
+                       session: Session = session_dep) -> dict[str, Any]:
+        """Append a new value. Nothing is updated in place.
+
+        A key outside the editable set is refused by name rather than ignored: a
+        request to change a signal parameter is a request the system should
+        answer, not swallow.
+        """
+        if key not in EDITABLE:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"{key!r} is not an operator setting. §12.4 puts it in the column "
+                f"that creates a new strategy, which returns to screening and "
+                f"adds its trials to the counter — it cannot be edited here.",
+            )
+        user = session.execute(
+            sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}).first()
+        session.execute(sa.text(
+            "INSERT INTO app_settings (key, value, rationale, changed_by) "
+            "VALUES (:k, CAST(:v AS jsonb), :r, :u)"
+        ), {"k": key, "v": json.dumps(body.value), "r": body.rationale,
+            "u": user.id if user else None})
+        audit(session, who.email, "setting.change", "app_setting", key,
+              {"value": body.value, "rationale": body.rationale})
+        session.commit()
+        return {"key": key, "value": body.value}
+
+    @app.get("/parameters", include_in_schema=False)
+    def parameters_screen() -> FileResponse:
+        return FileResponse(STATIC / "parameters.html")
 
     # -- macro --------------------------------------------------------------
 

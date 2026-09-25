@@ -7,6 +7,7 @@ const SCREENS = [
   { href: "/home", label: "Home" },
   { href: "/news", label: "News" },
   { href: "/macro", label: "Indicators" },
+  { href: "/parameters", label: "Parameters" },
   { group: "Lifecycle" },
   { label: "Strategies", soon: true },
   { label: "Approvals", soon: true },

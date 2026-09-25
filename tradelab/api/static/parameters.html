@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parameters — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .setting { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:18px 20px; margin-bottom:14px; }
+  .setting .k { font-size:16.5px; font-weight:620; }
+  .setting .d { color:var(--muted); font-size:14px; margin:4px 0 12px; max-width:70ch;
+    line-height:1.55; }
+  .setting .v { font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size:14.5px; background:var(--panel-2); border:1px solid var(--line);
+    border-radius:8px; padding:9px 12px; }
+  .setting .meta { color:var(--muted); font-size:13px; margin-top:10px; line-height:1.5; }
+  .edit { display:none; margin-top:14px; }
+  .edit.on { display:block; }
+  .edit textarea, .edit input { width:100%; font-family:ui-monospace, Menlo, monospace;
+    font-size:14.5px; }
+  .edit .why { font-family:inherit; }
+  .actions { display:flex; gap:10px; margin-top:12px; }
+  .locked { background:transparent; border:1px dashed var(--line); border-radius:12px;
+    padding:18px 20px; }
+  .locked li { margin-bottom:10px; }
+  .locked .name { font-weight:600; }
+  .locked .detail { color:var(--muted); font-size:14px; }
+  ul { padding-left:20px; margin:12px 0 0; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <main class="content">
+    <h1>Parameters</h1>
+    <p class="sub">What the operator may change, and what changing would cost.</p>
+
+    <h2>Operator settings</h2>
+    <div id="editable"></div>
+    <div class="err" id="err"></div>
+
+    <h2>Not editable here</h2>
+    <div class="locked">
+      <p class="hint" style="margin-top:0">Touching any of these creates a
+        <strong>new strategy</strong> — a new id and code hash — which returns to
+        screening and adds its trials to the counter that deflates every later
+        result. That is not a policy the interface enforces; a run's parameters are
+        immutable in the schema, so modifying one produces a different run and never
+        an edit.</p>
+      <ul id="locked"></ul>
+      <p class="hint">Adjusting a signal parameter because of what the simulator
+        showed is the trap §12.4 exists to name: after three or four iterations the
+        strategy is fitted to the last few weeks of market, overfitted exactly as in
+        a backtest, only slower and more convincing because it looks live. What is
+        legitimate to conclude from a simulator run is that the strategy does not
+        work. Rejecting is free; re-tuning costs the whole validation.</p>
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+mount("/parameters", { onReady: load });
+
+async function load() {
+  const data = await api("/api/settings");
+
+  $("editable").innerHTML = data.editable.map((s) => `
+    <div class="setting">
+      <div class="k">${s.key}</div>
+      <div class="d">${s.description}</div>
+      <div class="v">${s.value === null ? "not set" : JSON.stringify(s.value)}</div>
+      <div class="meta">
+        ${s.valid_from
+          ? `Set ${s.valid_from.slice(0, 10)}${s.changed_by ? " by " + s.changed_by : ""}
+             · ${s.rationale}`
+          : "No value recorded yet."}
+      </div>
+      <div class="actions">
+        <button data-open="${s.key}">Change</button>
+      </div>
+      <div class="edit" id="e-${s.key}">
+        <label for="v-${s.key}">New value (JSON)</label>
+        <textarea id="v-${s.key}" rows="3">${s.value === null ? "{}" : JSON.stringify(s.value, null, 1)}</textarea>
+        <label for="r-${s.key}">Why</label>
+        <input class="why" id="r-${s.key}" placeholder="The reason this is changing">
+        <div class="actions">
+          <button class="primary" data-save="${s.key}">Record change</button>
+          <button data-cancel="${s.key}">Cancel</button>
+        </div>
+      </div>
+    </div>`).join("");
+
+  $("locked").innerHTML = data.locked.map((l) => `
+    <li><span class="name">${l.name}</span>
+        <span class="detail">— ${l.detail}</span></li>`).join("");
+
+  for (const b of document.querySelectorAll("[data-open]")) {
+    b.onclick = () => $(`e-${b.dataset.open}`).classList.add("on");
+  }
+  for (const b of document.querySelectorAll("[data-cancel]")) {
+    b.onclick = () => $(`e-${b.dataset.cancel}`).classList.remove("on");
+  }
+  for (const b of document.querySelectorAll("[data-save]")) {
+    b.onclick = async () => {
+      const key = b.dataset.save;
+      $("err").textContent = "";
+      let value;
+      try { value = JSON.parse($(`v-${key}`).value); }
+      catch { $("err").textContent = `${key}: the value is not valid JSON`; return; }
+      try {
+        await api(`/api/settings/${key}`, { method: "POST",
+          body: JSON.stringify({ value, rationale: $(`r-${key}`).value }) });
+        load();
+      } catch (e) { $("err").textContent = e.message; }
+    };
+  }
+}
+</script>
+</body>
+</html>

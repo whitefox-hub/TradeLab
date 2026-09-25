@@ -111,21 +111,24 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
         for method in getattr(route, "methods", set())
         if method in {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    # The complete set of writes this surface is allowed. §20.1 permits
-    # approvals and lifecycle transitions; §20.5 adds event annotations, which
-    # are an *observation recorded with its time* rather than a computed figure,
-    # and are therefore not an exception to "the application computes nothing".
+    # The complete set of writes this surface is allowed, and the only place it
+    # is asserted. §20.1 permits approvals and lifecycle transitions; §20.5 adds
+    # event annotations and §20.6 a macro consensus, both of which are
+    # observations recorded with their time rather than computed figures.
+    # §12.4 adds operator settings, which reach only the column that does not
+    # define a strategy.
     #
-    # This list is meant to fail when a route is added. Extending it is the
-    # moment to ask whether the new write belongs on this surface at all, and
-    # that question is the reason the assertion is written as equality rather
-    # than as a subset.
+    # Written as equality so a new route fails here. Extending this list is the
+    # moment to ask whether the write belongs on this surface at all — which is
+    # a question worth being forced to answer, and the reason three copies of
+    # this assertion were collapsed into one after the third went stale.
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
         ("/api/events/{event_id}/annotations", "POST"),
         ("/api/macro/releases/{release_id}/consensus", "POST"),
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
+        ("/api/settings/{key}", "POST"),
     ], f"a new write route appeared: {writable}"
 
 
@@ -328,25 +331,6 @@ def test_the_consensus_body_carries_no_timestamp() -> None:
 
 
 @pytest.mark.fast
-def test_writes_are_still_the_four_plus_consensus(client: TestClient) -> None:
-    """The route table again, now that macro added one. Written as equality so
-    that every addition has to be argued for rather than absorbed."""
-    writable = sorted(
-        (route.path, method)
-        for route in client.app.routes
-        for method in getattr(route, "methods", set())
-        if method in {"POST", "PUT", "PATCH", "DELETE"}
-    )
-    assert writable == [
-        ("/api/approvals", "POST"),
-        ("/api/events/{event_id}/annotations", "POST"),
-        ("/api/macro/releases/{release_id}/consensus", "POST"),
-        ("/api/session", "DELETE"),
-        ("/api/session", "POST"),
-    ], f"a new write route appeared: {writable}"
-
-
-@pytest.mark.fast
 def test_the_sidebar_only_links_screens_that_exist(client: TestClient) -> None:
     """A menu offering a screen that 404s is worse than not offering it.
 
@@ -455,3 +439,60 @@ def test_the_indicator_cards_carry_a_value_and_a_change() -> None:
         assert "value_at" in row
         # The flag the screen colours the card by.
         assert isinstance(row["point_in_time_safe"], bool)
+
+
+@pytest.mark.fast
+def test_the_parameters_screen_is_served(client: TestClient) -> None:
+    response = client.get("/parameters")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
+@pytest.mark.fast
+def test_a_setting_change_requires_a_stated_reason() -> None:
+    """§20.3 demands one of gate thresholds for the same reason: a change nobody
+    gave a reason for is one nobody can review six months later."""
+    from tradelab.api.app import SettingRequest
+
+    assert SettingRequest(value={"years": 3}, rationale="narrowing the window")
+    with pytest.raises(ValueError):
+        SettingRequest(value={"years": 3}, rationale="x")
+    with pytest.raises(ValueError):
+        SettingRequest(value={"years": 3})
+
+
+@pytest.mark.integration
+def test_a_locked_parameter_is_refused_by_name() -> None:
+    """§12.4's right-hand column. Refused rather than ignored: a request to
+    change a signal parameter is one the system should answer, because silently
+    accepting it would let a validated strategy drift without a new id."""
+    import sqlalchemy as sa_
+
+    from tradelab.api.security import Sessions, new_secret
+    from tradelab.config import Settings
+
+    engine = sa_.create_engine(Settings().database_url)
+    email = engine.connect().execute(
+        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
+    if email is None:
+        pytest.skip("no operator row")
+
+    secret = new_secret()
+    with pytest.MonkeyPatch().context() as patch:
+        patch.setenv("TRADELAB_SESSION_SECRET", secret)
+        client = TestClient(create_app(engine=engine))
+        client.cookies.set("tradelab_session", Sessions(secret).issue(email))
+
+        refused = client.post("/api/settings/rsi_period", json={
+            "value": {"period": 14}, "rationale": "trying another period"})
+        assert refused.status_code == 403
+        assert "12.4" in refused.json()["detail"]
+
+        allowed = client.get("/api/settings").json()
+        keys = {entry["key"] for entry in allowed["editable"]}
+        assert "research_universe" in keys
+        assert "rsi_period" not in keys
+        # And the locked half is shown, not hidden. Knowing why you cannot
+        # change something is the useful part.
+        assert any("asset universe" in item["name"].lower()
+                   for item in allowed["locked"])

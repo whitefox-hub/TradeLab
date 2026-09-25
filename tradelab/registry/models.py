@@ -918,3 +918,36 @@ class MacroRelease(Base):
             name="ck_consensus_precedes_the_release"),
         Index("ix_macro_releases_series_time", "series", "scheduled_for"),
     )
+
+
+class AppSetting(Base):
+    """Operator configuration, versioned rather than edited. Plan.md §12.4, §20.4.
+
+    The line this table sits on matters, because §12.4 puts the asset universe in
+    the column that **cannot** be tuned: changing a strategy's universe creates a
+    new strategy, with a new id and hash, that re-enters screening and adds its
+    trials to the counter.
+
+    What lives here is a different thing with a confusingly similar name. The
+    **research** universe is which assets get collected and studied; a
+    **strategy's** universe is part of that strategy's identity. Widening the
+    first is an operational decision about where to look. Changing the second
+    invalidates a validation, and this table cannot do it.
+
+    Rows are appended, never updated. A setting that changed silently makes every
+    result issued before the change unreadable afterwards, and the audit log can
+    only say what someone did if the previous value still exists.
+    """
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(48), nullable=False)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    #: Mandatory. A change with no stated reason is one nobody can review, and
+    #: §20.3 makes the same demand of gate thresholds for the same reason.
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    valid_from: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("ix_app_settings_key_time", "key", "valid_from"),)
