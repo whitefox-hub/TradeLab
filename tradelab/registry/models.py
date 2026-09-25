@@ -694,3 +694,151 @@ class AuditLog(Base):
         TS, nullable=False, server_default=func.now())
 
     __table_args__ = (Index("ix_audit_time", "occurred_at"),)
+
+
+# --------------------------------------------------------------------------
+# Event intelligence. Plan.md §11, §20.5.
+# --------------------------------------------------------------------------
+
+
+class Event(Base):
+    """One occurrence, whatever produced it. Plan.md §11.7.
+
+    `shape` is not a label, it decides which machinery applies. A shock is a
+    single impulse; a schedule has a date the market can see coming and prices
+    in; a process resolves in steps, each of which can supersede the last. Using
+    one model for all three measures the wrong thing twice.
+    """
+
+    __tablename__ = "events"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    shape: Mapped[str] = mapped_column(String(16), nullable=False, server_default="shock")
+    first_seen_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    resolved_at: Mapped[datetime | None] = mapped_column(TS)
+    cluster_method: Mapped[str] = mapped_column(Text, nullable=False)
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("shape IN ('shock','schedule','process')", name="ck_events_shape"),
+        Index("ix_events_type_time", "event_type", "first_seen_at"),
+    )
+
+
+class ScheduleRevision(Base):
+    """What the expected date was believed to be, and when. Plan.md §11.6.
+
+    Unlocks get postponed and deadlines extended, so computing "days until the
+    event" from the date it eventually happened on assumes the market knew a date
+    it did not. That is look-ahead bias wearing a calendar, and it is invisible
+    afterwards because the labels look entirely reasonable — they are simply
+    built from a future nobody had.
+    """
+
+    __tablename__ = "schedule_revisions"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(TS, nullable=False)
+    confidence: Mapped[str | None] = mapped_column(String(16))
+    source: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "confidence IS NULL OR confidence IN ('fixed','estimated','rumoured')",
+            name="ck_schedule_confidence"),
+    )
+
+
+class EventAsset(Base):
+    """Which assets an event is expected to move, and by how much.
+
+    `expected_magnitude` is in sigma of pre-event volatility, matching both the
+    human rating and the measured reaction, so the §11.10 residual is a
+    subtraction rather than a conversion.
+    """
+
+    __tablename__ = "event_assets"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset: Mapped[str] = mapped_column(String(32), primary_key=True)
+    expected_direction: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    expected_magnitude: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+
+    __table_args__ = (
+        CheckConstraint("expected_direction IN (-1, 0, 1)", name="ck_event_assets_dir"),
+    )
+
+
+class EventAnnotation(Base):
+    """What a human said about an event. Plan.md §20.5.
+
+    Two kinds, and the difference is when the information came into existence.
+    A **correction** repairs a parse failure, so it inherits the event's own
+    availability — the value was always there, we simply read it wrong. A
+    **judgement** creates information at the moment it is made and can never be
+    backdated; a judgement dated before it was written is hindsight with a form
+    around it, and the database refuses it.
+
+    `rating` is in **sigma of pre-event volatility**, signed. The unit is the
+    whole point: §11.3 normalises every measured reaction to sigma, so a rating
+    in sigma can be scored against what actually happened. "8 out of 10 bullish"
+    cannot be scored against anything, which makes the annotator's calibration
+    unknowable — and an unmeasurable input is the one nobody ever corrects. It
+    is also the only unit comparable across assets: 2% on BTC and 2% on a
+    memecoin are different events, 2 sigma is the same event.
+    """
+
+    __tablename__ = "event_annotations"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    rating: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    author: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('correction','judgement')", name="ck_annotation_kind"),
+        # The rule that makes the ratings worth having. Enforced here so it
+        # cannot be bypassed by whatever writes them.
+        CheckConstraint(
+            "kind <> 'judgement' OR available_at >= created_at - interval '1 minute'",
+            name="ck_judgement_is_not_backdated"),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_annotation_confidence"),
+        Index("ix_annotations_event", "event_id", "created_at"),
+    )
+
+
+class ProcessTransition(Base):
+    """A process event resolving in steps. Plan.md §11.7.
+
+    `supersedes` is what distinguishes this from a list of updates: a regulation
+    withdrawn at step 4 invalidates the pricing that step 2 justified, and a
+    model that reads the steps as independent news double-counts it.
+    """
+
+    __tablename__ = "process_transitions"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    supersedes: Mapped[int | None] = mapped_column(Integer)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('proposed','under_review','decided','implemented','withdrawn')",
+            name="ck_process_state"),
+    )
