@@ -179,11 +179,29 @@ def test_the_process_holds_no_venue_credential() -> None:
 def test_the_api_computes_no_figure() -> None:
     """§20.1: every number shown was computed by a worker and persisted. A
     figure that appears only on screen is one nobody can reproduce."""
+    import ast
+
     import tradelab.api.app as module
 
     source = Path(module.__file__).read_text()
-    for forbidden in ("numpy", "sharpe_stats", "deflated_sharpe", "np."):
-        assert forbidden not in source, f"the API imports {forbidden}"
+
+    # Checked on the imports rather than on the text. The first version searched
+    # for names like `deflated_sharpe` anywhere in the file and started failing
+    # the moment a query selected the stored column of that name — which is
+    # precisely the behaviour §20.1 asks for: a figure computed by a worker and
+    # read back. Reading one is the rule; calculating one is the violation.
+    tree = ast.parse(source)
+    imported = {
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    } | {
+        alias.name for node in ast.walk(tree)
+        if isinstance(node, ast.Import) for alias in node.names
+    }
+    for forbidden in ("numpy", "scipy", "polars", "tradelab.validation",
+                      "tradelab.engines"):
+        assert not any(name.startswith(forbidden) for name in imported), (
+            f"the API imports {forbidden}, which computes"
+        )
 
 
 @pytest.mark.integration
@@ -726,3 +744,56 @@ def test_the_row_actions_sit_on_one_line(client: TestClient) -> None:
     css = client.get("/static/app.css").text
     assert "td.actions { white-space:nowrap;" in css
     assert 'cell.className = "actions";' in client.get("/news").text
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    "path", ["/strategies", "/experiments", "/data-quality", "/audit"],
+)
+def test_the_new_screens_are_served_and_mount_the_chrome(
+    client: TestClient, path: str,
+) -> None:
+    page = client.get(path).text
+    assert client.get(path).status_code == 200
+    assert '<link rel="stylesheet" href="/static/app.css">' in page
+    assert f'mount("{path}"' in page
+
+
+@pytest.mark.fast
+def test_the_menu_no_longer_offers_a_screen_that_exists_as_soon(
+    client: TestClient,
+) -> None:
+    """A built screen left greyed out is worse than one never listed: the
+    operator has been told it does not exist."""
+    menu = client.get("/static/app.js").text
+    for name in ("Strategies", "Experiments", "Data quality", "Audit"):
+        assert f'label: "{name}"' in menu
+        assert f'{{ label: "{name}", soon: true }}' not in menu
+
+
+@pytest.mark.fast
+def test_the_strategy_screen_shows_the_ladder_without_a_control(
+    client: TestClient,
+) -> None:
+    """§20.2, the most important thing in that section. Mode is displayed and
+    never edited, and the ladder is where an operator would most expect to find
+    a button that does not exist."""
+    page = client.get("/strategies").text
+    assert "LADDER" in page and "live_ramp" in page
+    assert "Displayed, never edited" in page
+    # No write route touches a strategy, which is the guarantee behind the text.
+    writable = [
+        route.path for route in client.app.routes
+        for method in getattr(route, "methods", set())
+        if method in {"POST", "PUT", "PATCH", "DELETE"}
+    ]
+    assert not any("strateg" in path for path in writable)
+
+
+@pytest.mark.fast
+def test_experiments_states_why_tier_a_is_absent(client: TestClient) -> None:
+    """An empty table with no explanation reads as a broken query. §5.7 keeps
+    tier A in Parquet on purpose, and the screen says so."""
+    page = client.get("/experiments").text
+    assert "Parquet" in page
+    assert "Tier A is not here" in page

@@ -9,14 +9,14 @@ const SCREENS = [
   { href: "/macro", label: "Macro" },
   { href: "/parameters", label: "Parameters" },
   { group: "Lifecycle" },
-  { label: "Strategies", soon: true },
+  { href: "/strategies", label: "Strategies" },
+  { href: "/experiments", label: "Experiments" },
   { label: "Approvals", soon: true },
-  { label: "Experiments", soon: true },
   { group: "Operations" },
+  { href: "/data-quality", label: "Data quality" },
+  { href: "/audit", label: "Audit" },
   { label: "Runs", soon: true },
   { label: "Risk limits", soon: true },
-  { label: "Data quality", soon: true },
-  { label: "Audit", soon: true },
 ];
 
 function renderSidebar(active) {

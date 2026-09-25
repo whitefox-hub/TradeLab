@@ -220,7 +220,13 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/strategies")
     def strategies(who: Operator = operator, session: Session = session_dep) -> list[dict]:
         rows = session.execute(sa.text(
-            "SELECT id, name, status, created_at FROM strategies ORDER BY created_at DESC"
+            "SELECT s.id, s.name, s.kind, s.status, s.code_hash, "
+            "       count(DISTINCT st.id) AS studies, "
+            "       count(DISTINCT e.id) AS experiments "
+            "FROM strategies s "
+            "LEFT JOIN studies st ON st.strategy_id = s.id "
+            "LEFT JOIN experiments e ON e.study_id = st.id "
+            "GROUP BY s.id ORDER BY s.name"
         )).mappings().all()
         return [dict(r) for r in rows]
 
@@ -248,9 +254,86 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/data-quality")
     def data_quality(who: Operator = operator, session: Session = session_dep) -> list[dict]:
         rows = session.execute(sa.text(
-            "SELECT id, kind, severity, asset, period_start, period_end, detail "
-            "FROM data_quality_issues WHERE resolved_at IS NULL "
-            "ORDER BY severity DESC, period_start DESC LIMIT 500"
+            "SELECT q.id, q.kind, q.severity, q.asset, q.period_start, "
+            "       q.period_end, q.detail, q.resolved_at, s.venue "
+            "FROM data_quality_issues q LEFT JOIN sources s ON s.id = q.source_id "
+            "WHERE q.resolved_at IS NULL "
+            "ORDER BY CASE q.severity WHEN 'blocking' THEN 0 WHEN 'warn' THEN 1 "
+            "         ELSE 2 END, q.period_start DESC LIMIT 500"
+        )).mappings().all()
+        return [dict(r) for r in rows]
+
+    @app.get("/api/strategies/{strategy_id}")
+    def strategy_detail(strategy_id: uuid.UUID, who: Operator = operator,
+                        session: Session = session_dep) -> dict:
+        """One strategy with the studies and verdicts issued under it.
+
+        Parameters are displayed and never editable: §12.4 puts them in the
+        column that creates a new strategy, and `runs.params` is immutable in
+        the schema so an edit would produce a different run rather than change
+        this one.
+        """
+        row = session.execute(sa.text(
+            "SELECT id, name, kind, status, code_hash, param_space, constraints "
+            "FROM strategies WHERE id = :i"), {"i": strategy_id}).mappings().first()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such strategy")
+
+        studies = session.execute(sa.text(
+            "SELECT id, search_method, planned_trials, executed_trials, "
+            "       min_detectable_sharpe, hold_days_min, hold_days_max, created_at "
+            "FROM studies WHERE strategy_id = :i ORDER BY created_at DESC"
+        ), {"i": strategy_id}).mappings().all()
+        # Reached through experiments, because a verdict belongs to a
+        # configuration rather than to the strategy as a whole.
+        reports = session.execute(sa.text(
+            "SELECT v.experiment_id, v.verdict, v.deflated_sharpe, v.pbo, "
+            "       v.trials_considered, v.min_trl_days, v.reasons, "
+            "       g.transition, g.rationale "
+            "FROM validation_reports v "
+            "JOIN experiments e ON e.id = v.experiment_id "
+            "JOIN studies st ON st.id = e.study_id "
+            "LEFT JOIN gate_configs g ON g.id = v.gate_config_id "
+            "WHERE st.strategy_id = :i"
+        ), {"i": strategy_id}).mappings().all()
+        return {
+            **dict(row),
+            "studies": [dict(r) for r in studies],
+            # Every verdict carries the bar it cleared, because a threshold that
+            # was lowered travels with the results issued under it (§20.3).
+            "validation_reports": [dict(r) for r in reports],
+        }
+
+    @app.get("/api/experiments")
+    def experiments(who: Operator = operator, session: Session = session_dep,
+                    limit: int = 200) -> list[dict]:
+        """Tier B and above only.
+
+        Tier A is disposable mass screening written to Parquet, never here
+        (§5.7): a campaign produces millions of rows and putting them in the
+        registry would make it unusable to query.
+        """
+        rows = session.execute(sa.text(
+            "SELECT e.id, e.study_id, e.tier, e.params, e.timeframe, e.status, "
+            "       e.realised_hold_days, e.created_at, "
+            "       r.split, r.regime, r.metrics, r.n_trades, "
+            "       v.verdict, v.deflated_sharpe, v.pbo "
+            "FROM experiments e "
+            "LEFT JOIN experiment_results r ON r.experiment_id = e.id "
+            "LEFT JOIN validation_reports v ON v.experiment_id = e.id "
+            "ORDER BY e.created_at DESC LIMIT :l"
+        ), {"l": min(limit, 500)}).mappings().all()
+        return [dict(r) for r in rows]
+
+    @app.get("/api/ingestion")
+    def ingestion(who: Operator = operator, session: Session = session_dep) -> list[dict]:
+        """Recent collector runs, newest first."""
+        rows = session.execute(sa.text(
+            "SELECT i.id, i.started_at, i.ended_at, i.status, i.rows_written, "
+            "       i.mode, i.period_start, i.period_end, i.watermark, "
+            "       s.kind, s.venue "
+            "FROM ingestion_runs i LEFT JOIN sources s ON s.id = i.source_id "
+            "ORDER BY i.started_at DESC LIMIT 100"
         )).mappings().all()
         return [dict(r) for r in rows]
 
@@ -933,6 +1016,22 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         so replacing it later changes the view and not the contract.
         """
         return FileResponse(STATIC / "news.html")
+
+    @app.get("/strategies", include_in_schema=False)
+    def strategies_screen() -> FileResponse:
+        return FileResponse(STATIC / "strategies.html")
+
+    @app.get("/experiments", include_in_schema=False)
+    def experiments_screen() -> FileResponse:
+        return FileResponse(STATIC / "experiments.html")
+
+    @app.get("/data-quality", include_in_schema=False)
+    def data_quality_screen() -> FileResponse:
+        return FileResponse(STATIC / "data_quality.html")
+
+    @app.get("/audit", include_in_schema=False)
+    def audit_screen() -> FileResponse:
+        return FileResponse(STATIC / "audit.html")
 
     @app.get("/api/health")
     def health() -> dict:

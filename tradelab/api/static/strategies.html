@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strategies — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .state { font-size:12.5px; padding:2px 9px; border-radius:20px; font-weight:600;
+    border:1px solid var(--line); color:var(--muted); }
+  .state.live, .state.live_ramp { color:var(--down); border-color:var(--down); }
+  .state.candidate, .state.simulator, .state.testnet { color:var(--accent);
+    border-color:var(--accent); }
+  .state.rejected, .state.retired { opacity:.7; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:20px; margin-top:16px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:8px 18px; font-size:15px; }
+  .kv dt { color:var(--muted); }
+  .kv dd { margin:0; font-family:ui-monospace, Menlo, monospace; font-size:14px;
+    word-break:break-all; }
+  .verdict { font-weight:650; }
+  .verdict.pass { color:var(--up); }
+  .verdict.fail { color:var(--down); }
+  .verdict.inconclusive { color:var(--warn); }
+  .ladder { display:flex; gap:6px; flex-wrap:wrap; margin-top:14px; }
+  .rung { font-size:12.5px; padding:3px 10px; border-radius:20px;
+    border:1px solid var(--line); color:var(--muted); }
+  .rung.here { color:var(--text); border-color:var(--accent); font-weight:600;
+    background:var(--panel-2); }
+  .rung.past { color:var(--muted); opacity:.55; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <main class="content">
+    <h1>Strategies</h1>
+    <p class="sub">Lifecycle state, and the verdicts issued under each bar.</p>
+
+    <table>
+      <thead><tr>
+        <th>Name</th><th>Kind</th><th>State</th>
+        <th class="num">Studies</th><th class="num">Experiments</th><th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <div id="detail"></div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+mount("/strategies", { onReady: load });
+
+const LADDER = ["draft", "screening", "validating", "candidate", "simulator",
+                "testnet", "live_ramp", "live"];
+
+const escape = (t) => (t || "").replace(/[<>&"]/g,
+  (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]);
+const num = (v, d = 3) => v === null || v === undefined ? "—" : Number(v).toFixed(d);
+
+async function load() {
+  const strategies = await api("/api/strategies");
+  $("rows").innerHTML = strategies.length ? strategies.map((s) => `
+    <tr>
+      <td><strong>${escape(s.name)}</strong></td>
+      <td>${s.kind}</td>
+      <td><span class="state ${s.status}">${s.status}</span></td>
+      <td class="num">${s.studies}</td>
+      <td class="num">${s.experiments}</td>
+      <td class="actions"><button class="accent" data-id="${s.id}">Open</button></td>
+    </tr>`).join("")
+    : '<tr><td colspan="6" class="empty">No strategies yet.</td></tr>';
+
+  for (const button of $("rows").querySelectorAll("button")) {
+    button.onclick = () => openDetail(button.dataset.id);
+  }
+  if (strategies.length) openDetail(strategies[0].id);
+}
+
+async function openDetail(id) {
+  const s = await api(`/api/strategies/${id}`);
+  const here = LADDER.indexOf(s.status);
+
+  $("detail").innerHTML = `
+    <h2>${escape(s.name)}</h2>
+
+    <div class="ladder">${LADDER.map((rung, i) => `
+      <span class="rung ${i === here ? "here" : i < here ? "past" : ""}">${rung}</span>
+    `).join("")}</div>
+    <p class="hint">Displayed, never edited. There is no control that moves a
+      strategy along this ladder: §15 makes every transition conditional on gate
+      criteria plus a recorded approval, and §14.5 requires production to be
+      reached through the capital ramp rather than entered. The interface
+      requests; the executor acts.</p>
+
+    <div class="panel">
+      <dl class="kv">
+        <dt>Code hash</dt><dd>${escape(s.code_hash)}</dd>
+        <dt>Parameter space</dt><dd>${escape(JSON.stringify(s.param_space))}</dd>
+        <dt>Constraints</dt><dd>${escape(JSON.stringify(s.constraints))}</dd>
+      </dl>
+      <p class="hint">Read-only. Changing a signal parameter creates a new
+        strategy with a new id and hash that re-enters screening and adds its
+        trials to the counter — so this is a display, and editing happens by
+        making a different strategy rather than by changing this one.</p>
+    </div>
+
+    <h2>Studies</h2>
+    <table>
+      <thead><tr>
+        <th>Search</th><th class="num">Planned</th><th class="num">Executed</th>
+        <th class="num">Target Sharpe</th><th>Hold days</th><th>Started</th>
+      </tr></thead>
+      <tbody>${s.studies.length ? s.studies.map((st) => `
+        <tr>
+          <td>${st.search_method}</td>
+          <td class="num">${st.planned_trials}</td>
+          <td class="num">${st.executed_trials}</td>
+          <td class="num">${num(st.min_detectable_sharpe, 2)}</td>
+          <td>${st.hold_days_min}–${st.hold_days_max}</td>
+          <td>${(st.created_at || "").slice(0, 10)}</td>
+        </tr>`).join("")
+        : '<tr><td colspan="6" class="empty">No studies.</td></tr>'}</tbody>
+    </table>
+    <p class="hint">Executed trials are what deflate the result, not planned
+      ones — and the counter is monotonic across studies, so a search that
+      stopped early still spent its configurations.</p>
+
+    <h2>Validation reports</h2>
+    <table>
+      <thead><tr>
+        <th>Verdict</th><th class="num">Deflated Sharpe</th><th class="num">PBO</th>
+        <th class="num">Trials</th><th class="num">MinTRL days</th><th>Judged under</th>
+      </tr></thead>
+      <tbody>${s.validation_reports.length ? s.validation_reports.map((v) => `
+        <tr>
+          <td><span class="verdict ${v.verdict}">${v.verdict}</span>
+              ${(v.reasons || []).length
+                ? `<div class="why">${escape((v.reasons || []).join("; "))}</div>` : ""}</td>
+          <td class="num">${num(v.deflated_sharpe)}</td>
+          <td class="num">${num(v.pbo)}</td>
+          <td class="num">${v.trials_considered ?? "—"}</td>
+          <td class="num">${num(v.min_trl_days, 0)}</td>
+          <td>${escape(v.transition || "—")}
+              ${v.rationale ? `<div class="why">${escape(v.rationale)}</div>` : ""}</td>
+        </tr>`).join("")
+        : '<tr><td colspan="6" class="empty">No validation reports.</td></tr>'}</tbody>
+    </table>
+    <p class="hint">Every verdict carries the bar it cleared. A threshold that
+      was lowered travels with the results issued under it, which is what makes
+      a verdict readable six months later.</p>`;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .gap { font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .gap.tight { color:var(--warn); font-weight:600; }
+  .action { font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size:14px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <main class="content">
+    <h1>Audit</h1>
+    <p class="sub">Every write, with its actor and the time between it and the
+      one before.</p>
+
+    <p class="hint">The elapsed column is the point of this screen. With one
+      operator there is no separation of duties, so the separation is temporal
+      instead — and "threshold lowered 14:02, approval 14:05" is only legible if
+      the gap is shown rather than left to be worked out from two timestamps six
+      months later. Gaps under five minutes between related writes are marked.</p>
+
+    <table>
+      <thead><tr>
+        <th>When</th><th class="num">Since previous</th><th>Actor</th>
+        <th>Action</th><th>Subject</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+mount("/audit", { onReady: load });
+
+async function load() {
+  const entries = await api("/api/audit");
+  $("rows").innerHTML = entries.map((entry, index) => {
+    const at = new Date(entry.occurred_at);
+    const previous = entries[index + 1];
+    let gap = "—", tight = false;
+    if (previous) {
+      const seconds = (at - new Date(previous.occurred_at)) / 1000;
+      tight = seconds < 300;
+      gap = seconds < 60 ? `${seconds.toFixed(0)}s`
+          : seconds < 3600 ? `${(seconds / 60).toFixed(1)}m`
+          : seconds < 86400 ? `${(seconds / 3600).toFixed(1)}h`
+          : `${(seconds / 86400).toFixed(1)}d`;
+    }
+    return `
+      <tr>
+        <td>${entry.occurred_at.slice(0, 19).replace("T", " ")}</td>
+        <td class="num"><span class="gap ${tight ? "tight" : ""}">${gap}</span></td>
+        <td>${entry.actor}</td>
+        <td class="action">${entry.action}</td>
+        <td class="mono">${entry.subject_kind}: ${String(entry.subject_id).slice(0, 18)}</td>
+      </tr>`;
+  }).join("") || '<tr><td colspan="5" class="empty">Nothing recorded yet.</td></tr>';
+}
+</script>
+</body>
+</html>
