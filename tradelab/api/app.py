@@ -44,6 +44,7 @@ from tradelab.api.settings_rules import Invalid as InvalidSetting
 from tradelab.api.settings_rules import validate as validate_setting
 from tradelab.config import Settings
 from tradelab.news.expiry import resolve as resolve_expiry
+from tradelab.news.strength import SIGMA_BY_STRENGTH, describe, to_sigma
 
 #: Shared chrome and the screens live here. Mounted rather than served per file,
 #: so adding a stylesheet does not mean adding a route.
@@ -107,7 +108,21 @@ class AnnotationRequest(BaseModel):
     """
 
     kind: str = Field(pattern="^(correction|judgement)$")
+    #: 1-10, with direction carrying the sign. The operator never types a
+    #: negative number; what is stored is still signed sigma, because §11.3
+    #: normalises measured reactions to sigma and a rating in any other unit
+    #: cannot be scored against one.
+    strength: int | None = Field(default=None, ge=1, le=10)
+    direction: int = Field(default=0, ge=-1, le=1)
+    #: Accepted for callers that already work in sigma. When `strength` is given
+    #: it wins, so the two cannot disagree in a stored row.
     rating: float | None = Field(default=None, ge=-10.0, le=10.0)
+
+    @property
+    def signed_sigma(self) -> float | None:
+        if self.strength is not None:
+            return to_sigma(self.strength, self.direction)
+        return self.rating
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     payload: dict[str, Any] = Field(default_factory=dict)
     available_at: datetime | None = None
@@ -624,6 +639,20 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         "listing_rumour", "treasury_purchase",
     )
 
+    @app.get("/api/rating-scale")
+    def rating_scale(who: Operator = operator) -> list[dict]:
+        """The 1-10 steps with the sigma each one means.
+
+        Served rather than written into the page, so the scale cannot drift from
+        what the endpoint stores — and so the dialog can show the unit instead of
+        hiding it. The operator should learn that seven means three and a half
+        sigma, not be shielded from the fact that sigma is what is kept.
+        """
+        return [
+            {"strength": n, "sigma": SIGMA_BY_STRENGTH[n], "label": describe(n)}
+            for n in sorted(SIGMA_BY_STRENGTH)
+        ]
+
     @app.get("/api/events/types")
     def event_types(who: Operator = operator,
                     session: Session = session_dep) -> list[dict]:
@@ -713,8 +742,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         )
         annotation_id = uuid.uuid4()
         payload = dict(body.payload)
+        if body.strength is not None:
+            # Kept alongside the sigma so a later reader can see what was
+            # actually chosen, not only what it was converted to.
+            payload["strength"] = body.strength
         if body.note:
             payload["note"] = body.note
+
+        rating = body.signed_sigma
 
         try:
             session.execute(sa.text(
@@ -722,7 +757,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "payload, rating, confidence, author) "
                 "VALUES (:i, :e, :k, :a, CAST(:p AS jsonb), :r, :c, :u)"
             ), {"i": annotation_id, "e": event_id, "k": body.kind,
-                "a": available_at, "p": json.dumps(payload), "r": body.rating,
+                "a": available_at, "p": json.dumps(payload), "r": rating,
                 "c": body.confidence, "u": user.id})
         except sa.exc.DBAPIError as error:
             session.rollback()
@@ -743,16 +778,18 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # Only for judgements, and only when a rating was given: a correction
         # repairs a parse failure and says nothing about which way the price
         # should go.
-        if body.kind == "judgement" and body.rating is not None:
+        if body.kind == "judgement" and rating is not None:
             session.execute(sa.text(
                 "UPDATE event_assets SET expected_direction = :d "
                 "WHERE event_id = :e"
-            ), {"d": (body.rating > 0) - (body.rating < 0), "e": event_id})
+            ), {"d": (rating > 0) - (rating < 0), "e": event_id})
 
         audit(session, who.email, f"annotation.{body.kind}", "event", str(event_id),
-              {"rating": body.rating, "confidence": body.confidence})
+              {"rating": rating, "strength": body.strength,
+               "confidence": body.confidence})
         session.commit()
-        return {"id": str(annotation_id), "available_at": available_at.isoformat()}
+        return {"id": str(annotation_id), "available_at": available_at.isoformat(),
+                "rating": rating}
 
     # -- parameters ----------------------------------------------------------
 

@@ -97,19 +97,26 @@
   <h2 id="rate-title">Rate event</h2>
   <div class="shape" id="rate-sub"></div>
 
-  <label for="rating">Expected move, in sigma of pre-event volatility</label>
-  <input id="rating" type="number" step="0.25" min="-10" max="10" placeholder="-2.0 … +2.0">
-  <p class="hint">Signed, and in sigma rather than percent: 2% on BTC and 2% on a small
-    cap are different events, 2 sigma is the same event. This is the unit the measured
-    reaction is normalised to, so the rating can be scored against what happened.</p>
+  <label for="direction">Direction</label>
+  <select id="direction" style="width:100%">
+    <option value="1">&#9650; bullish — expected to push the price up</option>
+    <option value="-1">&#9660; bearish — expected to push the price down</option>
+  </select>
+
+  <label for="strength">Strength</label>
+  <select id="strength" style="width:100%"></select>
+  <p class="hint">Direction carries the sign, so there is no negative number to
+    type. What gets <strong>stored</strong> is sigma of the asset's pre-event
+    volatility — the scale is a control, not a unit. §11.3 normalises every
+    measured reaction to sigma, so a rating in sigma can be checked against what
+    actually happened and your calibration becomes knowable. "8 out of 10
+    bullish" cannot be checked against anything, and an input nobody can score
+    is the one nobody ever corrects.</p>
 
   <div class="readout">
-    <span class="k">Direction</span>
-    <span id="rate-dir" class="dir flat">rate it</span>
+    <span class="k">Will store</span>
+    <span id="rate-dir" class="dir flat">pick a strength</span>
   </div>
-  <p class="hint">Read from the sign of the rating rather than chosen separately.
-    Two controls for one judgement can disagree, and then nothing says which the
-    operator meant.</p>
 
   <label for="confidence">Confidence (0–1)</label>
   <input id="confidence" type="number" step="0.05" min="0" max="1" placeholder="0.60">
@@ -237,7 +244,10 @@ let current = null;
 let tab = "active";
 let all = [];
 
-mount("/news", { onReady: async () => { await loadTypes(); load(); } });
+mount("/news", { onReady: async () => {
+  await Promise.all([loadTypes(), loadScale()]);
+  load();
+} });
 
 async function loadTypes() {
   const types = await api("/api/events/types");
@@ -429,38 +439,48 @@ function openRating(event) {
   $("rate-sub").textContent =
     `${event.event_type} · ${(event.assets || []).join(" ") || "no assets"} · ` +
     event.first_seen_at.slice(0, 10);
-  $("rating").value = ""; $("confidence").value = "";
+  $("strength").value = "3"; $("direction").value = "1"; $("confidence").value = "";
   paintDirection();
   $("rate-err").textContent = "";
   $("rate").showModal();
 }
 
-function paintDirection() {
-  const value = Number($("rating").value);
-  const element = $("rate-dir");
-  if ($("rating").value === "" || Number.isNaN(value) || value === 0) {
-    element.className = "dir flat";
-    element.textContent = "rate it";
-  } else if (value > 0) {
-    element.className = "dir up";
-    element.textContent = "\u25b2 bullish";
-  } else {
-    element.className = "dir down";
-    element.textContent = "\u25bc bearish";
-  }
+let scale = [];
+
+async function loadScale() {
+  scale = await api("/api/rating-scale");
+  $("strength").innerHTML = scale.map((step) =>
+    `<option value="${step.strength}">${step.label}</option>`).join("");
 }
 
-$("rating").addEventListener("input", paintDirection);
+function paintDirection() {
+  const direction = Number($("direction").value);
+  const step = scale.find((s) => s.strength === Number($("strength").value));
+  const element = $("rate-dir");
+  if (!step) {
+    element.className = "dir flat";
+    element.textContent = "pick a strength";
+    return;
+  }
+  const sigma = (step.sigma * direction).toFixed(1);
+  element.className = direction > 0 ? "dir up" : "dir down";
+  element.textContent = `${direction > 0 ? "\u25b2" : "\u25bc"} ${sigma} sigma`;
+}
+
+$("direction").addEventListener("change", paintDirection);
+$("strength").addEventListener("change", paintDirection);
 
 $("cancel").onclick = () => $("rate").close();
 
 $("save").onclick = async () => {
   $("rate-err").textContent = "";
-  const rating = $("rating").value === "" ? null : Number($("rating").value);
   const confidence = $("confidence").value === "" ? null : Number($("confidence").value);
   try {
     await api(`/api/events/${current.id}/annotations`, { method: "POST",
-      body: JSON.stringify({ kind: "judgement", rating, confidence }) });
+      body: JSON.stringify({ kind: "judgement",
+                             strength: Number($("strength").value),
+                             direction: Number($("direction").value),
+                             confidence }) });
     $("rate").close();
     load();
   } catch (e) { $("rate-err").textContent = e.message; }

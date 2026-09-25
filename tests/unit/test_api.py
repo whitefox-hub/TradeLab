@@ -687,32 +687,33 @@ def test_rated_counts_judgements_only(client: TestClient) -> None:
 
 
 @pytest.mark.fast
-def test_the_dialog_shows_direction_without_offering_a_second_control(
-    client: TestClient,
-) -> None:
-    """Shown live from what is typed, not chosen. A select beside the rating
-    could contradict it, and then nothing says which the operator meant."""
-    page = client.get("/news").text
-    assert 'id="rate-dir"' in page
-    assert "paintDirection" in page
-    assert '$("rating").addEventListener("input", paintDirection)' in page
-    # And no free-text note: it was neither scored nor read.
-    assert 'id="note"' not in page
+def test_the_two_controls_cannot_disagree_in_a_stored_row() -> None:
+    """Direction and strength are separate controls now, which was a deliberate
+    change: the operator picks a direction instead of typing a minus sign.
+
+    The risk that split creates is a row holding two readings that contradict
+    each other, so the conversion happens in one place and `strength` wins over
+    any `rating` sent alongside it.
+    """
+    from tradelab.api.app import AnnotationRequest
+
+    assert AnnotationRequest(
+        kind="judgement", strength=4, direction=-1, rating=9.0
+    ).signed_sigma == -2.0
 
 
 @pytest.mark.fast
-def test_direction_comes_from_the_sign_of_the_rating(client: TestClient) -> None:
-    """One input, one meaning.
-
-    The rating is already signed sigma, so a second control for direction could
-    disagree with it — and then nothing says which the operator meant.
-    """
+def test_direction_still_follows_the_sign_of_what_is_stored(
+    client: TestClient,
+) -> None:
+    """The asset's expected direction is set from the sign of the stored sigma,
+    not from the form field, so the two can never come apart in the database."""
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
     assert "UPDATE event_assets SET expected_direction" in source
-    assert '(body.rating > 0) - (body.rating < 0)' in source
-    # And only for a judgement: a correction repairs a parse failure and says
-    # nothing about which way the price should go.
-    assert 'if body.kind == "judgement" and body.rating is not None:' in source
+    assert "(rating > 0) - (rating < 0)" in source
+    assert 'if body.kind == "judgement" and rating is not None:' in source
+    # And no free-text note, which was neither scored nor read.
+    assert 'id="note"' not in client.get("/news").text
 
 
 @pytest.mark.fast
@@ -797,3 +798,36 @@ def test_experiments_states_why_tier_a_is_absent(client: TestClient) -> None:
     page = client.get("/experiments").text
     assert "Parquet" in page
     assert "Tier A is not here" in page
+
+
+@pytest.mark.fast
+def test_the_rating_is_picked_on_a_scale_and_stored_in_sigma() -> None:
+    """Two controls, no negative number typed, and the stored unit unchanged."""
+    from tradelab.api.app import AnnotationRequest
+
+    bearish = AnnotationRequest(kind="judgement", strength=6, direction=-1)
+    assert bearish.signed_sigma == -3.0
+
+    bullish = AnnotationRequest(kind="judgement", strength=6, direction=1)
+    assert bullish.signed_sigma == 3.0
+
+    # A caller already working in sigma is still accepted.
+    direct = AnnotationRequest(kind="judgement", rating=-2.5)
+    assert direct.signed_sigma == -2.5
+
+    # And strength wins when both are given, so a stored row cannot hold two
+    # readings that disagree.
+    both = AnnotationRequest(kind="judgement", strength=2, direction=1, rating=-9.0)
+    assert both.signed_sigma == 1.0
+
+
+@pytest.mark.fast
+def test_the_dialog_offers_the_scale_from_the_server(client: TestClient) -> None:
+    """Served rather than written into the page, so the options cannot drift
+    from what the endpoint stores."""
+    page = client.get("/news").text
+    assert 'id="strength"' in page and 'id="direction"' in page
+    assert "/api/rating-scale" in page
+    assert 'id="rating"' not in page, "the free-number input is back"
+    # The readout shows the sigma that will be stored.
+    assert "sigma" in page
