@@ -688,7 +688,7 @@ def test_the_table_shows_the_headline_and_escapes_it(client: TestClient) -> None
     """Titles arrive from a venue feed, so they are untrusted text going into
     innerHTML."""
     page = client.get("/news").text
-    assert "For the price" in page
+    assert "<th>Direction</th>" in page
     assert "event.headline" in page
     assert "const escape = (text)" in page
     assert "escape(event.headline)" in page

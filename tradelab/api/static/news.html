@@ -62,7 +62,9 @@
 <div class="layout">
   <main class="content">
     <h1>News</h1>
-    <p class="sub">Events, extracted assets, and your ratings in sigma.</p>
+    <p class="sub">Events, extracted assets, and your ratings in sigma.
+      <strong>Direction</strong> is bullish or bearish for the named assets, and
+      it comes from the sign of your rating rather than a field of its own.</p>
 
     <div class="tabs">
       <button id="tab-active" class="tab on">Still influencing<span class="n" id="n-active"></span></button>
@@ -79,7 +81,7 @@
 
     <table>
       <thead><tr>
-        <th>When</th><th>Headline</th><th>For the price</th><th>Assets</th>
+        <th>When</th><th>Headline</th><th>Direction</th><th>Assets</th>
         <th>Ends by</th><th class="num">Ratings</th><th></th>
       </tr></thead>
       <tbody id="rows"></tbody>
@@ -281,11 +283,14 @@ function draw() {
     const when = new Date(event.first_seen_at).toISOString().slice(0, 16).replace("T", " ");
     const escape = (text) => (text || "").replace(/[<>&"]/g,
       (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]);
+    // The empty state says what would fill it. "not set" reads as a field
+    // someone forgot; "rate it" says the value comes from the operator, which
+    // is the design — the collector cannot know which way an event cuts.
     const sign = event.direction > 0
-      ? '<span class="dir up">&#9650; up</span>'
+      ? '<span class="dir up">&#9650; bullish</span>'
       : event.direction < 0
-        ? '<span class="dir down">&#9660; down</span>'
-        : '<span class="dir flat">not set</span>';
+        ? '<span class="dir down">&#9660; bearish</span>'
+        : '<span class="dir flat">rate it</span>';
 
     tr.innerHTML =
       `<td>${when}</td>` +
