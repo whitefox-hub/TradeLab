@@ -22,7 +22,13 @@ from pathlib import Path
 import httpx
 import polars as pl
 
-from tradelab.collectors.multivenue.funding import SPECS, fetch, to_daily, utc_window
+from tradelab.collectors.multivenue.funding import (
+    SPECS,
+    closes,
+    fetch,
+    to_daily,
+    utc_window,
+)
 
 
 def universes() -> dict[str, set[str]]:
@@ -100,8 +106,22 @@ def main() -> int:
                     daily = to_daily(fetch(venue, base, start, end, client=client))
                 except Exception:
                     continue          # one venue missing is a narrower panel, not a failure
-                if daily.height:
-                    frames.append(daily.with_columns(pl.lit(venue).alias("venue")))
+                if not daily.height:
+                    continue
+                # The price leg, joined on the same day key. RESULT-003 was
+                # voided for omitting it: basis volatility ran 42x the funding
+                # spread, so a panel without closes measures one leg of two.
+                marks = closes(venue, base, start, end, client=client)
+                price = pl.DataFrame({
+                    "day": [
+                        __import__("datetime").datetime.fromtimestamp(
+                            ms / 1000, __import__("datetime").UTC).date()
+                        for ms in marks
+                    ],
+                    "close": list(marks.values()),
+                }) if marks else pl.DataFrame(schema={"day": pl.Date, "close": pl.Float64})
+                daily = daily.join(price.unique(subset=["day"]), on="day", how="left")
+                frames.append(daily.with_columns(pl.lit(venue).alias("venue")))
         if not frames:
             return base, 0
         combined = pl.concat(frames).with_columns(pl.lit(base).alias("asset"))

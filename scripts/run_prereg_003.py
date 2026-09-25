@@ -34,26 +34,47 @@ def pair_spreads(rows: pl.DataFrame) -> dict[tuple[str, str], pl.DataFrame]:
     out: dict[tuple[str, str], pl.DataFrame] = {}
     reference = rows.filter(pl.col("venue") == REFERENCE)
     for asset in rows["asset"].unique().sort():
-        left = reference.filter(pl.col("asset") == asset).select("day", "rate")
+        left = reference.filter(pl.col("asset") == asset).select("day", "rate", "close")
         if left.height < LOOKBACK_DAYS + REBALANCE_DAYS:
             continue
         for venue in ("bybit", "okx", "gate", "bitget"):
             right = rows.filter(
                 (pl.col("asset") == asset) & (pl.col("venue") == venue)
-            ).select("day", pl.col("rate").alias("rate_b"))
+            ).select("day", pl.col("rate").alias("rate_b"),
+                     pl.col("close").alias("close_b"))
             joined = left.join(right, on="day", how="inner").sort("day")
             if joined.height < LOOKBACK_DAYS + REBALANCE_DAYS:
                 continue
+            joined = joined.drop_nulls(["close", "close_b"])
+            if joined.height < LOOKBACK_DAYS + REBALANCE_DAYS:
+                continue
+            # Both legs. `spread` is what the position earns in funding, `basis`
+            # is the relative price gap whose *change* is the hedge's P&L. The
+            # first run of this study had only the former, and basis volatility
+            # is 42x the funding spread, so it was measuring one leg of two.
             out[(asset, venue)] = joined.with_columns(
-                (pl.col("rate") - pl.col("rate_b")).alias("spread")
+                (pl.col("rate") - pl.col("rate_b")).alias("spread"),
+                (pl.col("close") / pl.col("close_b") - 1.0).alias("basis"),
             )
     return out
 
 
-def simulate(spread: np.ndarray) -> tuple[np.ndarray, int]:
-    """Sign of the trailing 90-day mean, refreshed monthly. Returns daily net
-    P&L in rate units, and the number of sign flips paid for."""
+def simulate(spread: np.ndarray, basis: np.ndarray) -> tuple[np.ndarray, int]:
+    """Sign of the trailing 90-day mean of the funding spread, refreshed monthly.
+
+    Daily P&L is the funding differential **plus the change in the price basis**.
+    Holding long the perpetual on the reference venue and short it elsewhere, a
+    widening basis is a gain to that position and a narrowing one is a loss; both
+    carry the position's sign, exactly as the funding does.
+
+    The signal is still the funding spread alone, as registered. Only the P&L
+    gained a term — the rule did not change, so this is a corrected
+    implementation and not a second trial.
+    """
     n = spread.size
+    basis_change = np.zeros(n)
+    basis_change[1:] = np.diff(basis)
+    total = spread + basis_change
     daily = np.zeros(n)
     position = 0
     flips = 0
@@ -61,7 +82,7 @@ def simulate(spread: np.ndarray) -> tuple[np.ndarray, int]:
         window = spread[start - LOOKBACK_DAYS:start]
         target = int(np.sign(window.mean()))
         stop = min(start + REBALANCE_DAYS, n)
-        daily[start:stop] = target * spread[start:stop]
+        daily[start:stop] = target * total[start:stop]
         # Charged before `position` is updated. The first version assigned
         # `position = target` inside the comparison above and then tested
         # `target != position` again, which is False by construction — so no
@@ -102,7 +123,8 @@ def main() -> int:
     total_flips = 0
     for frame in pairs.values():
         aligned = frame.sort("day")
-        daily, flips = simulate(aligned["spread"].to_numpy())
+        daily, flips = simulate(aligned["spread"].to_numpy(),
+                                aligned["basis"].to_numpy())
         # Capital sits on both venues, so the return per unit of committed
         # capital is half the return on one leg's notional (§ the registration).
         daily = daily / 2.0

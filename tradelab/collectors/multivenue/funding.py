@@ -209,6 +209,79 @@ def spread(a: pl.DataFrame, b: pl.DataFrame, min_days: int = 30) -> pl.DataFrame
     )
 
 
+#: Daily close endpoints, same venues and same symbol conventions as the funding
+#: fetchers. The price leg is not optional: a cross-venue funding spread is one
+#: leg of a two-leg trade, and RESULT-003 was voided for measuring only the
+#: other one. Basis volatility ran 42x the funding spread it was collecting.
+def closes(venue: str, base: str, start: datetime, end: datetime,
+           client: httpx.Client | None = None) -> dict[int, float]:
+    """Daily closes keyed by UTC-midnight epoch ms."""
+    owned = client is None
+    client = client or httpx.Client(timeout=20.0)
+    symbol = SPECS[venue].symbol(base)
+    start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+    try:
+        if venue == "binance":
+            rows = client.get(
+                "https://fapi.binance.com/fapi/v1/klines",
+                params={"symbol": symbol, "interval": "1d",
+                        "startTime": start_ms, "limit": 1500}).json()
+            out = {int(b[0]): float(b[4]) for b in rows} if isinstance(rows, list) else {}
+        elif venue == "bybit":
+            payload = client.get(
+                "https://api.bybit.com/v5/market/kline",
+                params={"category": "linear", "symbol": symbol, "interval": "D",
+                        "start": start_ms, "end": end_ms, "limit": 1000}).json()
+            out = {int(b[0]): float(b[4])
+                   for b in (payload.get("result", {}).get("list") or [])}
+        elif venue == "okx":
+            # Caps at 100 candles per call and pages backwards from `after`.
+            # Without this the panel would silently lose every OKX pair to a
+            # 100-day history while the other venues carried 730.
+            out = {}
+            cursor = end_ms
+            while cursor > start_ms:
+                rows = client.get(
+                    "https://www.okx.com/api/v5/market/history-candles",
+                    params={"instId": symbol, "bar": "1D", "after": cursor,
+                            "limit": 100}).json().get("data") or []
+                if not rows:
+                    break
+                out |= {int(b[0]): float(b[4]) for b in rows}
+                oldest = min(int(b[0]) for b in rows)
+                if oldest >= cursor:
+                    break
+                cursor = oldest - 1
+        elif venue == "gate":
+            rows = client.get(
+                "https://api.gateio.ws/api/v4/futures/usdt/candlesticks",
+                params={"contract": symbol, "interval": "1d", "limit": 1000}).json()
+            out = {int(r["t"]) * 1000: float(r["c"])
+                   for r in rows} if isinstance(rows, list) else {}
+        else:  # bitget, which pages backwards from `endTime`
+            out = {}
+            cursor = end_ms
+            while cursor > start_ms:
+                rows = client.get(
+                    "https://api.bitget.com/api/v2/mix/market/history-candles",
+                    params={"symbol": symbol, "productType": "usdt-futures",
+                            "granularity": "1D", "endTime": cursor,
+                            "limit": 200}).json().get("data") or []
+                if not rows:
+                    break
+                out |= {int(b[0]): float(b[4]) for b in rows}
+                oldest = min(int(b[0]) for b in rows)
+                if oldest >= cursor:
+                    break
+                cursor = oldest - 1
+    except Exception:
+        return {}
+    finally:
+        if owned:
+            client.close()
+    return {ms: px for ms, px in out.items() if start_ms <= ms <= end_ms and px > 0}
+
+
 def utc_window(days: int) -> tuple[datetime, datetime]:
     """A closed window ending now, to the second."""
     end = datetime.now(UTC).replace(microsecond=0)
