@@ -160,6 +160,7 @@ The original brief points in the right direction. These are the gaps found and h
 | 21 | Backfilled and live-captured data silently disagree, contaminating backtest↔simulator divergence. | Live capture as a first-class source, periodic re-backfill comparison, blocking quality issues. See §4.6. |
 | 22 | Six tables referenced in prose but never defined; feature-importance method unspecified. | Schema completed (`cost_models`, `oos_access_log`, `data_quality_issues`, `position_reconciliations`, `event_revisions`, `asset_universe`); clustered MDA under purged CV. See §5, §6.1. |
 | 23 | No time horizon defined, although nearly every downstream parameter depends on it. | Horizon fixed at 1–7 day holds by the intersection of cost drag and statistical power; HFT and position trading excluded. See §0.1–§0.3. |
+| 45 | §8.8's minimum detectable effect was a post-hoc diagnosis, so studies that could never conclude still spent trials — and the counter is monotonic, so they raised the bar for every study after them. | A precondition: the design is sized from a pilot that reads trade structure and never performance, and an underpowered study is refused rather than reported. Of four designs already run, only one could have concluded. See §8.8. |
 | 44 | Macro had no screen, and nothing enforced that a consensus be recorded before its release. | Calendar, surprise in sigma, vintage availability and per-series freshness in the application; prices in Grafana. `consensus_at < scheduled_for` in the schema — a consensus recorded afterwards is a memory of one, and would make every macro surprise look predictive. See §20.6. |
 | 43 | Macro listed as one Tier 2 line, hiding that it is two different things: continuous prices used as regime inputs, and scheduled releases where consensus makes surprise computable. Revisions and session alignment were undocumented. | Split in §4.7, with the policy rate treated as surprise rather than level, vintages required where a series is revised, and joins on `available_at` rather than calendar date. |
 | 42 | Impact and direction existed as fields but with no defined unit, and a fourth event shape was missing: events that replace the baseline rather than deviate from it. | Ratings are in sigma of pre-event volatility, so model, human and outcome share one scale and calibration is computable. Regime shifts — war, venue collapse, a ban — go to §10 as a conditioning variable, since fitting a decay to them estimates a reversion that never happens. See §11.7. |
@@ -1669,8 +1670,21 @@ Consequence: there is a floor below which an edge is undetectable with this data
 
 Therefore:
 
-- **Fix the minimum detectable effect before the search begins.** Given the expected trade count and return volatility, compute the smallest Sharpe distinguishable from zero at the chosen significance level. Record it on the `study`.
-- **Do not search below it.** A search whose target is under the detection floor produces false positives by construction.
+- **Fix the minimum detectable effect before the search begins**, and make it a precondition rather than a diagnosis. A study estimates the effective observations its design will produce, compares them against what its declared target needs, and **refuses to run** if they fall short. Diagnosing it afterwards is not the same thing: the trials have been spent by then, and the counter is monotonic, so a study that could never have concluded still raises the bar for every study after it.
+- **The sizing pilot reads structure, never performance.** It measures how often the design trades and computes no return, Sharpe or profit. A pilot whose performance is looked at is a trial and would have to be counted; one that cannot be selected on costs nothing against §8.3.
+- **Do not search below the floor.** A search whose target is under the detection floor produces false positives by construction.
+
+The arithmetic is unforgiving and worth stating in numbers. §0.3 expects an out-of-sample Sharpe of 0.7–1.3 from a genuine edge. Confirming a Sharpe of 1.0:
+
+| Trials spent | Effective observations needed |
+|---|---|
+| 9 | 21,947 |
+| 54 | 34,179 |
+| 500 | 48,324 |
+
+Measured against designs actually run: a pooled threshold study over 150 assets at a low threshold reached 59,000–67,000 and was adequately powered; the same study at a high threshold reached 3,800 and was not; a cross-sectional basket reached 500–2,500 and could only have confirmed a Sharpe above 3.5, which is not a hypothesis test but a formality.
+
+**This is the design constraint the whole project turns on**, and it pulls against §0.1. Power wants many independent bets; costs want few trades. The only lever that delivers independence without turnover is **pooling across assets** — which is why a basket, collapsing 150 assets into one return series, is the worst of both.
 - **MinTRL is the operational form of this** and is already in `validation_reports`: if the required track record exceeds available history, the verdict is `inconclusive`, never `pass`.
 - Higher-frequency strategies have more power per unit of calendar time, which is a reason to prefer them at this stage — not because they are better, but because they are **falsifiable** with the data on hand.
 

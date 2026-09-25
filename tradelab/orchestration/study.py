@@ -63,6 +63,12 @@ class StudySpec:
     # of a noisy quantity is what a search finds. The gate would then reject it
     # and the whole study is spent on a configuration that was never eligible.
     min_trades: int = 100
+    # Target annualised Sharpe the study is looking for. Checked against the
+    # design's power BEFORE the grid runs (§8.8): a study that cannot resolve
+    # its own target still spends its trials, and the counter is monotonic, so
+    # it raises the bar for every study after it.
+    target_sharpe_annual: float = 1.0
+    require_power: bool = True
     # Long above the threshold, or short below it. Funding extremes are read
     # short-side more naturally than momentum is.
     direction: int = 1
@@ -183,6 +189,33 @@ def with_funding(root: Path, asset: str, bars: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def _check_power(spec: StudySpec, features: pl.DataFrame, close: np.ndarray,
+                 funding: np.ndarray | None) -> None:
+    """Size the study from one pilot evaluation, before committing to the grid.
+
+    The pilot reads the holding structure and nothing else — no return, no
+    Sharpe. A pilot whose performance is looked at is a trial and would have to
+    be counted; one that only measures how often the design trades makes no
+    selection and costs nothing against §8.3.
+
+    The median parameter and threshold are used, so the estimate reflects the
+    grid rather than its most or least active corner.
+    """
+    from tradelab.engines.tier_a.engine import BARS_PER_YEAR
+    from tradelab.validation.power import pilot_effective_n, require_power
+
+    mid_value = sorted(spec.params)[len(spec.params) // 2]
+    mid_entry = sorted(spec.entries)[len(spec.entries) // 2]
+    signal = features[spec.column(mid_value)].to_numpy().astype(np.float64)
+    position = threshold_position(signal, float(mid_entry)) * spec.direction
+
+    available = pilot_effective_n(close, position, spec.oos_fraction)
+    require_power(
+        spec.target_sharpe_annual, spec.planned_trials, available,
+        BARS_PER_YEAR.get(spec.timeframe, 8_760),
+    )
+
+
 def _funding_series(bars: pl.DataFrame) -> np.ndarray | None:
     """Per-bar funding, zero where no settlement falls in that bar.
 
@@ -216,6 +249,9 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     surface_points: list[tuple[dict, float]] = []
 
     funding = _funding_series(bars)
+
+    if spec.require_power:
+        _check_power(spec, features, close, funding)
 
     for value in spec.params:
         signal = features[spec.column(value)].to_numpy().astype(np.float64)
