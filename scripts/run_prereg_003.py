@@ -146,6 +146,8 @@ def main() -> int:
 
     years = len(live) / 365.25
     stats = sharpe_stats(live, effective_n=float(len(live)))
+    print(f"  [momentos] sharpe/obs {stats.sharpe:.6f} skew {stats.skew:+.3f} "
+          f"kurt {stats.kurtosis:.2f} n {stats.n_obs}")
     annualised = stats.sharpe * np.sqrt(365.25)
     power = assess(target_sharpe_annual=0.5, trials=TRIALS,
                    effective_n_available=float(len(live)), bars_per_year=365.25)
@@ -165,8 +167,19 @@ def main() -> int:
     print(f"ANNUALISED SHARPE      : {annualised:+.3f}")
     print(f"resolvable at 1 trial  : {power.resolvable_sharpe_annual:.3f}")
 
+    order = np.argsort(-np.abs(live))
+    total = live.sum()
+    for k in (1, 5, 10, 20):
+        share = live[order[:k]].sum() / total if total else float("nan")
+        print(f"  top {k:2d} dias explican {share:6.1%} del retorno total")
+    trimmed = np.delete(live, order[:5])
+    print(f"  sin los 5 mayores: Sharpe anualizado "
+          f"{trimmed.mean() / trimmed.std(ddof=1) * np.sqrt(365.25):+.3f}")
+
     gate = evaluate(stats, trials=TRIALS, n_oos_trades=len(live),
                     bars_per_year=365.25, min_detectable_sharpe=0.5)
+    for key, value in gate.metrics.items():
+        print(f"  {key:26s} {value}")
     print(f"\nVERDICT: {gate.verdict.upper()}")
     for reason in gate.reasons:
         print(f"  - {reason}")

@@ -107,6 +107,24 @@ def evaluate(
         min_detectable_sharpe is not None and min_detectable_sharpe < detectable_floor
     )
 
+    # Moments far outside the range the deflation formula was derived for. The
+    # skew term *raises* the deflated Sharpe, so a return series dominated by a
+    # few days inflates its own confidence — exactly backwards. Measured: skew
+    # 14.4 and kurtosis 308 on a series where one day was 67% of the return,
+    # which lifted DSR from 0.894 under normal moments to 0.965.
+    if abs(stats.skew) > 3.0 or stats.kurtosis > 30.0:
+        metrics["moments_out_of_range"] = True
+        return GateEvaluation(
+            Verdict.INCONCLUSIVE,
+            [
+                f"skew {stats.skew:.1f} and kurtosis {stats.kurtosis:.1f} are far "
+                f"outside the range the deflated Sharpe is derived for; the "
+                f"figure is dominated by a handful of observations and its "
+                f"confidence cannot be read"
+            ],
+            metrics,
+        )
+
     # Two very different situations that both make MinTRL infinite, and
     # collapsing them would cost the system its most useful distinction.
     if stats.sharpe <= benchmark:
@@ -134,6 +152,25 @@ def evaluate(
             [
                 f"Sharpe {stats.sharpe:.4f} does not exceed the {benchmark:.4f} that "
                 f"{trials:,} trials produce by chance"
+            ],
+            metrics,
+        )
+
+    # Beats the benchmark, and still below what the sample can resolve.
+    #
+    # Placed after the comparison above on purpose: a powered search that finds
+    # nothing is a real negative and must stay FAIL. This is the other case —
+    # a figure that looks positive but sits under the detection floor. It was
+    # missing entirely, and the gate returned PASS on the cross-venue funding
+    # study at a per-observation Sharpe of 0.0495 against its own floor of
+    # 0.0651, having computed both numbers in the same call.
+    if min_detectable_sharpe is not None and stats.sharpe < detectable_floor:
+        return GateEvaluation(
+            Verdict.INCONCLUSIVE,
+            [
+                f"Sharpe {stats.sharpe:.4f} clears the {benchmark:.4f} chance "
+                f"benchmark but falls under the {detectable_floor:.4f} this "
+                f"sample can resolve at {trials:,} trials"
             ],
             metrics,
         )
