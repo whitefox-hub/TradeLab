@@ -4,78 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Macro — TradeLab</title>
-<style>
-  :root {
-    --bg:#0d1017; --panel:#171b24; --panel-2:#1e232e; --line:#2f3644;
-    --text:#f0f3f8; --muted:#a7b0c0; --accent:#6ba6ff; --up:#4ac26b;
-    --down:#ff6b63; --warn:#e3a72c;
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg:#f7f8fa; --panel:#fff; --panel-2:#f0f2f5; --line:#d6dae1;
-      --text:#12161c; --muted:#4e5766; --accent:#0a62d0;
-    }
-  }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text);
-    font:16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    -webkit-font-smoothing:antialiased; }
-  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex;
-    gap:22px; align-items:center; flex-wrap:wrap; }
-  .brand { font-size:17px; font-weight:650; color:var(--text); text-decoration:none; }
-  nav a { color:var(--muted); text-decoration:none; margin-right:18px; font-size:15px;
-    font-weight:520; }
-  nav a:hover { color:var(--text); }
-  nav a.on { color:var(--text); border-bottom:2px solid var(--accent); padding-bottom:3px; }
-  .session { margin-left:auto; display:flex; align-items:center; gap:12px;
-    font-size:14px; color:var(--muted); }
-  h1 { font-size:24px; margin:0 0 4px; font-weight:640; }
-  h2 { font-size:18px; margin:32px 0 12px; font-weight:620; }
-  main { padding:24px 20px 56px; max-width:1180px; margin:0 auto; }
-  table { width:100%; border-collapse:collapse; font-size:15px; }
-  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); }
-  th { color:var(--muted); font-weight:600; font-size:13px; text-transform:uppercase;
-    letter-spacing:.05em; }
-  tbody tr:hover { background:var(--panel); }
-  td.num { font-variant-numeric:tabular-nums; text-align:right; }
-  button,input { font:inherit; border-radius:8px; border:1px solid var(--line);
-    padding:8px 12px; background:var(--panel-2); color:var(--text); }
-  input:focus,button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
-  button { cursor:pointer; font-weight:550; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button.ghost { background:transparent; color:var(--muted); padding:6px 12px; }
-  button.ghost:hover { color:var(--text); border-color:var(--muted); }
-  .hint { font-size:14px; color:var(--muted); margin:10px 0 0; max-width:74ch;
-    line-height:1.6; }
-  .err { color:var(--down); font-size:14.5px; margin-top:10px; }
-  .empty { color:var(--muted); padding:16px 0; font-size:15px; }
-  .tag { font-size:12.5px; padding:2px 9px; border-radius:20px;
-    border:1px solid var(--line); color:var(--muted); font-weight:550; }
-  .tag.risk { color:var(--warn); border-color:var(--warn); }
-  .stale { color:var(--down); font-weight:600; }
-</style>
+<link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <a href="/trade_lab" class="brand">TradeLab</a>
-  <nav>
-    <a href="/news">News</a>
-    <a href="/macro" class="on">Macro</a>
-  </nav>
-  <div class="session">
-    <span id="who"></span>
-    <button class="ghost" id="bye" hidden>Sign out</button>
-  </div>
-</header>
-
-<main>
-  <div id="need-auth" class="empty" hidden>
-    Not signed in. <a href="/login?next=/macro" style="color:var(--accent)">Sign
-    in</a> to continue.
-  </div>
-
-  <div id="app" hidden>
+<div class="layout">
+  <main class="content">
     <h1>Macro</h1>
+    <p class="sub">Series freshness, release calendar, consensus before the print.</p>
 
     <h2>Series</h2>
     <table>
@@ -111,20 +46,12 @@
       </tr></thead>
       <tbody id="recent"></tbody>
     </table>
-  </div>
-</main>
+  </main>
+</div>
 
+<script src="/static/app.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-
-async function api(path, options = {}) {
-  const r = await fetch(path, { credentials: "same-origin",
-    headers: { "Content-Type": "application/json" }, ...options });
-  if (r.status === 401) { $("need-auth").hidden = false; $("app").hidden = true;
-    throw new Error("unauthenticated"); }
-  if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-  return r.json();
-}
+mount("/macro", { onReady: load });
 
 const fmt = (v, d = 2) => v === null || v === undefined ? "—" : Number(v).toFixed(d);
 const day = (s) => s ? s.slice(0, 10) : "—";
@@ -138,8 +65,8 @@ async function load() {
       <td>${s.kind}</td>
       <td>${s.source}</td>
       <td>${s.point_in_time_safe
-            ? '<span class="tag">safe</span>'
-            : '<span class="tag risk">revised, no vintages</span>'}</td>
+            ? '<span class="tag-pill">safe</span>'
+            : '<span class="tag-pill risk">revised, no vintages</span>'}</td>
       <td class="num">${s.observations}</td>
       <td class="num ${s.days_old > 45 ? "stale" : ""}">${fmt(s.days_old, 0)}d</td>
     </tr>`).join("");
@@ -178,17 +105,6 @@ async function load() {
       <td class="num">${fmt(r.surprise_sigma)}</td>
     </tr>`).join("");
 }
-
-$("bye").onclick = async () => {
-  await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
-  location.href = "/login";
-};
-
-api("/api/me")
-  .then((me) => { $("who").textContent = me.email + " · " + me.role;
-                  $("bye").hidden = false;
-                  $("app").hidden = false; load(); })
-  .catch(() => { $("need-auth").hidden = false; $("who").textContent = "not signed in"; });
 </script>
 </body>
 </html>

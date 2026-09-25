@@ -347,17 +347,39 @@ def test_writes_are_still_the_four_plus_consensus(client: TestClient) -> None:
 
 
 @pytest.mark.fast
-def test_the_entry_point_links_the_screens_that_exist(client: TestClient) -> None:
-    """A landing page offering a screen that 404s is worse than not offering it."""
+def test_the_sidebar_only_links_screens_that_exist(client: TestClient) -> None:
+    """A menu offering a screen that 404s is worse than not offering it.
+
+    The sidebar is built from one list in app.js, so this checks the list rather
+    than each page — which is the reason it is one list.
+    """
     import re
 
-    page = client.get("/trade_lab").text
-    assert client.get("/trade_lab").status_code == 200
-    linked = set(re.findall(r'class="card" href="(/[a-z_]+)"', page))
+    page = client.get("/static/app.js").text
+    linked = set(re.findall(r'href: "(/[a-z_]+)"', page))
     served = {route.path for route in client.app.routes}
-    assert linked, "the entry point links nothing"
+    assert linked, "the sidebar links nothing"
     for path in linked:
-        assert path in served, f"{path} is offered but not served"
+        assert path in served, f"{path} is in the menu but not served"
+
+
+@pytest.mark.fast
+def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
+    """Three copies of the chrome drift, and the copy nobody looks at is the one
+    still styling a class that was renamed."""
+    for path, active in (("/home", "/home"), ("/news", "/news"), ("/macro", "/macro")):
+        page = client.get(path).text
+        assert '<link rel="stylesheet" href="/static/app.css">' in page, path
+        assert '<script src="/static/app.js"></script>' in page, path
+        assert f'mount("{active}"' in page, f"{path} does not mark itself active"
+
+
+@pytest.mark.fast
+def test_the_old_entry_point_still_lands_somewhere(client: TestClient) -> None:
+    """/trade_lab moved to /home. A bookmark should not meet a 404."""
+    response = client.get("/trade_lab", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/home"
 
 
 @pytest.mark.fast
@@ -382,15 +404,18 @@ def test_the_login_redirect_cannot_leave_this_origin(client: TestClient) -> None
 def test_the_screens_send_an_unauthenticated_visitor_to_login(client: TestClient) -> None:
     """Not to the dashboard, which would 401 every card, and not to an empty
     table with no explanation of why it is empty."""
-    for path in ("/news", "/macro"):
-        page = client.get(path).text
-        assert "/login?next=" in page, f"{path} does not point at the sign-in page"
-    assert 'location.replace("/login?next=/trade_lab")' in client.get("/trade_lab").text
+    shared = client.get("/static/app.js").text
+    assert "/login?next=" in shared, "the shared mount does not point at sign-in"
+    # The shared mount() sends anyone without a session to sign in, with the
+    # path they wanted, rather than rendering a page whose every call will 401.
+    assert 'location.replace("/login?next=" + encodeURIComponent(active))' in (
+        client.get("/static/app.js").text
+    )
 
 
 @pytest.mark.fast
 def test_the_dashboard_no_longer_carries_a_second_sign_in_form(client: TestClient) -> None:
     """One place to sign in. Two forms drift, and the one nobody uses is the one
     that keeps working against a stale endpoint."""
-    page = client.get("/trade_lab").text
+    page = client.get("/home").text
     assert 'type="password"' not in page

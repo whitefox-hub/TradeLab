@@ -26,7 +26,8 @@ from typing import Any
 
 import sqlalchemy as sa
 from fastapi import Depends, FastAPI, HTTPException, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -39,6 +40,10 @@ from tradelab.api.security import (
     verify_password,
 )
 from tradelab.config import Settings
+
+#: Shared chrome and the screens live here. Mounted rather than served per file,
+#: so adding a stylesheet does not mean adding a route.
+STATIC = Path(__file__).parent / "static"
 
 #: Routes that write. Everything else is a read, and the list is short on
 #: purpose: §20.1 allows this surface to write approvals and lifecycle
@@ -109,6 +114,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     operator = operator_dependency(sessions)
 
     app = FastAPI(title="TradeLab", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     def db():
         with make_session() as session:
@@ -495,9 +501,15 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/macro", include_in_schema=False)
     def macro_screen() -> FileResponse:
-        return FileResponse(Path(__file__).parent / "static" / "macro.html")
+        return FileResponse(STATIC / "macro.html")
 
     # -- the screen ---------------------------------------------------------
+
+    @app.get("/trade_lab", include_in_schema=False)
+    def old_home() -> RedirectResponse:
+        """The entry point moved to /home. Kept so an existing bookmark lands
+        somewhere rather than on a 404."""
+        return RedirectResponse("/home", status_code=308)
 
     @app.get("/login", include_in_schema=False)
     def login_screen() -> FileResponse:
@@ -507,13 +519,13 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         honours it only when it is a path on this origin — an open redirect on a
         login page is how a session gets handed to somewhere else.
         """
-        return FileResponse(Path(__file__).parent / "static" / "login.html")
+        return FileResponse(STATIC / "login.html")
 
-    @app.get("/trade_lab", include_in_schema=False)
+    @app.get("/home", include_in_schema=False)
     def home() -> FileResponse:
-        """The entry point. Screens hang off it rather than being reached by
-        knowing their paths."""
-        return FileResponse(Path(__file__).parent / "static" / "index.html")
+        """The entry point. Screens hang off the sidebar rather than being
+        reached by knowing their paths."""
+        return FileResponse(STATIC / "index.html")
 
     @app.get("/news", include_in_schema=False)
     def news_screen() -> FileResponse:
@@ -524,7 +536,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         tooling does. The markup calls the same endpoints a React client would,
         so replacing it later changes the view and not the contract.
         """
-        return FileResponse(Path(__file__).parent / "static" / "news.html")
+        return FileResponse(STATIC / "news.html")
 
     @app.get("/api/health")
     def health() -> dict:

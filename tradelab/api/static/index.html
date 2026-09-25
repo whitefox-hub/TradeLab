@@ -3,148 +3,70 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TradeLab</title>
+<title>Home — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
 <style>
-  :root {
-    --bg:#0d1017; --panel:#171b24; --panel-2:#1e232e; --line:#2f3644;
-    --text:#f0f3f8; --muted:#a7b0c0; --accent:#6ba6ff; --warn:#e3a72c;
-    --ok:#4ac26b; --bad:#ff6b63;
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg:#f7f8fa; --panel:#fff; --panel-2:#f0f2f5; --line:#d6dae1;
-      --text:#12161c; --muted:#4e5766; --accent:#0a62d0;
-    }
-  }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); min-height:100vh;
-    font:16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    -webkit-font-smoothing:antialiased; }
-  main { max-width:880px; margin:0 auto; padding:56px 20px 64px; }
-
-  .top { display:flex; align-items:flex-start; gap:20px; flex-wrap:wrap;
-    margin-bottom:40px; }
-  h1 { font-size:30px; line-height:1.2; margin:0 0 6px; font-weight:650;
-    letter-spacing:-.015em; }
-  .sub { color:var(--muted); margin:0; font-size:16px; }
-
-  .session { margin-left:auto; background:var(--panel); border:1px solid var(--line);
-    border-radius:12px; padding:16px; min-width:280px; }
-  .session label { display:block; font-size:13px; color:var(--muted);
-    margin:0 0 5px; font-weight:500; }
-  .session input { width:100%; margin-bottom:12px; }
-  .signed { display:flex; align-items:center; gap:12px; }
-  .signed .dot { width:9px; height:9px; border-radius:50%; background:var(--ok);
-    flex:none; }
-  .signed .email { font-weight:600; font-size:15px; }
-  .signed .role { color:var(--muted); font-size:13px; }
-
-  input, button { font:inherit; border-radius:8px; border:1px solid var(--line);
-    padding:9px 12px; background:var(--panel-2); color:var(--text); }
-  input:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
-  button { cursor:pointer; font-weight:550; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff;
-    width:100%; }
-  button.ghost { background:transparent; color:var(--muted); padding:7px 12px; }
-  button.ghost:hover { color:var(--text); border-color:var(--muted); }
-
-  .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(252px,1fr)); }
-  .card { display:block; padding:18px 20px; background:var(--panel);
-    border:1px solid var(--line); border-radius:12px; text-decoration:none;
-    color:var(--text); transition:border-color .12s, transform .12s; }
-  a.card:hover { border-color:var(--accent); transform:translateY(-1px); }
-  .card h2 { font-size:18px; margin:0 0 6px; font-weight:620; }
-  .card p { margin:0; color:var(--muted); font-size:14.5px; line-height:1.55; }
-  /* Not dimmed into illegibility. A screen that does not exist yet should be
-     readable and clearly labelled, not a grey smudge the eye slides off. */
-  .card.soon { background:transparent; border-style:dashed; }
-  .card.soon h2 { color:var(--muted); }
-  .tag { font-size:12px; font-weight:600; color:var(--warn); letter-spacing:.02em;
-    border:1px solid var(--warn); border-radius:20px; padding:1px 8px;
-    vertical-align:middle; margin-left:6px; }
-
+  .cards { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+    margin-top:22px; }
+  .card { padding:18px 20px; background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; }
+  .card .n { font-size:26px; font-weight:650; font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em; }
+  .card .k { color:var(--muted); font-size:14.5px; margin-top:2px; }
+  .card .d { color:var(--muted); font-size:13.5px; margin-top:10px; line-height:1.55; }
   footer { margin-top:44px; padding-top:20px; border-top:1px solid var(--line);
-    color:var(--muted); font-size:14px; max-width:62ch; }
-  .err { color:var(--bad); font-size:14px; margin-top:8px; }
+    color:var(--muted); font-size:14px; max-width:66ch; line-height:1.6; }
 </style>
 </head>
 <body>
-<main>
-  <div class="top">
-    <div>
-      <h1>TradeLab</h1>
-      <p class="sub">Quantitative research laboratory · single operator</p>
-    </div>
+<div class="layout">
+  <main class="content">
+    <h1>Home</h1>
+    <p class="sub">Quantitative research laboratory · single operator</p>
 
-    <div class="session">
-      <div id="in" hidden>
-        <div class="signed">
-          <span class="dot"></span>
-          <div>
-            <div class="email" id="email-out"></div>
-            <div class="role" id="role-out"></div>
-          </div>
-        </div>
-        <button class="ghost" id="bye" style="margin-top:14px;width:100%">Sign out</button>
-      </div>
-    </div>
-  </div>
+    <div class="cards" id="cards"></div>
 
-  <div class="grid">
-    <a class="card" href="/news">
-      <h2>News</h2>
-      <p>Events, extracted assets, and your ratings in sigma.</p>
-    </a>
-    <a class="card" href="/macro">
-      <h2>Macro</h2>
-      <p>Series freshness, release calendar, consensus before the print.</p>
-    </a>
-    <div class="card soon">
-      <h2>Strategies <span class="tag">soon</span></h2>
-      <p>Lifecycle state and gate status per criterion.</p>
-    </div>
-    <div class="card soon">
-      <h2>Approvals <span class="tag">soon</span></h2>
-      <p>Pending transitions with the evidence that will be recorded.</p>
-    </div>
-    <div class="card soon">
-      <h2>Runs <span class="tag">soon</span></h2>
-      <p>Positions, fills and per-trade slippage. Mode shown, never edited.</p>
-    </div>
-    <div class="card soon">
-      <h2>Data quality <span class="tag">soon</span></h2>
-      <p>Open issues and which windows they block.</p>
-    </div>
-  </div>
+    <footer>
+      This surface records decisions. It computes no figure and holds no venue
+      credential, so it cannot start live trading — time series live in Grafana,
+      and production is reached through the capital ramp rather than entered.
+    </footer>
+  </main>
+</div>
 
-  <footer>
-    This surface records decisions. It computes no figure and holds no venue
-    credential, so it cannot start live trading — time series live in Grafana,
-    and production is reached through the capital ramp rather than entered.
-  </footer>
-</main>
-
+<script src="/static/app.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
+mount("/home", { onReady: load });
 
-$("bye").onclick = async () => {
-  await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
-  location.href = "/login";
-};
+async function load() {
+  // Counts only, and each one read from a table. The home screen computes
+  // nothing: a figure that appears only here is a figure nobody can reproduce.
+  const [events, series, quality] = await Promise.all([
+    api("/api/events?limit=500"),
+    api("/api/macro/series"),
+    api("/api/data-quality").catch(() => []),
+  ]);
 
-// The dashboard shows nothing useful without a session, so an unauthenticated
-// visitor is sent to sign in rather than shown a page of cards that all 401.
-fetch("/api/me", { credentials: "same-origin" })
-  .then((r) => {
-    if (!r.ok) { location.replace("/login?next=/trade_lab"); return null; }
-    return r.json();
-  })
-  .then((me) => {
-    if (!me) return;
-    $("in").hidden = false;
-    $("email-out").textContent = me.email;
-    $("role-out").textContent = me.role;
-  });
+  const unrated = events.filter((e) => !e.rated).length;
+  const stale = series.filter((s) => s.days_old > 45).length;
+  const unsafe = series.filter((s) => !s.point_in_time_safe).length;
+
+  $("cards").innerHTML = [
+    { n: events.length, k: "events captured",
+      d: "Announcements promoted to annotatable occurrences." },
+    { n: unrated, k: "awaiting a rating",
+      d: "The useful work. Rate them on the News screen, in sigma." },
+    { n: series.length, k: "macro series",
+      d: `${stale} older than 45 days, ${unsafe} revised without vintages.` },
+    { n: quality.length, k: "open data-quality issues",
+      d: "Anomalies are recorded, never silently corrected." },
+  ].map((c) => `
+    <div class="card">
+      <div class="n">${c.n}</div>
+      <div class="k">${c.k}</div>
+      <div class="d">${c.d}</div>
+    </div>`).join("");
+}
 </script>
 </body>
 </html>

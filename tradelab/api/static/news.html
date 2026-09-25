@@ -4,58 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>News — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
 <style>
-  :root {
-    --bg:#0d1017; --panel:#171b24; --panel-2:#1e232e; --line:#2f3644;
-    --text:#f0f3f8; --muted:#a7b0c0; --accent:#6ba6ff; --up:#4ac26b;
-    --down:#ff6b63; --warn:#e3a72c;
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg:#f7f8fa; --panel:#fff; --panel-2:#f0f2f5; --line:#d6dae1;
-      --text:#12161c; --muted:#4e5766; --accent:#0a62d0;
-    }
-  }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text);
-    font:16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    -webkit-font-smoothing:antialiased; }
-  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex;
-    gap:22px; align-items:center; flex-wrap:wrap; }
-  .brand { font-size:17px; font-weight:650; color:var(--text); text-decoration:none; }
-  nav a { color:var(--muted); text-decoration:none; margin-right:18px; font-size:15px;
-    font-weight:520; }
-  nav a:hover { color:var(--text); }
-  nav a.on { color:var(--text); border-bottom:2px solid var(--accent); padding-bottom:3px; }
-  .session { margin-left:auto; display:flex; align-items:center; gap:12px;
-    font-size:14px; color:var(--muted); }
-  h1 { font-size:24px; margin:0 0 4px; font-weight:640; }
-  main { padding:24px 20px 56px; max-width:1180px; margin:0 auto; }
   .filters { display:flex; gap:12px; flex-wrap:wrap; align-items:center;
     margin:18px 0 16px; }
   .count { color:var(--muted); font-size:14.5px; margin-left:auto; }
-  table { width:100%; border-collapse:collapse; font-size:15px; }
-  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line);
-    vertical-align:top; }
-  th { color:var(--muted); font-weight:600; font-size:13px; text-transform:uppercase;
-    letter-spacing:.05em; }
-  tbody tr:hover { background:var(--panel); }
   tr.unrated td:first-child { box-shadow:inset 3px 0 0 var(--warn); }
-  .assets { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:14px; }
   .shape { font-size:13px; color:var(--muted); }
-  .num { font-variant-numeric:tabular-nums; }
-  button,input,select,textarea { font:inherit; border-radius:8px;
-    border:1px solid var(--line); padding:8px 12px; background:var(--panel-2);
-    color:var(--text); }
-  input:focus,select:focus,textarea:focus,button:focus-visible {
-    outline:2px solid var(--accent); outline-offset:1px; }
-  button { cursor:pointer; font-weight:550; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button.ghost { background:transparent; color:var(--muted); padding:6px 12px; }
-  button.ghost:hover { color:var(--text); border-color:var(--muted); }
-  label.inline { display:flex; align-items:center; gap:8px; color:var(--text);
-    font-size:15px; }
-  label.inline input { width:auto; }
   dialog { background:var(--panel); color:var(--text); border:1px solid var(--line);
     border-radius:14px; padding:24px; max-width:520px; width:92vw; }
   dialog::backdrop { background:rgba(0,0,0,.6); }
@@ -63,34 +18,15 @@
   dialog label { display:block; margin:16px 0 6px; font-size:14px; color:var(--muted);
     font-weight:550; }
   dialog input, dialog textarea { width:100%; }
-  .hint { font-size:14px; color:var(--muted); margin:8px 0 0; line-height:1.6; }
-  .err { color:var(--down); font-size:14.5px; margin-top:10px; }
-  .empty { color:var(--muted); padding:16px 0; font-size:15px; }
   .row { display:flex; gap:10px; margin-top:20px; }
   .row > * { flex:1; }
 </style>
 </head>
 <body>
-<header>
-  <a href="/trade_lab" class="brand">TradeLab</a>
-  <nav>
-    <a href="/news" class="on">News</a>
-    <a href="/macro">Macro</a>
-  </nav>
-  <div class="session">
-    <span id="who"></span>
-    <button class="ghost" id="bye" hidden>Sign out</button>
-  </div>
-</header>
-
-<main>
-  <div id="need-auth" class="empty" hidden>
-    Not signed in. <a href="/login?next=/news" style="color:var(--accent)">Sign
-    in</a> to continue.
-  </div>
-
-  <div id="app" hidden>
+<div class="layout">
+  <main class="content">
     <h1>News</h1>
+    <p class="sub">Events, extracted assets, and your ratings in sigma.</p>
 
     <div class="filters">
       <select id="type">
@@ -101,9 +37,7 @@
         <option value="spot_delisting">spot_delisting</option>
         <option value="futures_delivery">futures_delivery</option>
       </select>
-      <label class="inline">
-        <input type="checkbox" id="only-unrated"> Unrated only
-      </label>
+      <label class="inline"><input type="checkbox" id="only-unrated"> Unrated only</label>
       <span class="count" id="count"></span>
     </div>
 
@@ -113,8 +47,8 @@
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
-  </div>
-</main>
+  </main>
+</div>
 
 <dialog id="rate">
   <h2 id="rate-title">Rate event</h2>
@@ -143,18 +77,11 @@
   <div class="err" id="rate-err"></div>
 </dialog>
 
+<script src="/static/app.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
 let current = null;
 
-async function api(path, options = {}) {
-  const r = await fetch(path, { credentials: "same-origin",
-    headers: { "Content-Type": "application/json" }, ...options });
-  if (r.status === 401) { $("need-auth").hidden = false; $("app").hidden = true;
-    $("who").textContent = "not signed in"; throw new Error("unauthenticated"); }
-  if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-  return r.json();
-}
+mount("/news", { onReady: load });
 
 async function load() {
   const type = $("type").value;
@@ -169,7 +96,7 @@ async function load() {
     tr.innerHTML =
       `<td>${when}</td>` +
       `<td>${event.event_type}<div class="shape">${event.shape}</div></td>` +
-      `<td class="assets">${(event.assets || []).join(" ") || "—"}</td>` +
+      `<td class="mono">${(event.assets || []).join(" ") || "—"}</td>` +
       `<td class="num">${event.annotations || ""}</td>`;
     const cell = document.createElement("td");
     const button = document.createElement("button");
@@ -208,17 +135,6 @@ $("save").onclick = async () => {
 
 $("type").onchange = load;
 $("only-unrated").onchange = load;
-
-$("bye").onclick = async () => {
-  await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
-  location.href = "/login";
-};
-
-api("/api/me")
-  .then((me) => { $("who").textContent = me.email + " · " + me.role;
-                  $("bye").hidden = false;
-                  $("app").hidden = false; load(); })
-  .catch(() => { $("need-auth").hidden = false; });
 </script>
 </body>
 </html>
