@@ -64,11 +64,49 @@ _IRRELEVANT: tuple[re.Pattern[str], ...] = (
     # does not trade.
     re.compile(r"Adds? (BUSD )?Margin (Trading|Pairs)|Stablecoin Trading Pairs", re.I),
     re.compile(r"Lottery|Leveraged Token", re.I),
+    # Copy Trading availability is a *product* notice about contracts that
+    # already exist, not a listing. It is the single largest source of false
+    # positives in 2024-2025: 20 of the 107 futures-mentioning titles the
+    # taxonomy missed, and counting them would put an event on a date where
+    # nothing was listed.
+    re.compile(r"Copy Trading", re.I),
+    # Negations, which must be caught before any listing pattern or they read as
+    # listings: "BTT USDT-Margined Perpetual Contract Listing is Cancelled",
+    # "FIL Coin-Margined Perpetual Contract Listing Postponed", "DOT ... Listing
+    # Delayed to 2020/08/22". A postponed listing still happens and gets its own
+    # announcement; a cancelled one never happened at all.
+    re.compile(r"Listing (is )?(Cancell?ed|Postponed|Delayed|Suspended)", re.I),
+    re.compile(r"Will Cancel.*Delisting", re.I),
 )
 
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("futures_listing", re.compile(r"Futures Will Launch.*?Perpetual Contract", re.I)),
-    ("futures_delivery", re.compile(r"Futures Will List.*?(Delivery|Quarterly)", re.I)),
+    # Delivery first. Quarterly and bi-quarterly contracts are dated instruments,
+    # not perpetuals, and several of their titles also say "Will Launch" — so a
+    # perpetual pattern placed above this one swallows them.
+    ("futures_delivery", re.compile(
+        r"(Quarterly|Bi-Quarterly|Delivery).{0,40}(Contract|Futures)"
+        r"|Futures Will List.*?(Delivery|Quarterly)", re.I)),
+    # Perpetual listings. Five wordings across seven years, and the venue has
+    # changed phrasing repeatedly without notice — which is why capture was
+    # 0 events in 2019 and missed ~35% of 2025 before these were added. A
+    # listings study reads a time-varying miss rate as a property of the market.
+    ("futures_listing", re.compile(
+        # 2019-2020, present tense: "Binance Futures Launches ETH/USDT Perpetual
+        # Contract". The original pattern required "Will Launch".
+        r"Futures Launch(es)?.*?Perpetual Contract"
+        # 2020-2023, the form the taxonomy was written for.
+        r"|Futures Will Launch.*?Perpetual Contract"
+        # Coin-margined, where "Futures" does not precede the verb: "Binance
+        # Will Launch a FIL/USD Coin-Margined Perpetual Contract".
+        r"|Will (Launch|List).{0,40}Perpetual Contract"
+        # 2024: "Binance Will Launch Sleepless AI (AI) on Margin & Futures".
+        r"|(Will Launch|Adds?).{0,60}on Margin (&|and) Futures"
+        # 2025, now the dominant form: "Obol (OBOL) Will Be Available on Binance
+        # Alpha and Binance Futures".
+        r"|Will (Be Available|Open for Trading).{0,40}Binance Futures"
+        # Weekly batches, which name no asset in the title and so are routed to
+        # `needs_body` rather than counted as events affecting nothing.
+        r"|Futures: New Listings This Week", re.I)),
     ("futures_delisting", re.compile(r"Futures Will (Delist|Close|Remove|Settle)", re.I)),
     ("spot_delisting", re.compile(r"Will Delist|Notice of Removal", re.I)),
     ("seed_tag", re.compile(r"Seed Tag", re.I)),
@@ -88,6 +126,38 @@ ASSET_BEARING = frozenset({
 # Tickers may be non-ASCII: Binance lists tokens with CJK names.
 _TICKER = re.compile(r"\(([^\s()]{2,14})\)")
 _PAIR = re.compile(r"\b(\w{2,12}(?:USDT|USDC))\b", re.UNICODE)
+
+#: Quote and margin vocabulary, which is never the listed asset.
+_QUOTE = r"USD[ⓈS]?|USDT|USDC|BUSD|COIN|USD1"
+#: Words that sit in ticker position but are prose.
+_NOT_TICKER_WORDS = frozenset({
+    "PERPETUAL", "CONTRACT", "CONTRACTS", "FUTURES", "LEVERAGE", "MARGINED",
+    "WITH", "UP", "TO", "AND", "THE", "NEW", "LISTINGS", "THIS", "WEEK",
+    "BINANCE", "WILL", "LAUNCH", "MULTIPLE", "ALPHA", "AVAILABLE", "TRADING",
+    "MARGIN", "QUARTERLY", "DELIVERY", "INDEX", "COMPOSITE",
+    # "ALPHA" is deliberately absent: it is a listed token as well as the name
+    # of the Binance Alpha product, and the product sense is excluded by
+    # position rather than by word.
+})
+
+#: Three shapes the venue uses, none of which `_PAIR` sees.
+#:
+#: More than half of all listing announcements — 338 of 594 — named their asset
+#: in one of these and were being recorded as affecting nothing. `_PAIR` wants
+#: `BTCUSDT` with no separator while the titles write `RLC/USDT`, and the
+#: margin-prefixed form puts the ticker in a position no pattern looked at.
+_ASSET_FORMS: tuple[re.Pattern[str], ...] = (
+    # "RLC/USDT Perpetual Contract", "FIL/USD Coin-Margined"
+    re.compile(rf"\b([A-Z0-9]{{2,}})/(?:{_QUOTE})\b"),
+    # "USDⓈ-M BLUR", "USDT-Margined OP", "BUSD-Margined SAND and LTC",
+    # "USDC-Margined 1000SHIB", "USDⓈ-Margined VIDT"
+    re.compile(
+        rf"(?:{_QUOTE})[-\s](?:M|Margined)\s+"
+        rf"([A-Z0-9]{{2,}}(?:\s+and\s+[A-Z0-9]{{2,}})*)"
+    ),
+    # "YFI USDT-Margined Perpetual Contract": ticker ahead of the margin type.
+    re.compile(rf"\b([A-Z0-9]{{2,}})\s+(?:{_QUOTE})[-\s](?:M|Margined)\b"),
+)
 # Titles end with a parenthesised release date, which the ticker pattern happily
 # captures. A phantom asset is worse than none: it never matches market data, and
 # it hides the fact that the announcement needs its body resolved.
@@ -103,12 +173,49 @@ def classify(title: str) -> str:
     return "unclassified"
 
 
+#: Quote suffixes to strip so one asset has one key.
+#:
+#: The same listing is written as `BLUR`, `BLUR/USDT` and `USDⓈ-M BLUR` across
+#: years, and without normalisation each spelling counts as a separate asset —
+#: which silently inflates the cross-section the entire power argument rests on.
+_QUOTE_SUFFIX = ("USDT", "USDC", "BUSD", "USD1", "USD")
+
+
+def base_ticker(symbol: str) -> str:
+    """`BLURUSDT` -> `BLUR`. Left alone when stripping would leave nothing.
+
+    Deliberately *not* applied inside `extract_assets`, which stays faithful to
+    what the title says — `BLUR/USDT` and `USDⓈ-M BLUR` are different facts and
+    the quote asset is information. Callers building a cross-section apply this
+    to get one key per asset; callers auditing the feed do not.
+    """
+    upper = symbol.upper()
+    for suffix in _QUOTE_SUFFIX:
+        if upper.endswith(suffix) and len(upper) > len(suffix) + 1:
+            return upper[: -len(suffix)]
+    return upper
+
+
 def extract_assets(title: str) -> list[str]:
-    """Trading pairs first, then parenthesised tickers. Order-preserving, unique."""
-    found = _PAIR.findall(title) or _TICKER.findall(title)
+    """Every asset named in the title. Order-preserving, unique.
+
+    Tried in order of how unambiguous the form is, and unlike the original this
+    accumulates rather than stopping at the first form that matches: a title can
+    carry both a pair and a parenthesised ticker, and "SAND and LTC" carries two
+    assets in one phrase.
+    """
+    found: list[str] = []
+    for pattern in _ASSET_FORMS:
+        for match in pattern.findall(title):
+            found.extend(re.split(r"\s+and\s+", match))
+    found.extend(_PAIR.findall(title))
+    if not found:
+        found.extend(_TICKER.findall(title))
+
     seen: dict[str, None] = {}
     for symbol in found:
-        if _NOT_A_TICKER.search(symbol):
+        symbol = symbol.strip()
+        if not symbol or _NOT_A_TICKER.search(symbol) or symbol.upper() in _NOT_TICKER_WORDS:
             continue
         seen.setdefault(symbol, None)
     return list(seen)
