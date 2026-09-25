@@ -97,4 +97,12 @@ def test_coverage_excludes_regimes_too_small_to_support_a_conclusion() -> None:
     observations to mean something, not two labels that happen to appear."""
     bars = make_noise(n=6_000, seed=11)
     labels = classify(bars, RegimeSpec(warmup=500))
-    assert all(count >= 200 for count in coverage(labels, min_bars=200).values())
+    covered = coverage(labels, min_bars=200)
+    # Checked before the `all()`, which is vacuously true on an empty dict. If
+    # classification ever stopped producing usable regimes this test would go
+    # green on nothing, and §15's two-regime requirement is exactly what it is
+    # here to police.
+    assert len(covered) >= 2, (
+        f"§15 needs two regimes with enough observations; got {covered}"
+    )
+    assert all(count >= 200 for count in covered.values())

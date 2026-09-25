@@ -157,6 +157,11 @@ def test_canaries_never_reach_the_global_registry() -> None:
 
     assert "only_here" in isolated.features
     assert "only_here" not in REGISTRY.features
+    # Non-empty first: `not any(...)` over an empty registry is true, and an
+    # empty registry is the precise failure this canary exists to catch — the
+    # original bug was `registry or REGISTRY` falling through because Registry
+    # defines __len__.
+    assert REGISTRY.features, "the production registry is empty; nothing was checked"
     assert not any(
         name.startswith(("cheat_", "liar_")) for name in REGISTRY.features
     ), "a deliberately broken feature is registered for real studies"
