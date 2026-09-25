@@ -4,7 +4,11 @@ Written after a defect survived for days because the comment above it asserted
 the invariant the line violated. Reading code is not verification; each test here
 constructs data where the wrong order produces a visibly wrong answer.
 
-Small by design. The point is the order, not the sample.
+Small by design. The point is the order, not the sample. Which is also why
+every spec here sets `require_power=False`: these samples are deliberately
+too small to resolve anything, and the §8.8 precondition would reject them
+before the ordering under test ever ran. The waiver is explicit rather than
+accidental — that distinction is the whole reason the check exists.
 """
 
 from __future__ import annotations
@@ -43,7 +47,8 @@ def _reversing(n: int = 12_000, seed: int = 23) -> pl.DataFrame:
 def test_selection_cannot_see_the_evaluation_window() -> None:
     """The defect that motivated this file."""
     spec = StudySpec(name="probe", params=tuple(range(10, 40, 6)),
-                     entries=tuple(np.arange(55.0, 75.0, 4.0)), min_trades=20)
+                     entries=tuple(np.arange(55.0, 75.0, 4.0)), min_trades=20,
+                     require_power=False)
     result = run_study(_reversing(), spec)
     assert result.gate.metrics.get("sharpe_annualised", 0.0) < 3.0, (
         "implausibly good out-of-sample figure on data whose relationship "
@@ -114,7 +119,7 @@ def test_effective_n_reaches_the_verdict() -> None:
     # whole validation rests on.
     bars = make_noise(n=20_000, seed=31)
     spec = StudySpec(name="eff", params=(8, 14), entries=(50.0, 52.0),
-                     min_trades=10, timeframe="4h")
+                     min_trades=10, timeframe="4h", require_power=False)
     result = run_study(bars, spec)
 
     reported = result.gate.metrics["n_obs"]
@@ -130,7 +135,7 @@ def test_trials_counted_are_the_whole_grid() -> None:
     """Every configuration evaluated raises the bar, including the discarded."""
     bars = make_noise(n=6_000, seed=33)
     spec = StudySpec(name="trials", params=(10, 20, 30), entries=(58.0, 62.0),
-                     min_trades=5, timeframe="4h")
+                     min_trades=5, timeframe="4h", require_power=False)
     result = run_study(bars, spec)
     assert result.executed_trials == spec.planned_trials == 6
     assert result.gate.metrics.get("trials_considered", 0) == 6

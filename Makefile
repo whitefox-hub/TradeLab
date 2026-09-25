@@ -1,4 +1,4 @@
-.PHONY: help install up down migrate test test-fast test-medium test-slow lint typecheck golden-update doctor pin-digests
+.PHONY: help install up down migrate test test-fast test-medium test-slow test-integration lint typecheck golden-update doctor pin-digests
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -24,6 +24,12 @@ test-medium:  ## Properties, canaries, golden run. Budget < 3min
 
 test-slow:  ## Full synthetic ground truth, regression corpus, benchmarks. Nightly.
 	pytest -m "not integration" -n auto
+
+test-integration:  ## Live venue + Postgres probes. On demand, needs `make up`.
+	@# POSTGRES_HOST in .env is `postgres`, the compose service name, which only
+	@# resolves inside the network. From the host the port is published, so the
+	@# name has to be overridden or every DB test dies in name resolution.
+	POSTGRES_HOST=localhost pytest -m integration
 
 test: test-medium  ## Default: what runs on commit
 

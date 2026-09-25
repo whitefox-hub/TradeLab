@@ -195,6 +195,9 @@ def test_selection_never_sees_the_evaluation_window() -> None:
     spec = StudySpec(
         name="leak-probe", params=tuple(range(10, 40, 4)),
         entries=tuple(np.arange(55.0, 75.0, 2.0)), min_trades=30,
+        # Verifying the selection boundary, not power. Waived explicitly, which
+        # is the distinction §8.8's check exists to force.
+        require_power=False,
     )
     result = run_study(bars, spec)
 

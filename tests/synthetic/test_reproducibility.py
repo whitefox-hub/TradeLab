@@ -19,6 +19,10 @@ def _spec(**overrides) -> StudySpec:
     base = {
         "name": "repro", "params": (10, 20), "entries": (58.0, 62.0),
         "min_trades": 5, "timeframe": "4h", "min_detectable_sharpe": 0.05,
+        # These verify identity and cost handling, not power. The §8.8 check is
+        # waived explicitly rather than by accident, which is the distinction it
+        # was added to enforce.
+        "require_power": False,
     }
     return StudySpec(**{**base, **overrides})
 
