@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TradeLab</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e9ef;
+    --muted:#8b93a4; --accent:#5b9dff; --warn:#d29922; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+    --bg:#f6f7f9; --panel:#fff; --line:#e1e4e8; --text:#1b1f24; --muted:#656d76; --accent:#0969da; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); min-height:100vh;
+    font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:48px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; font-weight:600; }
+  .sub { color:var(--muted); margin:0 0 32px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); }
+  a.card { display:block; padding:16px; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; text-decoration:none; color:var(--text); }
+  a.card:hover { border-color:var(--accent); }
+  a.card.soon { opacity:.45; pointer-events:none; }
+  .card h2 { font-size:15px; margin:0 0 4px; font-weight:600; }
+  .card p { margin:0; color:var(--muted); font-size:13px; }
+  .tag { font-size:11px; color:var(--warn); }
+  footer { margin-top:36px; padding-top:16px; border-top:1px solid var(--line);
+    color:var(--muted); font-size:12px; }
+  code { background:var(--panel); padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TradeLab</h1>
+  <p class="sub" id="who">Quantitative research laboratory · single operator</p>
+
+  <div class="grid">
+    <a class="card" href="/news">
+      <h2>News</h2>
+      <p>Events, extracted assets, and your ratings in sigma.</p>
+    </a>
+    <a class="card" href="/macro">
+      <h2>Macro</h2>
+      <p>Series freshness, release calendar, consensus before the print.</p>
+    </a>
+    <a class="card soon">
+      <h2>Strategies <span class="tag">soon</span></h2>
+      <p>Lifecycle state and gate status per criterion.</p>
+    </a>
+    <a class="card soon">
+      <h2>Approvals <span class="tag">soon</span></h2>
+      <p>Pending transitions with the evidence that will be recorded.</p>
+    </a>
+    <a class="card soon">
+      <h2>Runs <span class="tag">soon</span></h2>
+      <p>Positions, fills and per-trade slippage. Mode shown, never edited.</p>
+    </a>
+    <a class="card soon">
+      <h2>Data quality <span class="tag">soon</span></h2>
+      <p>Open issues and which windows they block.</p>
+    </a>
+  </div>
+
+  <footer>
+    This surface records decisions. It computes no figure and holds no venue
+    credential, so it cannot start live trading — time series live in Grafana,
+    and production is reached through the capital ramp rather than entered.
+  </footer>
+</main>
+<script>
+fetch("/api/me", { credentials: "same-origin" })
+  .then((r) => r.ok ? r.json() : null)
+  .then((me) => { if (me) document.getElementById("who").textContent =
+    me.email + " · " + me.role; });
+</script>
+</body>
+</html>

@@ -123,6 +123,7 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
         ("/api/events/{event_id}/annotations", "POST"),
+        ("/api/macro/releases/{release_id}/consensus", "POST"),
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
     ], f"a new write route appeared: {writable}"
@@ -306,3 +307,54 @@ def test_a_judgement_cannot_carry_a_caller_supplied_time() -> None:
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
     assert 'datetime.now(UTC) if body.kind == "judgement"' in source
     assert body.available_at is not None
+
+
+@pytest.mark.fast
+def test_the_macro_screen_is_served(client: TestClient) -> None:
+    response = client.get("/macro")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
+@pytest.mark.fast
+def test_the_consensus_body_carries_no_timestamp() -> None:
+    """§20.6: `consensus_at` is set by the handler and refused by the database
+    if it does not precede the release. Accepting one from the client would put
+    the choice in the caller's hands, which is the choice the rule removes."""
+    from tradelab.api.app import ConsensusRequest
+
+    assert "consensus_at" not in ConsensusRequest.model_fields
+    assert ConsensusRequest(consensus=3.5).consensus == 3.5
+
+
+@pytest.mark.fast
+def test_writes_are_still_the_four_plus_consensus(client: TestClient) -> None:
+    """The route table again, now that macro added one. Written as equality so
+    that every addition has to be argued for rather than absorbed."""
+    writable = sorted(
+        (route.path, method)
+        for route in client.app.routes
+        for method in getattr(route, "methods", set())
+        if method in {"POST", "PUT", "PATCH", "DELETE"}
+    )
+    assert writable == [
+        ("/api/approvals", "POST"),
+        ("/api/events/{event_id}/annotations", "POST"),
+        ("/api/macro/releases/{release_id}/consensus", "POST"),
+        ("/api/session", "DELETE"),
+        ("/api/session", "POST"),
+    ], f"a new write route appeared: {writable}"
+
+
+@pytest.mark.fast
+def test_the_entry_point_links_the_screens_that_exist(client: TestClient) -> None:
+    """A landing page offering a screen that 404s is worse than not offering it."""
+    import re
+
+    page = client.get("/trade_lab").text
+    assert client.get("/trade_lab").status_code == 200
+    linked = set(re.findall(r'class="card" href="(/[a-z_]+)"', page))
+    served = {route.path for route in client.app.routes}
+    assert linked, "the entry point links nothing"
+    for path in linked:
+        assert path in served, f"{path} is offered but not served"

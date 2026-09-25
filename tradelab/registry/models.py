@@ -842,3 +842,79 @@ class ProcessTransition(Base):
             "state IN ('proposed','under_review','decided','implemented','withdrawn')",
             name="ck_process_state"),
     )
+
+
+class MacroSeries(Base):
+    """Catalogue of macro series. Plan.md §4.7, §20.6.
+
+    `has_vintages` is operational rather than decorative. A revised series used
+    as if it were real-time is answering a different question — what we know now
+    rather than what was known then — and a result that depends on one is flagged
+    rather than quietly reported.
+    """
+
+    __tablename__ = "macro_series"
+
+    code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    has_vintages: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_revised: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    session_close: Mapped[str | None] = mapped_column(Text)
+    #: Measured, not assumed. The gap between a release instant and the moment a
+    #: subscriber could act on it is the whole difference between a tradeable
+    #: event and a backtest artefact.
+    publish_lag_s: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('rate','yield','price','index','activity')", name="ck_macro_kind"),
+        # 'yahoo' added to the plan's list after measuring what is actually
+        # reachable without a key: FRED serves rates, yields, WTI, the dollar
+        # index and CPI, but has no usable gold series, and stooq's CSV endpoint
+        # now returns a web page. Extending the list is a schema decision and is
+        # recorded as one rather than worked around with a 'manual' label that
+        # would hide where the number came from.
+        CheckConstraint(
+            "source IN ('fred','alfred','stooq','yahoo','manual')",
+            name="ck_macro_source"),
+    )
+
+
+class MacroRelease(Base):
+    """One scheduled print, with what was expected and what arrived. §20.6.
+
+    The CHECK is the point of the table. A consensus recorded after the release
+    is not a consensus, it is a memory of one — and the entire value of macro as
+    an event class is that expectations existed *before* the print, so that
+    surprise is a number rather than a story told afterwards. A consensus entered
+    once the actual is known is that story, and it would make every macro
+    surprise look predictive.
+
+    Enforced in the schema rather than in the form, which is the third place this
+    system refuses to trust a control that can be clicked past.
+    """
+
+    __tablename__ = "macro_releases"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    series: Mapped[str] = mapped_column(ForeignKey("macro_series.code"), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(TS, nullable=False)
+    consensus: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    consensus_at: Mapped[datetime | None] = mapped_column(TS)
+    actual: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    #: The publication instant, not the date. A daily timestamp on an intraday
+    #: release puts the event at midnight and every reaction measured from it is
+    #: measured from the wrong moment.
+    actual_at: Mapped[datetime | None] = mapped_column(TS)
+    available_at: Mapped[datetime | None] = mapped_column(TS)
+    surprise_sigma: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    vintage_of: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("macro_releases.id"))
+
+    __table_args__ = (
+        CheckConstraint(
+            "consensus IS NULL OR consensus_at IS NULL OR consensus_at < scheduled_for",
+            name="ck_consensus_precedes_the_release"),
+        Index("ix_macro_releases_series_time", "series", "scheduled_for"),
+    )

@@ -8,5 +8,7 @@ __pycache__/
 data/
 secrets/*
 !secrets/.gitkeep
+# Local run notes. Carries the operator password.
+Run.md
 .env
 *.duckdb

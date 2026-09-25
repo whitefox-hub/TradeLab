@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Macro — TradeLab</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e9ef;
+    --muted:#8b93a4; --accent:#5b9dff; --up:#3fb950; --down:#f85149; --warn:#d29922; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+    --bg:#f6f7f9; --panel:#fff; --line:#e1e4e8; --text:#1b1f24; --muted:#656d76; --accent:#0969da; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding:16px; border-bottom:1px solid var(--line); display:flex;
+    gap:16px; align-items:baseline; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; font-weight:600; }
+  h2 { font-size:14px; margin:28px 0 10px; font-weight:600; }
+  nav a { color:var(--muted); text-decoration:none; margin-right:14px; }
+  nav a.on { color:var(--text); }
+  .who { margin-left:auto; font-size:12px; color:var(--muted); }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase;
+    letter-spacing:.04em; }
+  td.num { font-variant-numeric:tabular-nums; text-align:right; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--line); }
+  .tag.risk { color:var(--warn); border-color:var(--warn); }
+  .tag.ok { color:var(--muted); }
+  .stale { color:var(--down); }
+  button,input { background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:6px 10px; font:inherit; }
+  button { cursor:pointer; } button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .hint { font-size:12px; color:var(--muted); margin:6px 0 0; }
+  .err { color:var(--down); font-size:13px; margin-top:8px; }
+  .empty { color:var(--muted); padding:12px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Macro</h1>
+  <nav><a href="/news">News</a><a href="/macro" class="on">Macro</a></nav>
+  <span class="who" id="who"></span>
+</header>
+
+<main>
+  <div id="need-auth" class="empty" hidden>
+    Not signed in. <a href="/news" style="color:var(--accent)">Sign in on the news screen</a>,
+    then come back.
+  </div>
+
+  <div id="app" hidden>
+    <h2>Series</h2>
+    <table>
+      <thead><tr>
+        <th>Code</th><th>Name</th><th>Kind</th><th>Source</th>
+        <th>Point in time</th><th class="num">Observations</th><th class="num">Age</th>
+      </tr></thead>
+      <tbody id="series"></tbody>
+    </table>
+    <p class="hint">A revised series with no vintages cannot be read as it was known at
+      the time, so a study using one is answering a different question — what we know
+      now rather than what was known then. Age is shown because a stale feed fails
+      silently: the number is simply old, and old numbers look exactly like current ones.</p>
+
+    <h2>Upcoming releases</h2>
+    <table>
+      <thead><tr>
+        <th>Series</th><th>Scheduled</th><th class="num">Days ahead</th>
+        <th class="num">Consensus</th><th></th>
+      </tr></thead>
+      <tbody id="upcoming"></tbody>
+    </table>
+    <p class="hint">A consensus can only be entered for a release that has not happened.
+      One recorded afterwards is not a consensus, it is a memory of one — and it would
+      make every macro surprise look predictive. The database refuses it.</p>
+    <div class="err" id="err"></div>
+
+    <h2>Recent prints</h2>
+    <table>
+      <thead><tr>
+        <th>Series</th><th>Scheduled</th><th class="num">Consensus</th>
+        <th class="num">Actual</th><th class="num">Surprise (σ)</th>
+      </tr></thead>
+      <tbody id="recent"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, options = {}) {
+  const r = await fetch(path, { credentials: "same-origin",
+    headers: { "Content-Type": "application/json" }, ...options });
+  if (r.status === 401) { $("need-auth").hidden = false; $("app").hidden = true;
+    throw new Error("unauthenticated"); }
+  if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+  return r.json();
+}
+
+const fmt = (v, d = 2) => v === null || v === undefined ? "—" : Number(v).toFixed(d);
+const day = (s) => s ? s.slice(0, 10) : "—";
+
+async function load() {
+  const series = await api("/api/macro/series");
+  $("series").innerHTML = series.map((s) => `
+    <tr>
+      <td><strong>${s.code}</strong></td>
+      <td>${s.name}</td>
+      <td>${s.kind}</td>
+      <td>${s.source}</td>
+      <td>${s.point_in_time_safe
+            ? '<span class="tag ok">safe</span>'
+            : '<span class="tag risk">revised, no vintages</span>'}</td>
+      <td class="num">${s.observations}</td>
+      <td class="num ${s.days_old > 45 ? "stale" : ""}">${fmt(s.days_old, 0)}d</td>
+    </tr>`).join("");
+
+  const upcoming = await api("/api/macro/upcoming");
+  $("upcoming").innerHTML = upcoming.length ? upcoming.map((u) => `
+    <tr>
+      <td>${u.series}</td><td>${day(u.scheduled_for)}</td>
+      <td class="num">${fmt(u.days_ahead, 1)}</td>
+      <td class="num">${fmt(u.consensus)}</td>
+      <td><input size="8" id="c-${u.id}" placeholder="consensus">
+          <button data-id="${u.id}">Save</button></td>
+    </tr>`).join("")
+    : `<tr><td colspan="5" class="empty">No future releases scheduled. The
+        collector loads observations that have already printed; a forward
+        calendar needs a source that publishes one.</td></tr>`;
+
+  for (const button of $("upcoming").querySelectorAll("button")) {
+    button.onclick = async () => {
+      $("err").textContent = "";
+      const id = button.dataset.id;
+      try {
+        await api(`/api/macro/releases/${id}/consensus`, { method: "POST",
+          body: JSON.stringify({ consensus: Number($(`c-${id}`).value) }) });
+        load();
+      } catch (e) { $("err").textContent = e.message; }
+    };
+  }
+
+  const recent = await api("/api/macro/releases?limit=40");
+  $("recent").innerHTML = recent.map((r) => `
+    <tr>
+      <td>${r.series}</td><td>${day(r.scheduled_for)}</td>
+      <td class="num">${fmt(r.consensus)}</td>
+      <td class="num">${fmt(r.actual)}</td>
+      <td class="num">${fmt(r.surprise_sigma)}</td>
+    </tr>`).join("");
+}
+
+api("/api/me")
+  .then((me) => { $("who").textContent = me.email + " · " + me.role;
+                  $("app").hidden = false; load(); })
+  .catch(() => { $("need-auth").hidden = false; });
+</script>
+</body>
+</html>

@@ -73,6 +73,18 @@ class AnnotationRequest(BaseModel):
     note: str | None = None
 
 
+class ConsensusRequest(BaseModel):
+    """What the market expected, entered where no feed supplies it. §20.6.
+
+    No `consensus_at` field, deliberately. It is set to now by the handler and
+    the database refuses any row where it does not precede `scheduled_for`, so a
+    consensus can only ever be recorded for a release that has not happened.
+    """
+
+    consensus: float
+    note: str | None = None
+
+
 class ApprovalRequest(BaseModel):
     subject_kind: str = Field(pattern="^(strategy|capital_tier|gate_change)$")
     subject_id: uuid.UUID
@@ -383,7 +395,115 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         session.commit()
         return {"id": str(annotation_id), "available_at": available_at.isoformat()}
 
+    # -- macro --------------------------------------------------------------
+
+    @app.get("/api/macro/series")
+    def macro_series(who: Operator = operator,
+                     session: Session = session_dep) -> list[dict]:
+        """The catalogue with freshness, which is the column that matters.
+
+        A stale macro feed fails silently — the number is simply old, and old
+        numbers look exactly like current ones. So the age of the newest
+        observation is returned on every row rather than left to be noticed.
+        """
+        rows = session.execute(sa.text(
+            "SELECT s.code, s.name, s.kind, s.source, s.has_vintages, s.is_revised, "
+            "       s.session_close, s.publish_lag_s, "
+            "       max(r.scheduled_for) AS latest, "
+            "       count(r.id) AS observations, "
+            "       EXTRACT(EPOCH FROM (now() - max(r.scheduled_for)))/86400 AS days_old "
+            "FROM macro_series s LEFT JOIN macro_releases r ON r.series = s.code "
+            "GROUP BY s.code ORDER BY s.kind, s.code"
+        )).mappings().all()
+        return [
+            dict(r) | {
+                "days_old": float(r["days_old"]) if r["days_old"] is not None else None,
+                # A revised series with no vintages cannot be read as it was
+                # known at the time, and a study using it is answering a
+                # different question (§4.7). Surfaced, not buried in a column.
+                "point_in_time_safe": bool(r["has_vintages"]) or not r["is_revised"],
+            }
+            for r in rows
+        ]
+
+    @app.get("/api/macro/releases")
+    def macro_releases(who: Operator = operator, session: Session = session_dep,
+                       series: str | None = None, limit: int = 100) -> list[dict]:
+        clause = "WHERE series = :s" if series else ""
+        rows = session.execute(sa.text(
+            f"SELECT id, series, scheduled_for, consensus, consensus_at, actual, "
+            f"       actual_at, available_at, surprise_sigma "
+            f"FROM macro_releases {clause} "
+            f"ORDER BY scheduled_for DESC LIMIT :l"
+        ), {"s": series, "l": min(limit, 500)}).mappings().all()
+        return [dict(r) for r in rows]
+
+    @app.get("/api/macro/upcoming")
+    def macro_upcoming(who: Operator = operator,
+                       session: Session = session_dep) -> list[dict]:
+        """Releases still ahead, which are the only ones a consensus can attach to.
+
+        The anticipation window of §11.6 made visible: for a scheduled event the
+        tradeable object is the approach, not the arrival.
+        """
+        rows = session.execute(sa.text(
+            "SELECT id, series, scheduled_for, consensus, consensus_at, "
+            "       EXTRACT(EPOCH FROM (scheduled_for - now()))/86400 AS days_ahead "
+            "FROM macro_releases WHERE scheduled_for > now() "
+            "ORDER BY scheduled_for LIMIT 200"
+        )).mappings().all()
+        return [dict(r) | {"days_ahead": float(r["days_ahead"])} for r in rows]
+
+    @app.post("/api/macro/releases/{release_id}/consensus")
+    def record_consensus(release_id: uuid.UUID, body: ConsensusRequest,
+                         who: Operator = operator,
+                         session: Session = session_dep) -> dict[str, Any]:
+        """Record what the market expected, before the print. §20.6.
+
+        The whole value of macro as an event class is that expectations existed
+        *before* the release, so surprise is a number rather than a story told
+        afterwards. A consensus entered once the actual is known is that story,
+        and it would make every macro surprise look predictive.
+
+        Refused by the database, not here — the third place this system declines
+        to trust a control that can be clicked past.
+        """
+        try:
+            updated = session.execute(sa.text(
+                "UPDATE macro_releases SET consensus = :c, consensus_at = now() "
+                "WHERE id = :i RETURNING series, scheduled_for"
+            ), {"c": body.consensus, "i": release_id}).mappings().first()
+        except sa.exc.DBAPIError as error:
+            session.rollback()
+            message = str(getattr(error, "orig", error))
+            if "ck_consensus_precedes_the_release" in message:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "this release has already happened. A consensus recorded "
+                    "afterwards is not a consensus, it is a memory of one (§20.6).",
+                ) from error
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                message.split("\n")[0]) from error
+
+        if updated is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such release")
+
+        audit(session, who.email, "macro.consensus", "macro_release", str(release_id),
+              {"consensus": body.consensus, "note": body.note})
+        session.commit()
+        return {"id": str(release_id), "series": updated["series"]}
+
+    @app.get("/macro", include_in_schema=False)
+    def macro_screen() -> FileResponse:
+        return FileResponse(Path(__file__).parent / "static" / "macro.html")
+
     # -- the screen ---------------------------------------------------------
+
+    @app.get("/trade_lab", include_in_schema=False)
+    def home() -> FileResponse:
+        """The entry point. Screens hang off it rather than being reached by
+        knowing their paths."""
+        return FileResponse(Path(__file__).parent / "static" / "index.html")
 
     @app.get("/news", include_in_schema=False)
     def news_screen() -> FileResponse:
