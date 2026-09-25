@@ -50,12 +50,13 @@ packages = ["tradelab"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Speed tiers per Plan.md §16.8. Default run excludes everything slow.
-addopts = "-q --strict-markers -m 'not slow and not integration'"
+addopts = "-q --strict-markers -m 'not slow and not integration and not benchmark'"
 markers = [
     "fast: unit, schema and contract tests. Budget < 15s total, run on save.",
     "medium: properties at reduced budgets, canaries, golden run. Budget < 3min, run on commit.",
     "slow: full synthetic ground truth, regression corpus, benchmarks. Nightly.",
     "integration: requires Postgres/MinIO or a venue testnet. On demand.",
+    "benchmark: throughput floors. Excluded from the parallel tiers, because a rate measured beside eleven other workers measures the machine and not the code.",
 ]
 filterwarnings = ["error::DeprecationWarning"]
 

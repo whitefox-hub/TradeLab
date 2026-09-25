@@ -19,15 +19,23 @@ from tradelab.features import momentum  # noqa: F401
 from tradelab.features.materialise import materialise
 from tradelab.validation.synthetic import make_noise
 
-#: Measured at ~650/s of CPU time. The floor sits well below that so ordinary
-#: machine noise does not fail the build, while a structural regression —
+#: Measured at ~650/s on an idle machine. The floor sits well below that so
+#: ordinary noise does not fail the build, while a structural regression —
 #: reintroducing a per-bar Python loop, say — is caught. The original scanned
 #: implementation ran at 35/s, which would have put §9.1's million
 #: configurations at eight hours.
+#:
+#: This file carries the `benchmark` marker and is excluded from the parallel
+#: tiers, because a throughput floor measured beside eleven other workers
+#: measures the machine and not the code. Under `-n auto` on two performance
+#: cores it reported 111/s against the same engine that does 650 alone —
+#: switching the clock to CPU time did not fix it either, since memory
+#: bandwidth contention slows vectorised work while the cycles still tick.
 MIN_EVALUATIONS_PER_SECOND = 150
 
 
 @pytest.mark.slow
+@pytest.mark.benchmark
 def test_screening_throughput() -> None:
     bars = make_noise(n=50_000, seed=1)
     periods = list(range(5, 45))
@@ -36,21 +44,14 @@ def test_screening_throughput() -> None:
     features = materialise(bars, [("rsi", {"period": p, "source": "close"}) for p in periods])
     close = bars["close"].to_numpy().astype(np.float64)
 
-    # CPU time, not wall clock. Under `-n auto` this file runs beside eleven
-    # other workers on a machine with two performance cores, and a wall-clock
-    # floor then measures how busy the laptop is rather than how fast the engine
-    # is — it passed alone and failed in the suite, which is the least useful
-    # kind of red. Process time is immune to that and still catches the
-    # regression this guards against: reintroducing a per-bar Python loop raises
-    # the CPU cost per evaluation in exact proportion.
-    start = time.process_time()
+    start = time.perf_counter()
     evaluations = 0
     for period in periods:
         signal = features[f"rsi__period{period}_sourceclose"].to_numpy().astype(np.float64)
         for entry in entries:
             run(close, threshold_position(signal, entry), BINANCE_RETAIL, "1m")
             evaluations += 1
-    rate = evaluations / (time.process_time() - start)
+    rate = evaluations / (time.perf_counter() - start)
 
     assert rate > MIN_EVALUATIONS_PER_SECOND, (
         f"tier A fell to {rate:,.0f} evaluations/s (floor {MIN_EVALUATIONS_PER_SECOND}). "
@@ -60,6 +61,7 @@ def test_screening_throughput() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.benchmark
 def test_feature_materialisation_fuses_variants() -> None:
     """Forty RSI periods must cost close to what one costs (§6).
 
@@ -69,25 +71,11 @@ def test_feature_materialisation_fuses_variants() -> None:
     """
     bars = make_noise(n=50_000, seed=2)
 
-    # CPU time, not wall clock. Under `-n auto` this file runs beside eleven
-    # other workers on a machine with two performance cores, and a wall-clock
-    # floor then measures how busy the laptop is rather than how fast the engine
-    # is — it passed alone and failed in the suite, which is the least useful
-    # kind of red. Process time is immune to that and still catches the
-    # regression this guards against: reintroducing a per-bar Python loop raises
-    # the CPU cost per evaluation in exact proportion.
-    start = time.process_time()
+    start = time.perf_counter()
     materialise(bars, [("rsi", {"period": 14, "source": "close"})])
     single = time.perf_counter() - start
 
-    # CPU time, not wall clock. Under `-n auto` this file runs beside eleven
-    # other workers on a machine with two performance cores, and a wall-clock
-    # floor then measures how busy the laptop is rather than how fast the engine
-    # is — it passed alone and failed in the suite, which is the least useful
-    # kind of red. Process time is immune to that and still catches the
-    # regression this guards against: reintroducing a per-bar Python loop raises
-    # the CPU cost per evaluation in exact proportion.
-    start = time.process_time()
+    start = time.perf_counter()
     materialise(bars, [("rsi", {"period": p, "source": "close"}) for p in range(5, 45)])
     forty = time.perf_counter() - start
 

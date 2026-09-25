@@ -22,8 +22,11 @@ test-fast:  ## Unit, schema, contracts. Budget < 15s (§16.8)
 test-medium:  ## Properties, canaries, golden run. Budget < 3min
 	pytest -m "fast or medium" -n auto
 
-test-slow:  ## Full synthetic ground truth, regression corpus, benchmarks. Nightly.
-	pytest -m "not integration" -n auto
+test-slow:  ## Full synthetic ground truth and regression corpus. Nightly.
+	pytest -m "not integration and not benchmark" -n auto
+
+test-benchmark:  ## Throughput floors. Serial on purpose: see the marker's note.
+	pytest -m benchmark
 
 test-integration:  ## Live venue + Postgres probes. On demand, needs `make up`.
 	@# POSTGRES_HOST in .env is `postgres`, the compose service name, which only
