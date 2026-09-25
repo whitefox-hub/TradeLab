@@ -708,6 +708,20 @@ class Event(Base):
     single impulse; a schedule has a date the market can see coming and prices
     in; a process resolves in steps, each of which can supersede the last. Using
     one model for all three measures the wrong thing twice.
+
+    The fourth, `regime_shift`, is the one the impulse-response framework cannot
+    hold, and its examples are the events people most want to trade: a war
+    breaking out, a venue collapsing, an outright ban. Every other shape
+    estimates a **deviation from a baseline and a return to it** — `τ_slow` is
+    the rate of that return. A regime shift does not deviate from the baseline,
+    it **replaces** it, so fitting a decay estimates a reversion that never
+    happens and the fitted τ is meaningless rather than imprecise.
+
+    These belong to §10 rather than §11: a change of market state, handled by
+    the regime classifier that already conditions every result, and used as a
+    **conditioning variable** rather than as a signal. Wars and exchange
+    collapses number in the handful, and §8.8 applies — a conditional model over
+    a handful of occurrences estimates nothing.
     """
 
     __tablename__ = "events"
@@ -722,7 +736,9 @@ class Event(Base):
     code_hash: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (
-        CheckConstraint("shape IN ('shock','schedule','process')", name="ck_events_shape"),
+        CheckConstraint(
+            "shape IN ('shock','schedule','process','regime_shift')",
+            name="ck_events_shape"),
         Index("ix_events_type_time", "event_type", "first_seen_at"),
     )
 

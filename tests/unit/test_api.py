@@ -595,3 +595,30 @@ def test_an_ending_that_cannot_be_reversed_says_so_in_the_row(
     page = client.get("/news").text
     assert "not_reopenable_because" in page
     assert 'id="confirm-back"' in page
+
+
+@pytest.mark.fast
+def test_direction_is_recorded_but_labelled_as_an_input_not_a_signal() -> None:
+    """§11.7: what is tradeable is the residual, observed minus expected.
+
+    News that should have moved two sigma and moved a fifth of one is bearish
+    however bullish it read. A system trading sign directly trades the part
+    everyone has already priced, so the field exists as an input to the
+    expected-reaction model and the form says so.
+    """
+    from tradelab.api.app import NewEventRequest
+
+    assert NewEventRequest(event_type="war", title="Escalation", direction=-1).direction == -1
+    assert NewEventRequest(event_type="hack", title="Bridge exploit").direction == 0
+    with pytest.raises(ValueError):
+        NewEventRequest(event_type="hack", title="Bridge exploit", direction=5)
+
+
+@pytest.mark.fast
+def test_the_form_offers_the_fourth_shape_and_explains_it(client: TestClient) -> None:
+    page = client.get("/news").text
+    assert 'value="regime_shift"' in page
+    assert "replace the baseline" in page or "replaces the baseline" in page
+    # And the screen warns that sign is not the signal, where the operator is
+    # about to enter one.
+    assert "residual" in page

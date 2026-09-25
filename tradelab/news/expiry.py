@@ -138,7 +138,20 @@ def resolve(
             ),
         )
 
-    # 3. Scheduled, and the anticipation ends when the date arrives — whatever
+    # 3. A regime shift does not decay, because it did not deviate from a
+    #    baseline — it replaced one. Putting a clock on it would estimate a
+    #    reversion that never happens, so it stays live until a person says the
+    #    regime ended, which is itself a judgement no timer can make.
+    if shape == "regime_shift":
+        return Expiry(
+            EndedBy.OPEN, None, active=True,
+            reason="a regime shift replaces the baseline rather than deviating "
+                   "from it; it ends when someone says the regime did",
+            reopenable=False,
+            not_reopenable_because="",
+        )
+
+    # 4. Scheduled, and the anticipation ends when the date arrives — whatever
     #    the outcome. Before the date it is live no matter how old it is.
     if shape == "schedule" and scheduled_for is not None:
         return Expiry(
@@ -155,7 +168,7 @@ def resolve(
             ),
         )
 
-    # 4. Otherwise it decays, on an assumed horizon until §11.5 measures one.
+    # 5. Otherwise it decays, on an assumed horizon until §11.5 measures one.
     hours = ASSUMED_DECAY_HOURS.get(event_type, DEFAULT_DECAY_HOURS)
     expires = first_seen_at + timedelta(hours=hours)
 

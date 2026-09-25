@@ -71,8 +71,19 @@ class NewEventRequest(BaseModel):
     """
 
     event_type: str = Field(min_length=3, max_length=48)
-    shape: str = Field(default="shock", pattern="^(shock|schedule|process)$")
+    shape: str = Field(default="shock",
+                       pattern="^(shock|schedule|process|regime_shift)$")
     assets: list[str] = Field(default_factory=list, max_length=40)
+    #: -1 bearish, 0 unclear, +1 bullish, for the named assets.
+    #:
+    #: Recorded because the expected-reaction model of §11.10 needs it as an
+    #: input. It is **not** the signal: what is tradeable is the residual,
+    #: observed minus expected. Positive news that should have moved two sigma
+    #: and moved a fifth of one is bearish information, and lukewarm news that
+    #: moved four is
+    #: bullish — so a system trading sign directly trades the part of the
+    #: reaction everyone else has already priced.
+    direction: int = Field(default=0, ge=-1, le=1)
     #: When it became public, which is not when it is being typed. Backdating an
     #: *event* is legitimate — it happened when it happened. Backdating a
     #: *judgement* about it is not, and that is refused elsewhere (§20.5).
@@ -336,6 +347,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             f"       e.code_hash, e.cluster_method, "
             f"       COALESCE(array_agg(DISTINCT a.asset) FILTER "
             f"                (WHERE a.asset IS NOT NULL), '{{}}') AS assets, "
+            f"       max(a.expected_direction) AS direction, "
             f"       count(DISTINCT n.id) AS annotations, "
             f"       min(sr.scheduled_for) FILTER (WHERE sr.scheduled_for > now()) "
             f"         AS scheduled_for, "
@@ -407,8 +419,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         for asset in dict.fromkeys(a.strip().upper() for a in body.assets if a.strip()):
             session.execute(sa.text(
                 "INSERT INTO event_assets (event_id, revision, asset, "
-                "expected_direction) VALUES (:e, 1, :a, 0) ON CONFLICT DO NOTHING"
-            ), {"e": event_id, "a": asset})
+                "expected_direction) VALUES (:e, 1, :a, :d) ON CONFLICT DO NOTHING"
+            ), {"e": event_id, "a": asset, "d": body.direction})
 
         if body.scheduled_for is not None:
             session.execute(sa.text(

@@ -154,3 +154,38 @@ def test_a_reopened_item_is_active_over_its_assumed_horizon() -> None:
                      first_seen_at=NOW - timedelta(days=30),
                      reactivated_until=NOW - timedelta(days=1), now=NOW)
     assert not lapsed.active
+
+
+@pytest.mark.fast
+def test_a_regime_shift_does_not_decay() -> None:
+    """Plan.md §11.7's fourth shape, and the one people most want to trade.
+
+    Every other shape estimates a deviation from a baseline and a return to it;
+    `tau_slow` is the rate of that return. A war breaking out, a venue
+    collapsing or an outright ban does not deviate from the baseline, it
+    replaces it — so a fitted decay estimates a reversion that never happens and
+    the tau is meaningless rather than imprecise.
+    """
+    two_years_on = resolve(event_type="war", shape="regime_shift",
+                           first_seen_at=NOW - timedelta(days=730), now=NOW)
+    assert two_years_on.active
+    assert "replaces the baseline" in two_years_on.reason
+
+    # The same age as a shock is long spent.
+    as_a_shock = resolve(event_type="hack", shape="shock",
+                         first_seen_at=NOW - timedelta(days=730), now=NOW)
+    assert not as_a_shock.active
+
+
+@pytest.mark.fast
+def test_a_regime_shift_ends_only_when_a_person_says_so() -> None:
+    """No clock can know a regime ended, which is why there is no horizon for
+    one to run out."""
+    ended = resolve(event_type="war", shape="regime_shift",
+                    first_seen_at=NOW - timedelta(days=100),
+                    resolved_at=NOW - timedelta(days=1), now=NOW)
+    assert not ended.active
+    assert ended.ended_by is EndedBy.RESOLVED
+    # It carries no expiry date of its own.
+    live = resolve(event_type="war", shape="regime_shift", first_seen_at=NOW, now=NOW)
+    assert live.expires_at is None

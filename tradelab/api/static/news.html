@@ -27,6 +27,11 @@
   .ends.decay { color:var(--warn); border-color:var(--warn); }
   .ends.resolved { color:var(--accent); border-color:var(--accent); }
   .ends.superseded { color:var(--down); border-color:var(--down); }
+  .dir { font-weight:700; font-size:15px; }
+  .dir.up { color:var(--up); } .dir.down { color:var(--down); }
+  .dir.flat { color:var(--muted); font-weight:550; }
+  .regime { font-size:12px; color:var(--down); border:1px solid var(--down);
+    border-radius:20px; padding:0 7px; margin-left:6px; }
   .hand { font-size:12px; color:var(--accent); border:1px solid var(--accent);
     border-radius:20px; padding:0 7px; margin-left:6px; }
   .count { color:var(--muted); font-size:14.5px; margin-left:auto; }
@@ -71,7 +76,7 @@
 
     <table>
       <thead><tr>
-        <th>When</th><th>Type</th><th>Assets</th><th>Ends by</th>
+        <th>When</th><th>Type</th><th>Sign</th><th>Assets</th><th>Ends by</th>
         <th class="num">Ratings</th><th></th>
       </tr></thead>
       <tbody id="rows"></tbody>
@@ -121,15 +126,36 @@
     <option value="macro_release"><option value="partnership"><option value="war">
   </datalist>
 
+  <label for="n-dir">Direction for those assets</label>
+  <select id="n-dir" style="width:100%">
+    <option value="1">▲ bullish — expected to push the price up</option>
+    <option value="0" selected>— unclear</option>
+    <option value="-1">▼ bearish — expected to push the price down</option>
+  </select>
+  <p class="hint">Recorded, but read what it is for. Sign is an <strong>input to
+    the expected-reaction model</strong>, not a signal. What is tradeable is the
+    residual: news that should have moved two sigma and moved a fifth of one is
+    bearish however bullish it read, and lukewarm news that moved four is
+    bullish. A system trading sign directly trades the part everyone has already
+    priced.</p>
+
   <label for="n-shape">Shape</label>
   <select id="n-shape" style="width:100%">
     <option value="shock">shock — a single impulse that decays</option>
     <option value="schedule">schedule — a known date the market prices toward</option>
     <option value="process">process — resolves in steps, each able to cancel the last</option>
+    <option value="regime_shift">regime shift — replaces the baseline and does not come back</option>
   </select>
   <p class="hint">Shape decides which machinery applies later, so it is chosen
     here rather than inferred. A shock decays; a schedule ends discontinuously
     when its date arrives; a process ends when it is decided or withdrawn.</p>
+  <p class="hint"><strong>A war, a venue collapsing, an outright ban</strong> is a
+    regime shift, not a long shock. Every other shape estimates a deviation from
+    a baseline and a return to it; these replace the baseline, so fitting a decay
+    to one estimates a reversion that never happens. They never expire on a
+    clock, and they belong to the regime classifier as a conditioning variable
+    rather than to the reaction engine as a signal — the sample is a handful, and
+    a handful estimates nothing.</p>
 
   <label for="n-assets">Assets (space separated, optional)</label>
   <input id="n-assets" class="mono" placeholder="BTCUSDT ETHUSDT">
@@ -236,7 +262,10 @@ function draw() {
     tr.innerHTML =
       `<td>${when}</td>` +
       `<td>${event.event_type}${event.hand_entered ? '<span class="hand">by hand</span>' : ""}` +
+      `    ${event.shape === "regime_shift" ? '<span class="regime">regime</span>' : ""}` +
       `    <div class="shape">${event.shape}</div></td>` +
+      `<td><span class="dir ${event.direction > 0 ? "up" : event.direction < 0 ? "down" : "flat"}">` +
+      `    ${event.direction > 0 ? "▲ bullish" : event.direction < 0 ? "▼ bearish" : "—"}</span></td>` +
       `<td class="mono">${(event.assets || []).join(" ") || "—"}</td>` +
       `<td><span class="ends ${event.ended_by}">${event.ended_by}</span>` +
       `    <div class="why ${event.expiry_assumed ? "assumed" : ""}">${event.expiry_reason}</div></td>` +
@@ -346,6 +375,7 @@ $("n-save").onclick = async () => {
       shape: $("n-shape").value,
       title: $("n-title").value.trim(),
       assets: $("n-assets").value.split(/\s+/).filter(Boolean),
+      direction: Number($("n-dir").value),
       happened_at: iso($("n-when").value),
       scheduled_for: iso($("n-sched").value),
     }) });
