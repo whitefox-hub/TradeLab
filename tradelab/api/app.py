@@ -39,6 +39,9 @@ from tradelab.api.security import (
     operator_dependency,
     verify_password,
 )
+from tradelab.api.settings_rules import RULES
+from tradelab.api.settings_rules import Invalid as InvalidSetting
+from tradelab.api.settings_rules import validate as validate_setting
 from tradelab.config import Settings
 
 #: Shared chrome and the screens live here. Mounted rather than served per file,
@@ -458,6 +461,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return {
             "editable": [
                 {"key": key, "description": description,
+                 "accepts": RULES[key].describes if key in RULES else None,
+                 "fields": list(RULES[key].fields) if key in RULES else [],
                  **(current.get(key) or {"value": None, "rationale": None,
                                          "valid_from": None, "changed_by": None})}
                 for key, description in EDITABLE.items()
@@ -492,6 +497,13 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 f"that creates a new strategy, which returns to screening and "
                 f"adds its trials to the counter — it cannot be edited here.",
             )
+        # Checked here, not in the form. A rule in the form is a suggestion,
+        # because this endpoint is reachable without it.
+        try:
+            validate_setting(key, body.value)
+        except InvalidSetting as error:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from error
+
         user = session.execute(
             sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}).first()
         session.execute(sa.text(

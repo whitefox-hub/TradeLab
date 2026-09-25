@@ -21,6 +21,11 @@
     font-size:14.5px; }
   .edit .why { font-family:inherit; }
   .actions { display:flex; gap:10px; margin-top:12px; }
+  button.warn { background:transparent; color:var(--warn); border-color:var(--warn);
+    font-weight:600; }
+  button.warn:hover { background:color-mix(in srgb, var(--warn) 14%, transparent); }
+  .accepts { font-size:13px; color:var(--muted); margin-top:8px;
+    font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
   .locked { background:transparent; border:1px dashed var(--line); border-radius:12px;
     padding:18px 20px; }
   .locked li { margin-bottom:10px; }
@@ -77,9 +82,10 @@ async function load() {
           : "No value recorded yet."}
       </div>
       <div class="actions">
-        <button data-open="${s.key}">Change</button>
+        <button class="warn" data-open="${s.key}">Change</button>
       </div>
       <div class="edit" id="e-${s.key}">
+        <div class="accepts">accepts: ${s.accepts || "—"}</div>
         <label for="v-${s.key}">New value (JSON)</label>
         <textarea id="v-${s.key}" rows="3">${s.value === null ? "{}" : JSON.stringify(s.value, null, 1)}</textarea>
         <label for="r-${s.key}">Why</label>
