@@ -12,3 +12,4 @@ secrets/*
 Run.md
 .env
 *.duckdb
+logs/
