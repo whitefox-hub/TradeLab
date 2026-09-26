@@ -1609,3 +1609,42 @@ def test_a_removed_screen_leaves_its_data_behind(client: TestClient) -> None:
     # And the counts survive where they were already displayed.
     assert "data-quality" in client.get("/static/index.html").text
     assert "experiments" in client.get("/static/algorithm.html").text
+
+
+@pytest.mark.fast
+def test_macro_says_what_it_is_for_and_who_reads_it(client: TestClient) -> None:
+    """The catalogue exists so the operator can ask whether money is flowing to
+    other markets. Nothing in the code reads these series — the reader is the
+    operator, and what they take from them enters through the market trend.
+
+    That chain was invisible on the screen, which is how the page came to look
+    orphaned when it is the input to the one channel the algorithm has for what
+    it cannot see.
+    """
+    markup = client.get("/static/macro.html").text
+    assert "/market-sentiment" in markup, "the screen does not say where a reading goes"
+    assert "you</strong> are the reader" in markup
+
+    # And it stops at the reading. Which way a rising dollar cuts is a market
+    # theory, and stating one here would be §20.1's boundary crossed by prose
+    # rather than by arithmetic.
+    assert "has not tested" in markup
+
+
+@pytest.mark.fast
+def test_the_catalogue_covers_somewhere_for_money_to_go() -> None:
+    """"Is money flowing elsewhere" needs an elsewhere. Rates and the dollar
+    were here; equities, the price of fear, the short end and credit were not,
+    and without them the question has no other side."""
+    from tradelab.collectors.macro import BY_CODE
+
+    for code in ("SP500", "VIX", "DGS2", "HYSPREAD"):
+        assert code in BY_CODE, f"{code} is missing from the catalogue"
+
+    # Every series states whether it is revised and whether the revisions are
+    # recoverable, because those two decide whether a study using it is
+    # answering the question it thinks it is.
+    for code, spec in BY_CODE.items():
+        assert isinstance(spec.is_revised, bool), code
+        assert isinstance(spec.has_vintages, bool), code
+        assert not (spec.is_revised and spec.has_vintages) or spec.has_vintages

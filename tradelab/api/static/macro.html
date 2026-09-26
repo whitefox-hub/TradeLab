@@ -26,8 +26,19 @@
 <div class="layout">
   <main class="content">
     <h1>Macro</h1>
-    <p class="sub">Where each series stands, how stale it is, and what was expected
-      before it printed.</p>
+    <p class="sub">Where the money could be going instead. Rates, the dollar,
+      equities, gold, oil and credit — the places capital leaves a risk asset
+      <em>for</em>, so that "is it flowing elsewhere" has an elsewhere to point at.</p>
+
+    <p class="hint">Nothing here is read by any code, and that is the design rather
+      than a gap: <strong>you</strong> are the reader. What you take from these
+      numbers goes into the market trend on
+      <a href="/market-sentiment">Market Sentiment</a>, which is the one channel
+      the algorithm has for what is happening that it cannot see. This screen
+      shows the readings and their staleness and stops there — which way a rising
+      dollar or a widening credit spread cuts is a market theory, and one this
+      project has not tested. PREREG-005 is the study that would say whether the
+      reading you form here is worth anything.</p>
 
     <div class="indicators" id="indicators"></div>
     <p class="hint">Latest stored reading and its change against the print before it,
@@ -101,7 +112,11 @@ async function load() {
   const series = await api("/api/macro/series");
   // The ones asked for by name first, then the rest. A screen that sorts
   // alphabetically buries the rate behind the CPI.
-  const order = ["FEDFUNDS", "WTI", "GOLD", "DGS10", "DTWEXBGS", "CPIAUCSL"];
+  // Grouped by where money would go, not alphabetically: the short end and the
+  // dollar first because they are cash's alternatives, then the risk assets it
+  // would be leaving, then credit, then what sets the whole level.
+  const order = ["DGS2", "DTWEXBGS", "SP500", "VIX", "GOLD", "WTI",
+                 "HYSPREAD", "DGS10", "FEDFUNDS", "CPIAUCSL"];
   const rank = (code) => { const i = order.indexOf(code); return i < 0 ? 999 : i; };
   const ranked = [...series].sort((a, b) => rank(a.code) - rank(b.code));
   $("indicators").innerHTML = ranked.map(card).join("");

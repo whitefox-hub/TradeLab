@@ -71,6 +71,23 @@ CATALOGUE: tuple[SeriesSpec, ...] = (
                "CL=F", has_vintages=False, is_revised=False),
     SeriesSpec("GOLD", "Gold front month", "price", "yahoo",
                "GC=F", has_vintages=False, is_revised=False),
+    # Where money goes when it leaves a risk asset, which is the question this
+    # catalogue exists to let an operator ask. Rates and the dollar were here
+    # already; equities, the price of fear and the short end were not, and
+    # without them "is money flowing elsewhere" has no elsewhere to point at.
+    SeriesSpec("SP500", "S&P 500", "index", "yahoo",
+               "^GSPC", has_vintages=False, is_revised=False),
+    SeriesSpec("VIX", "CBOE volatility index", "index", "yahoo",
+               "^VIX", has_vintages=False, is_revised=False),
+    SeriesSpec("DGS2", "US 2-year treasury yield", "yield", "fred",
+               "DGS2", has_vintages=False, is_revised=False,
+               session_close="17:00 America/New_York", publish_lag_s=57_600),
+    # Credit. A widening high-yield spread is money leaving risk before it
+    # shows up anywhere else, and it is the one series here that says so
+    # without being a price somebody is already watching.
+    SeriesSpec("HYSPREAD", "US high-yield option-adjusted spread", "rate", "fred",
+               "BAMLH0A0HYM2", has_vintages=False, is_revised=True,
+               session_close="17:00 America/New_York", publish_lag_s=86_400),
 )
 
 BY_CODE = {spec.code: spec for spec in CATALOGUE}
