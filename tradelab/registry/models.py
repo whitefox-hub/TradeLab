@@ -975,3 +975,50 @@ class AppSetting(Base):
     valid_from: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
 
     __table_args__ = (Index("ix_app_settings_key_time", "key", "valid_from"),)
+
+
+class EventReaction(Base):
+    """What the market did after an event. Plan.md §11.3.
+
+    Stored per event, asset and horizon, because a reaction is not one number:
+    a move that is large at an hour and gone by a day is a different object from
+    one that persists, and collapsing them loses exactly the distinction §11.5
+    is trying to fit.
+
+    `z` is the poolable quantity — CAR over sigma_pre times the root of the
+    horizon — and it is the same unit a human rating is given in, which is what
+    makes a rating scoreable rather than merely recorded.
+
+    `benchmark_kind` is stored rather than implied. A cross-sectional
+    counterfactual differences against an unaffected asset; a time-series one
+    has no unaffected asset to use and is weaker. Treating them as one quantity
+    would pool a measurement with an estimate.
+    """
+
+    __tablename__ = "event_reactions"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    asset: Mapped[str] = mapped_column(String(32), primary_key=True)
+    horizon_minutes: Mapped[int] = mapped_column(Integer, primary_key=True)
+    car: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
+    z: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
+    benchmark_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    beta_pre: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    sigma_pre: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
+    n_bars: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: True when the pre-event window already carried the move. Reported rather
+    #: than subtracted out: the honest handling of a contaminated measurement is
+    #: to mark it, not to repair it.
+    leaked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    measured_at: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=func.now())
+    #: Which version of the measurement produced this row. A corpus that cannot
+    #: say what measured it cannot be compared across a change to the estimator.
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "benchmark_kind IN ('cross_sectional','time_series')",
+            name="ck_reaction_benchmark"),
+        Index("ix_reactions_horizon", "horizon_minutes", "z"),
+    )
