@@ -676,6 +676,12 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
         ("/api/macro/releases/{release_id}/consensus", "POST"),
+        # §12.4 puts sizing and risk limits in the operator's hands, and §20
+        # gives this screen "limit changes (admin)". It creates a configuration
+        # and never edits one: §14.1 versions them and has runs reference one,
+        # so a limit cannot change beneath a position opened under it. There is
+        # no PUT or PATCH here for that reason.
+        ("/api/risk-limits", "POST"),
         ("/api/scenario", "PUT"),
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
@@ -1477,18 +1483,92 @@ def test_halting_breaches_are_marked_as_such(client: TestClient) -> None:
 
 
 @pytest.mark.fast
-def test_no_route_writes_a_risk_limit(client: TestClient) -> None:
-    """§12.4 keeps limits out of the operator's editable settings: a risk limit
-    defines behaviour. Changing one creates a configuration and a run records
-    which it ran under, so a limit is never edited beneath a position opened
-    under it."""
-    writable = {
-        (route.path, method)
+def test_a_risk_configuration_is_created_and_never_edited(client: TestClient) -> None:
+    """§12.4 lists sizing and risk limits as tunable, and §20 gives this screen
+    "limit changes (admin)" — so it writes. What it must not do is *edit*.
+
+    §14.1 versions configurations and has each run reference one precisely so a
+    limit cannot change beneath a position opened under it. An UPDATE would undo
+    that: every past run would silently report limits it never ran under.
+    """
+    methods = {
+        method
         for route in client.app.routes
+        if getattr(route, "path", None) == "/api/risk-limits"
         for method in getattr(route, "methods", set())
-        if method in {"POST", "PUT", "PATCH", "DELETE"}
     }
-    assert not any("risk" in path or "limit" in path for path, _ in writable)
+    assert methods == {"GET", "POST"}, f"the risk config answers to {methods}"
+
+    import inspect
+
+    from tradelab.api.app import create_app as factory
+
+    source = inspect.getsource(factory)
+    route = source[source.index('@app.post("/api/risk-limits"'):]
+    route = route[:route.index('@app.get("/api/positions")')]
+    assert "INSERT INTO risk_limit_configs" in route
+    assert "UPDATE risk_limit_configs" not in route
+
+
+@pytest.mark.fast
+def test_every_limit_is_bounded_before_it_can_be_set() -> None:
+    """A risk limit is what stops a bad decision, so one set loosely enough has
+    been removed while still appearing on the screen. `max_daily_loss` at 1.0 is
+    "halt after losing everything", which reads like a configured control and is
+    not one.
+
+    A field with no bound cannot be set at all, which is the safe direction: a
+    limit nobody bounded is one anybody can disable.
+    """
+    import dataclasses
+
+    from tradelab.risk.bounds import BOUNDS, Invalid, validate
+    from tradelab.risk.limits import RiskLimits
+
+    defaults = RiskLimits()
+    fields = {f.name for f in dataclasses.fields(RiskLimits)}
+    assert set(BOUNDS) == fields, (
+        f"unbounded: {sorted(fields - set(BOUNDS))}")
+
+    good = {name: getattr(defaults, name) for name in fields}
+    assert validate(good), "the engine's own defaults are refused"
+
+    # Values that disable the control rather than merely loosening it.
+    for field, value in (
+        ("max_daily_loss", 1.0),
+        ("max_drawdown_from_peak", 0.99),
+        ("max_leverage", 100),
+        ("max_orders_per_minute", 100_000),
+        ("max_position_pct_equity", 5),
+    ):
+        with pytest.raises(Invalid):
+            validate({**good, field: value})
+
+    # Individually fine, jointly meaningless: a minimum above its maximum
+    # refuses every order, which is a halt reporting itself as a sizing rule.
+    with pytest.raises(Invalid, match="refuse every order"):
+        validate({**good, "min_position_notional": 50_000})
+    with pytest.raises(Invalid, match="bounded by gross"):
+        validate({**good, "max_net_exposure": 5})
+
+    # A configuration is the whole set; a partial one takes defaults nobody
+    # chose, and an unknown field is a limit the operator believes exists.
+    with pytest.raises(Invalid, match="missing"):
+        validate({k: v for k, v in good.items() if k != "max_leverage"})
+    with pytest.raises(Invalid, match="unknown"):
+        validate({**good, "max_hope": 3})
+
+
+@pytest.mark.fast
+def test_the_form_cannot_offer_what_the_server_refuses(client: TestClient) -> None:
+    """The bounds reach the form from the same place the endpoint checks them,
+    so the two cannot drift. A bound in the form is only a suggestion anyway —
+    the endpoint is reachable without it — but one that disagrees with the
+    server is worse than none, because it teaches the operator a wrong range.
+    """
     markup = client.get("/static/risk_limits.html").text
-    assert "<input" not in markup and "<select" not in markup, (
-        "the risk screen offers a control that sets something")
+    assert 'min="${escape(l.low)}" max="${escape(l.high)}"' in markup
+    assert "l.bound" in markup, "the form does not show the reason a value is refused"
+    # And a rationale is required, because a limit change nobody can review is
+    # one nobody did.
+    assert 'id="c-why"' in markup

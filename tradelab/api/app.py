@@ -131,6 +131,32 @@ class ScenarioRequest(BaseModel):
         return self
 
 
+class RiskConfigRequest(BaseModel):
+    """A new risk limit configuration. Plan.md §14.1, §12.4, §20.
+
+    §12.4 puts sizing and risk limits in the operator's hands — unlike signal
+    parameters, which cannot be edited anywhere because changing one creates a
+    new strategy that re-enters the funnel.
+
+    A configuration is **created, never edited**. §14.1 versions them and has
+    runs reference one rather than embed it, so a change is traceable and a
+    limit is never altered beneath a position opened under it.
+
+    `extra="forbid"` so an unknown field is refused rather than dropped: a
+    silently ignored limit is one the operator believes is in force.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9 _.-]+$")
+    #: Every limit, because one left out would take a default nobody chose.
+    #: Bounds live in tradelab.risk.bounds and are checked on the way in.
+    limits: dict[str, Any] = Field(min_length=1)
+    #: Why. A limit change with no stated reason is one nobody can review, and
+    #: §14.1's whole argument for versioning them is that a change is traceable.
+    rationale: str = Field(min_length=10, max_length=1000)
+
+
 class ApprovalRequest(BaseModel):
     subject_kind: str = Field(pattern="^(strategy|capital_tier|gate_change)$")
     subject_id: uuid.UUID
@@ -1154,6 +1180,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         """
         import dataclasses
 
+        from tradelab.risk.bounds import BOUNDS
         from tradelab.risk.limits import (
             HALTING,
             REQUIRES_HUMAN,
@@ -1189,7 +1216,23 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "halts": breach in halting,
                 # And one a person has to clear before it resumes.
                 "needs_a_person": breach in human,
+                # What it may be set to, from the same place the endpoint
+                # checks, so the form cannot offer a value the server refuses.
+                "low": str(BOUNDS[name].low), "high": str(BOUNDS[name].high),
+                "whole": BOUNDS[name].whole, "bound": BOUNDS[name].describes,
             })
+
+        # Every configuration ever created, so a change is visible as a change
+        # rather than as a value that is simply different from last time.
+        history = session.execute(sa.text(
+            "SELECT c.id, c.name, c.valid_from, "
+            "  (SELECT a.payload->>'rationale' FROM audit_log a "
+            "    WHERE a.subject_id = CAST(c.id AS text) "
+            "      AND a.action = 'risk_config.create' LIMIT 1) AS rationale, "
+            "  (SELECT count(*) FROM runs r WHERE r.risk_limit_config_id = c.id) "
+            "    AS runs "
+            "FROM risk_limit_configs c ORDER BY c.valid_from DESC LIMIT 50"
+        )).mappings().all()
 
         events = session.execute(sa.text(
             "SELECT rule, observed, limit_value, action, occurred_at, run_id "
@@ -1209,6 +1252,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # a configured number: a halt already in force, a position below the
             # minimum viable size, and news cutting a size down.
             "breach_kinds": sorted(b.value for b in Breach),
+            "history": [{
+                "id": str(h["id"]), "name": h["name"],
+                "valid_from": h["valid_from"].isoformat(),
+                "rationale": h["rationale"], "runs": int(h["runs"]),
+            } for h in history],
             "events": [{
                 "rule": e["rule"], "observed": str(e["observed"]),
                 "limit_value": str(e["limit_value"]), "action": e["action"],
@@ -1216,6 +1264,49 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             } for e in events],
             "event_count": len(events),
         }
+
+    @app.post("/api/risk-limits", status_code=status.HTTP_201_CREATED)
+    def add_risk_config(body: RiskConfigRequest, who: Operator = operator,
+                        session: Session = session_dep) -> dict[str, Any]:
+        """Create a risk limit configuration. Never edit one.
+
+        §14.1 versions these and has runs reference one rather than embed it,
+        precisely so a limit cannot change beneath a position opened under it.
+        An UPDATE here would undo that: every past run would silently report
+        limits it never ran under.
+
+        The bounds are checked server side because the endpoint is reachable
+        without the form, and they are bounds *on the bounds* — a risk limit is
+        what stops a bad decision, so one set loosely enough has been removed
+        while still appearing on the screen.
+        """
+        from tradelab.risk.bounds import Invalid as InvalidLimit
+        from tradelab.risk.bounds import validate as validate_limits
+
+        try:
+            parsed = validate_limits(body.limits)
+        except InvalidLimit as refused:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, str(refused)) from None
+
+        config_id = uuid.uuid4()
+        columns = ", ".join(sorted(parsed))
+        placeholders = ", ".join(f":{name}" for name in sorted(parsed))
+        session.execute(sa.text(
+            f"INSERT INTO risk_limit_configs (id, name, {columns}, valid_from) "
+            f"VALUES (:id, :name, {placeholders}, now())"
+        ), {"id": config_id, "name": body.name,
+            **{k: str(v) for k, v in parsed.items()}})
+
+        # The rationale lives in the audit entry rather than in a column: the
+        # configuration is the numbers, and why they were chosen is a thing a
+        # person said, at a time, which is what the log is for.
+        audit(session, who.email, "risk_config.create", "risk_limit_config",
+              str(config_id), {"name": body.name, "rationale": body.rationale,
+                               "limits": {k: str(v) for k, v in parsed.items()}})
+        session.commit()
+        return {"id": str(config_id), "name": body.name,
+                "limits": {k: str(v) for k, v in parsed.items()}}
 
     @app.get("/api/positions")
     def open_positions(who: Operator = operator,

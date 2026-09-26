@@ -38,6 +38,26 @@
   .kinds span { font-family:ui-monospace,SFMono-Regular,monospace; font-size:12.5px;
     padding:3px 9px; border-radius:6px; background:var(--panel-2);
     border:1px solid var(--line); color:var(--muted); }
+
+  .bar { display:flex; align-items:center; margin:18px 0 0; }
+  .bar .spacer { flex:1; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:14px; padding:22px 24px; width:min(720px, 94vw); max-height:88vh; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { margin:0 0 4px; font-size:19px; font-weight:630; }
+  dialog label { display:block; margin:14px 0 6px; font-size:13.5px;
+    color:var(--muted); font-weight:560; }
+  dialog input, dialog textarea { width:100%; }
+  .fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+    gap:10px 18px; margin-top:18px; padding-top:16px;
+    border-top:1px solid var(--line); }
+  .field label { margin:0 0 4px; font-family:ui-monospace,SFMono-Regular,monospace;
+    font-size:12.5px; }
+  .field input { text-align:right; font-variant-numeric:tabular-nums; }
+  .field .rng { font-size:11.5px; color:var(--muted); margin-top:3px; }
+  .field input.bad { border-color:var(--down); }
+  .actions-end { display:flex; gap:10px; align-items:center; margin-top:20px; }
+  .actions-end .spacer { flex:1; }
 </style>
 </head>
 <body>
@@ -45,6 +65,11 @@
   <main class="content">
     <h1>Risk limits</h1>
     <p class="sub">What the engine refuses, and what it has refused.</p>
+
+    <div class="bar">
+      <div class="spacer"></div>
+      <button class="primary" id="new">New configuration</button>
+    </div>
 
     <div class="cards" id="cards"></div>
     <p class="origin" id="origin"></p>
@@ -57,13 +82,25 @@
       <tbody id="limits"></tbody>
     </table>
 
-    <p class="hint">Read, never set. A risk limit defines behaviour, so §12.4 keeps
-      it out of the operator's editable settings — changing one creates a new
-      configuration and a run records which it ran under, so a limit is never
-      edited beneath a position that was opened under it. The engine evaluates
-      these independently of the strategy and counts positions from observed
-      fills, never from what the strategy reports: a strategy that miscounts its
-      own state is the case these exist for.</p>
+    <p class="hint">§12.4 puts sizing and risk limits in the operator's hands —
+      unlike signal parameters, which cannot be edited anywhere, because changing
+      one creates a new strategy that re-enters the funnel. What is not permitted
+      is <em>editing</em> a configuration: §14.1 versions them and has each run
+      reference one, so a limit never changes beneath a position opened under it.
+      A change creates a new configuration and the old one stays readable beside
+      the runs that used it. The engine evaluates these independently of the
+      strategy and counts positions from observed fills, never from what the
+      strategy reports: a strategy that miscounts its own state is the case these
+      exist for.</p>
+
+    <h2>Configurations</h2>
+    <table>
+      <thead><tr>
+        <th>Name</th><th class="num">Valid from</th><th>Rationale</th>
+        <th class="num">Runs</th>
+      </tr></thead>
+      <tbody id="history"></tbody>
+    </table>
 
     <h2>Every breach the engine can raise</h2>
     <div class="kinds" id="kinds"></div>
@@ -85,6 +122,29 @@
   </main>
 </div>
 
+<dialog id="editor">
+  <h2>New configuration</h2>
+  <p class="sub">Every limit is set. One left out would take a default nobody
+    chose, so there is no partial change — a configuration is the whole set.</p>
+
+  <label for="c-name">Name</label>
+  <input id="c-name" maxlength="64" placeholder="tighter-drawdown-2026-09">
+
+  <label for="c-why">Rationale</label>
+  <textarea id="c-why" rows="3" maxlength="1000"
+    placeholder="Why these numbers. A limit change nobody can review is one nobody did."></textarea>
+
+  <div class="fields" id="fields"></div>
+
+  <div class="actions-end">
+    <button class="ghost" id="reset">Reset to current</button>
+    <div class="spacer"></div>
+    <button class="ghost" id="cancel">Cancel</button>
+    <button class="primary" id="save">Create</button>
+  </div>
+  <div class="err" id="err"></div>
+</dialog>
+
 <script src="/static/app.js"></script>
 <script>
 mount("/risk-limits", { onReady: load });
@@ -92,8 +152,60 @@ mount("/risk-limits", { onReady: load });
 const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+let current = [];
+
+function openEditor() {
+  // Pre-filled with what is in force, so a change is a change rather than a
+  // form filled from nothing. Every field is present: a configuration is the
+  // whole set, and a partial one would take defaults nobody chose.
+  $("fields").innerHTML = current.map((l) => `
+    <div class="field">
+      <label for="f-${escape(l.name)}">${escape(l.name)}</label>
+      <input id="f-${escape(l.name)}" type="number" value="${escape(l.value)}"
+        min="${escape(l.low)}" max="${escape(l.high)}"
+        step="${l.whole ? "1" : "any"}">
+      <div class="rng">${escape(l.low)} – ${escape(l.high)}${
+        l.halts ? " · halts the run" : ""}</div>
+    </div>`).join("");
+  $("c-name").value = "";
+  $("c-why").value = "";
+  $("err").textContent = "";
+  $("editor").showModal();
+  $("c-name").focus();
+}
+
+async function create() {
+  $("err").textContent = "";
+  const limits = {};
+  let bad = null;
+  for (const l of current) {
+    const input = $(`f-${l.name}`);
+    const value = Number(input.value);
+    // Checked here so the operator is told which field, and again by the
+    // endpoint — which is reachable without this form, so the server's check
+    // is the one that counts.
+    const off = !Number.isFinite(value) || value < Number(l.low)
+      || value > Number(l.high) || (l.whole && !Number.isInteger(value));
+    input.classList.toggle("bad", off);
+    if (off && !bad) bad = `${l.name}: ${l.bound}`;
+    limits[l.name] = value;
+  }
+  if (bad) { $("err").textContent = bad; return; }
+
+  try {
+    await api("/api/risk-limits", { method: "POST", body: JSON.stringify({
+      name: $("c-name").value.trim(),
+      rationale: $("c-why").value.trim(),
+      limits,
+    }) });
+    $("editor").close();
+    load();
+  } catch (e) { $("err").textContent = e.message; }
+}
+
 async function load() {
   const data = await api("/api/risk-limits");
+  current = data.limits;
 
   $("cards").innerHTML = [
     [data.limits.length, "limits enforced"],
@@ -125,6 +237,19 @@ async function load() {
         : '<span class="tag order">refuses the order</span>'}</td>
     </tr>`).join("");
 
+  $("history").innerHTML = data.history.length
+    ? data.history.map((h) => `
+      <tr>
+        <td><strong>${escape(h.name)}</strong></td>
+        <td class="num">${escape(h.valid_from.slice(0, 16).replace("T", " "))}</td>
+        <td>${escape(h.rationale || "—")}</td>
+        <td class="num">${h.runs}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="4" class="empty">None has been created. The engine's
+        defaults are in force, which is a working state and not a configured
+        one — a run records the configuration it ran under, so until one
+        exists there is nothing for a run to record.</td></tr>`;
+
   $("kinds").innerHTML = data.breach_kinds
     .map((k) => `<span>${escape(k)}</span>`).join("");
 
@@ -142,6 +267,11 @@ async function load() {
         mode including backtest, so the first time the engine refuses an order
         will not be with real money — but it has not refused one yet.</td></tr>`;
 }
+
+$("new").onclick = openEditor;
+$("cancel").onclick = () => $("editor").close();
+$("reset").onclick = openEditor;
+$("save").onclick = create;
 </script>
 </body>
 </html>
