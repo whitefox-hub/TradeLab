@@ -1070,6 +1070,131 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def audit_screen() -> FileResponse:
         return FileResponse(STATIC / "audit.html")
 
+    @app.get("/api/pipeline")
+    def pipeline(who: Operator = operator, session: Session = session_dep) -> dict:
+        """The funnel, stage by stage, with what is in each one right now.
+
+        Counts read from tables, never computed here — §20.1. The value of this
+        screen is that it shows **where things stop**, which is a fact about the
+        registry rather than a figure about performance.
+        """
+        def scalar(query: str) -> int:
+            try:
+                return int(session.execute(sa.text(query)).scalar() or 0)
+            except Exception:
+                # A stage whose table does not exist yet is legitimately zero.
+                # Failing the whole screen because phase 5 has no rows would
+                # hide the eight stages that do.
+                session.rollback()
+                return 0
+
+        stages = [
+            {
+                "key": "data", "name": "Data",
+                "count": scalar("SELECT count(*) FROM ingestion_runs"),
+                "unit": "ingestion runs",
+                "note": "Point-in-time by construction: event_time, ingest_time "
+                        "and available_at are separate columns, so a backtest "
+                        "reads what was knowable rather than what is known.",
+                "gate": "Blocking data-quality issues keep their window out of "
+                        "any study.",
+                "blocked": scalar(
+                    "SELECT count(*) FROM data_quality_issues "
+                    "WHERE resolved_at IS NULL AND severity = 'blocking'"),
+            },
+            {
+                "key": "features", "name": "Features",
+                "count": scalar("SELECT count(*) FROM feature_definitions"),
+                "unit": "definitions",
+                "note": "Every feature is causal by construction: a value "
+                        "computed from bar t may only act from bar t+1, applied "
+                        "centrally rather than left to each strategy.",
+                "gate": "Leakage canaries must still be caught, and must not be "
+                        "registered for real studies.",
+            },
+            {
+                "key": "hypothesis", "name": "Hypothesis",
+                "count": scalar("SELECT count(*) FROM strategies"),
+                "unit": "strategies",
+                "note": "Registered before the search, with its target effect "
+                        "size — so an inconclusive result can be told apart "
+                        "from a negative one.",
+                "gate": "A study that cannot resolve its own target is refused "
+                        "before it spends a trial.",
+            },
+            {
+                "key": "studies", "name": "Screening · tier A",
+                "count": scalar("SELECT coalesce(sum(executed_trials),0) FROM studies"),
+                "unit": "trials executed",
+                "note": "Vectorised mass screening. Results go to Parquet, not "
+                        "the registry: a campaign produces millions of rows and "
+                        "the registry would stop being queryable.",
+                "gate": "Every trial raises the bar for every result after it. "
+                        "The counter is monotonic.",
+            },
+            {
+                "key": "experiments", "name": "Experiments · tier B",
+                "count": scalar("SELECT count(*) FROM experiments WHERE tier >= 2"),
+                "unit": "experiments",
+                "note": "Event-driven, reproducible from its own row: params, "
+                        "seed, code version, image digest and cost model.",
+                "gate": "Selection scores on training bars only, and net of "
+                        "costs — both were defects before they were rules.",
+            },
+            {
+                "key": "validation", "name": "Validation",
+                "count": scalar("SELECT count(*) FROM validation_reports"),
+                "unit": "reports",
+                "note": "Deflated Sharpe, PBO, minimum track record and "
+                        "parameter stability, each against a recorded bar.",
+                "gate": "Three verdicts, and inconclusive is not a soft fail: "
+                        "it means the sample could not resolve the question.",
+                "passed": scalar(
+                    "SELECT count(*) FROM validation_reports WHERE verdict = 'pass'"),
+            },
+            {
+                "key": "simulator", "name": "Simulator",
+                "count": scalar("SELECT count(*) FROM runs WHERE mode = 'simulator'"),
+                "unit": "runs",
+                "note": "Live data, simulated fills. Proves alpha survives on "
+                        "unseen data in real time; proves nothing about whether "
+                        "the venue accepts the order.",
+                "gate": "60 continuous days, divergence within band and "
+                        "decomposed by cause.",
+            },
+            {
+                "key": "testnet", "name": "Testnet",
+                "count": scalar("SELECT count(*) FROM runs WHERE mode = 'testnet'"),
+                "unit": "runs",
+                "note": "Real matching engine, exchange play money. The only "
+                        "place signature errors, margin rejections and clock "
+                        "drift appear.",
+                "gate": "Two weeks with no rejection caused by our own bugs.",
+            },
+            {
+                "key": "live", "name": "Live",
+                "count": scalar("SELECT count(*) FROM runs WHERE mode = 'live'"),
+                "unit": "runs",
+                "note": "Reached through the capital ramp, never entered. The "
+                        "interface holds no venue credential and cannot start "
+                        "one.",
+                "gate": "Tiers L0 to L3, each with a minimum duration and "
+                        "metrics in band.",
+            },
+        ]
+
+        return {
+            "stages": stages,
+            "events": scalar("SELECT count(*) FROM events"),
+            "reactions": scalar("SELECT count(*) FROM event_reactions"),
+            "judgements": scalar(
+                "SELECT count(*) FROM event_annotations WHERE kind = 'judgement'"),
+        }
+
+    @app.get("/pipeline", include_in_schema=False)
+    def pipeline_screen() -> FileResponse:
+        return FileResponse(STATIC / "pipeline.html")
+
     @app.get("/api/health")
     def health() -> dict:
         return {"ok": True, "computes_metrics": False, "can_start_live_trading": False}

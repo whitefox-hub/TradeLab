@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .flow { display:flex; flex-direction:column; gap:0; margin-top:24px; }
+  .stage { display:grid; grid-template-columns:200px 1fr; gap:24px;
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:18px 20px; }
+  .stage.empty-stage { background:transparent; border-style:dashed; }
+  .stage .left { display:flex; flex-direction:column; gap:4px; }
+  .stage .name { font-size:17px; font-weight:640; }
+  .stage .n { font-size:30px; font-weight:650; font-variant-numeric:tabular-nums;
+    line-height:1.1; letter-spacing:-.02em; }
+  .stage.empty-stage .n { color:var(--muted); }
+  .stage .unit { color:var(--muted); font-size:13.5px; }
+  .stage .note { font-size:14.5px; line-height:1.6; max-width:78ch; }
+  .stage .gate { margin-top:10px; font-size:13.5px; color:var(--muted);
+    border-left:2px solid var(--accent); padding-left:12px; line-height:1.55; }
+  .arrow { align-self:center; color:var(--muted); font-size:17px; padding:5px 0;
+    margin-left:96px; }
+  .halt { margin-top:10px; font-size:13.5px; color:var(--down); font-weight:550;
+    border-left:2px solid var(--down); padding-left:12px; }
+  .loop { margin-top:18px; padding:18px 20px; border:1px dashed var(--accent);
+    border-radius:12px; }
+  .loop .name { font-weight:640; font-size:16px; margin-bottom:6px; }
+  .counters { display:flex; gap:22px; flex-wrap:wrap; margin-top:10px;
+    font-variant-numeric:tabular-nums; }
+  .counters b { font-size:19px; }
+  .counters span { color:var(--muted); font-size:14px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <main class="content">
+    <h1>Pipeline</h1>
+    <p class="sub">Where a hypothesis has to get to before it trades, and where
+      things currently stop.</p>
+
+    <p class="hint">Counts are read from tables, never computed here. What this
+      screen is for is the second half of that subtitle: a funnel is only useful
+      if you can see which stage is holding, and a number that appears only on a
+      screen is one nobody can reproduce.</p>
+
+    <div class="flow" id="flow"></div>
+
+    <div class="loop">
+      <div class="name">Evaluation feeds the next hypothesis</div>
+      <p class="hint" style="margin-top:4px">The cycle does not end at live. A
+        rejection is a result: it narrows where to look next, and it costs
+        nothing compared with re-tuning something that already failed. Events
+        rated and then measured are what turn that loop from an impression into
+        a calibration.</p>
+      <div class="counters" id="loop"></div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+mount("/pipeline", { onReady: load });
+
+const escape = (t) => (t || "").replace(/[<>&"]/g,
+  (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]);
+
+async function load() {
+  const data = await api("/api/pipeline");
+
+  $("flow").innerHTML = data.stages.map((s, index) => `
+    <div class="stage ${s.count ? "" : "empty-stage"}">
+      <div class="left">
+        <div class="name">${escape(s.name)}</div>
+        <div class="n">${s.count.toLocaleString()}</div>
+        <div class="unit">${escape(s.unit)}</div>
+        ${s.passed !== undefined
+          ? `<div class="unit">${s.passed} passed</div>` : ""}
+      </div>
+      <div>
+        <div class="note">${escape(s.note)}</div>
+        <div class="gate">${escape(s.gate)}</div>
+        ${s.blocked
+          ? `<div class="halt">${s.blocked} blocking issue${s.blocked === 1 ? "" : "s"}
+             open — their windows are out of any study until resolved</div>` : ""}
+      </div>
+    </div>
+    ${index < data.stages.length - 1 ? '<div class="arrow">&#8595;</div>' : ""}
+  `).join("");
+
+  $("loop").innerHTML = [
+    [data.events, "events recorded"],
+    [data.judgements, "rated by hand"],
+    [data.reactions, "reactions measured"],
+  ].map(([n, k]) => `<div><b>${n.toLocaleString()}</b> <span>${k}</span></div>`).join("");
+}
+</script>
+</body>
+</html>

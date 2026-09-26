@@ -831,3 +831,43 @@ def test_the_dialog_offers_the_scale_from_the_server(client: TestClient) -> None
     assert 'id="rating"' not in page, "the free-number input is back"
     # The readout shows the sigma that will be stored.
     assert "sigma" in page
+
+
+@pytest.mark.fast
+def test_the_pipeline_screen_is_served_and_in_the_menu(client: TestClient) -> None:
+    assert client.get("/pipeline").status_code == 200
+    assert 'href: "/pipeline"' in client.get("/static/app.js").text
+
+
+@pytest.mark.fast
+def test_the_pipeline_counts_nothing_it_cannot_read(client: TestClient) -> None:
+    """Every number is a count from a table. §20.1 again: a figure that appears
+    only on a screen is one nobody can reproduce."""
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    block = source[source.index('def pipeline('):source.index('def pipeline_screen(')]
+    assert "SELECT count(*)" in block
+    assert "sum(executed_trials)" in block
+    # No arithmetic on the results — only counts and a rollback-safe scalar.
+    for forbidden in ("/ ", "* ", "mean", "sqrt"):
+        assert f"return {forbidden}" not in block
+
+
+@pytest.mark.fast
+def test_a_missing_stage_table_does_not_take_the_screen_down(
+    client: TestClient,
+) -> None:
+    """Phases 5 to 8 have empty or absent tables. Failing the whole view because
+    one stage has no rows would hide the eight that do."""
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    block = source[source.index('def pipeline('):source.index('def pipeline_screen(')]
+    assert "session.rollback()" in block
+    assert "return 0" in block
+
+
+@pytest.mark.fast
+def test_every_stage_states_the_gate_that_follows_it(client: TestClient) -> None:
+    """A funnel without its gates is a list of stages. What makes it a funnel is
+    what has to be true to leave each one."""
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    block = source[source.index('def pipeline('):source.index('def pipeline_screen(')]
+    assert block.count('"gate":') == block.count('"name":')
