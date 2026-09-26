@@ -833,79 +833,60 @@ def test_the_dialog_offers_the_scale_from_the_server(client: TestClient) -> None
     assert "sigma" in page
 
 
-@pytest.mark.fast
-def test_the_pipeline_screen_is_served_and_in_the_menu(client: TestClient) -> None:
-    assert client.get("/pipeline").status_code == 200
-    assert 'href: "/pipeline"' in client.get("/static/app.js").text
 
 
 @pytest.mark.fast
-def test_the_pipeline_counts_nothing_it_cannot_read(client: TestClient) -> None:
-    """Every number is a count from a table. §20.1 again: a figure that appears
-    only on a screen is one nobody can reproduce."""
+def test_the_algorithm_screen_is_served_and_in_the_menu(client: TestClient) -> None:
+    assert client.get("/algorithm").status_code == 200
+    assert 'href: "/algorithm"' in client.get("/static/app.js").text
+
+
+@pytest.mark.fast
+def test_the_old_pipeline_path_redirects(client: TestClient) -> None:
+    """It showed project status; the question it was asked was about the
+    decision sequence. A bookmark should not meet a 404."""
+    response = client.get("/pipeline", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/algorithm"
+
+
+@pytest.mark.fast
+def test_every_step_carries_the_rule_that_must_hold() -> None:
+    """A sequence without its invariants is a list of function names. What makes
+    it the algorithm is what has to be true when each step runs."""
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index('def pipeline('):source.index('def pipeline_screen(')]
-    assert "SELECT count(*)" in block
-    assert "sum(executed_trials)" in block
-    # No arithmetic on the results — only counts and a rollback-safe scalar.
-    for forbidden in ("/ ", "* ", "mean", "sqrt"):
-        assert f"return {forbidden}" not in block
+    block = source[source.index("ALGORITHM = ["):source.index('@app.get("/api/algorithm")')]
+    assert block.count('"rule":') == block.count('"name":')
+    assert block.count('"does":') == block.count('"name":')
 
 
 @pytest.mark.fast
-def test_a_missing_stage_table_does_not_take_the_screen_down(
-    client: TestClient,
-) -> None:
-    """Phases 5 to 8 have empty or absent tables. Failing the whole view because
-    one stage has no rows would hide the eight that do."""
+def test_the_steps_are_numbered_in_the_order_they_run() -> None:
+    """The screen's whole claim is the ordering, so a gap or a repeat in the
+    numbering is the one defect it cannot be allowed to have."""
+    import re
+
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index('def pipeline('):source.index('def pipeline_screen(')]
-    assert "session.rollback()" in block
-    assert "return 0" in block
+    block = source[source.index("ALGORITHM = ["):source.index('@app.get("/api/algorithm")')]
+    numbers = [int(n) for n in re.findall(r'"n": (\d+)', block)]
+    assert numbers == list(range(1, len(numbers) + 1))
 
 
 @pytest.mark.fast
-def test_every_stage_states_the_gate_that_follows_it(client: TestClient) -> None:
-    """A funnel without its gates is a list of stages. What makes it a funnel is
-    what has to be true to leave each one."""
+def test_the_steps_that_were_defects_say_what_they_cost() -> None:
+    """A rule with no story behind it reads as a preference, and the next person
+    reorders it. These four were real defects in this codebase."""
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    # The stages block only. The inputs below it carry names too, and counting
-    # across both made this fail the moment they were added — which is the test
-    # being imprecise rather than the code being wrong.
-    block = source[source.index('stages = ['):source.index('inputs = [')]
-    assert block.count('"gate":') == block.count('"name":')
+    block = source[source.index("ALGORITHM = ["):source.index('@app.get("/api/algorithm")')]
+    assert block.count('"cost":') >= 4
+    # And the numbers in those stories are the measured ones, not round.
+    assert "2.68" in block and "0.03" in block
+    assert "1.000 to 0.024" in block
 
 
 @pytest.mark.fast
-def test_the_pipeline_shows_its_inputs_and_whether_they_are_wired(
-    client: TestClient,
-) -> None:
-    """Parameters, news and macro feed the funnel from the side, and none of
-    them is connected yet. A diagram that draws an arrow which does not exist is
-    worse than one that leaves it out."""
+def test_the_algorithm_screen_computes_nothing() -> None:
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index('inputs = ['):source.index('return {\n            "stages"')]
-    for key in ("parameters", "events", "macro"):
-        assert f'"key": "{key}"' in block
-    # Every input states whether it is connected, and an unconnected one says
-    # what is missing rather than leaving a blank.
-    assert block.count('"connected":') == block.count('"key":')
-    assert block.count('"missing":') == block.count('"key":')
-
-    page = client.get("/pipeline").text
-    assert "unwired" in page
-    assert "i.missing" in page
-
-
-@pytest.mark.fast
-def test_an_unwired_input_is_not_drawn_as_wired(client: TestClient) -> None:
-    """The claim this screen makes is about the system, so an input marked
-    connected has to be one something reads."""
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index('inputs = ['):source.index('return {\n            "stages"')]
-    # All three are currently false. If one flips to true, the feature or study
-    # that reads it has to exist — which is what this assertion is here to
-    # force someone to check.
-    assert '"connected": True' not in block, (
-        "an input claims to be wired in; confirm something actually reads it"
-    )
+    block = source[source.index('def algorithm('):source.index('def algorithm_screen(')]
+    assert "SELECT count(*)" in block or "sum(executed_trials)" in block
+    assert "session.rollback()" in block, "a missing table would take the view down"

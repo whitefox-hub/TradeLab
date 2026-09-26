@@ -1070,185 +1070,152 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def audit_screen() -> FileResponse:
         return FileResponse(STATIC / "audit.html")
 
-    @app.get("/api/pipeline")
-    def pipeline(who: Operator = operator, session: Session = session_dep) -> dict:
-        """The funnel, stage by stage, with what is in each one right now.
+    #: The decision sequence, in the order it runs. Plan.md §8, §9, §12, §14.
+    #:
+    #: Every step carries the invariant that has to hold when it runs and, where
+    #: one exists, the defect that proved the invariant was needed. That pairing
+    #: is the point: a rule with no story behind it reads as a preference, and
+    #: someone reorders it. Four of the five below were real defects in this
+    #: codebase, found by tests built so the wrong behaviour produces a visibly
+    #: wrong answer.
+    ALGORITHM = [
+        {
+            "phase": "Research · one study",
+            "steps": [
+                {"n": 1, "name": "Load bars",
+                 "does": "Read OHLCV for the asset and timeframe, from a "
+                         "materialised view when one is fresh.",
+                 "rule": "A bar's timestamp is its own close, not the moment it "
+                         "was ingested. Three columns keep that separate: "
+                         "event_time, ingest_time, available_at."},
+                {"n": 2, "name": "Check power, before anything is spent",
+                 "does": "Estimate the independent observations this design "
+                         "will produce and compare against the effect it is "
+                         "looking for.",
+                 "rule": "A study that cannot resolve its own target is refused "
+                         "here rather than discovered afterwards. The trial "
+                         "counter is monotonic, so an underpowered search still "
+                         "raises the bar for every study after it.",
+                 "cost": "Two campaigns were spent before this existed. Their "
+                         "negative results could only have confirmed a Sharpe "
+                         "above 3.5 — a formality, not a test."},
+                {"n": 3, "name": "Materialise features",
+                 "does": "Compute every feature in the set over the whole series.",
+                 "rule": "A value computed from bar t may only act from bar t+1. "
+                         "The shift is applied centrally, once, rather than left "
+                         "to each strategy to remember."},
+                {"n": 4, "name": "Score each configuration",
+                 "does": "For every parameter and threshold, build the position "
+                         "series and evaluate it.",
+                 "rule": "Scored on the TRAINING window only, and net of costs "
+                         "and funding.",
+                 "cost": "Both halves were defects. Selection saw the whole "
+                         "series while the comment above it claimed otherwise — "
+                         "BTCUSDT 4h went from 2.68 to 0.03 when fixed. And "
+                         "selection scored gross, promoting a configuration at "
+                         "+1.10 gross and -7.55 net over one at +0.94 net."},
+                {"n": 5, "name": "Select on the smoothed surface",
+                 "does": "Take the neighbourhood median of the score surface "
+                         "rather than its highest single point.",
+                 "rule": "The centre of the best region, not the luckiest draw. "
+                         "A peak found by searching is mostly the noise that "
+                         "made it a peak."},
+                {"n": 6, "name": "Evaluate on the held-out window",
+                 "does": "Run the chosen configuration on bars selection never "
+                         "touched.",
+                 "rule": "Net returns, and the effective observation count — "
+                         "not the bar count.",
+                 "cost": "Overlapping positions inflated the count 30 to 218 "
+                         "times. On identical returns the deflated Sharpe went "
+                         "from 1.000 to 0.024 once corrected."},
+                {"n": 7, "name": "Deflate and judge",
+                 "does": "Deflated Sharpe, PBO, minimum track record and "
+                         "parameter stability, against a recorded threshold set.",
+                 "rule": "Every trial raises the bar, including the discarded "
+                         "ones. A positive result below what the sample can "
+                         "resolve is inconclusive, not a pass.",
+                 "cost": "The gate returned PASS on a Sharpe it had itself just "
+                         "declared indistinguishable from chance."},
+            ],
+        },
+        {
+            "phase": "Execution · one order",
+            "steps": [
+                {"n": 8, "name": "Reconcile before anything is sent",
+                 "does": "Compare the position we believe we hold against what "
+                         "the venue says.",
+                 "rule": "Mandatory at startup. A discrepancy halts and is never "
+                         "silently corrected — adopting the venue's number hides "
+                         "the bug that produced the gap, and the gap is the only "
+                         "evidence it exists."},
+                {"n": 9, "name": "Strategy asks",
+                 "does": "The decision code produces a target position. It does "
+                         "not know which mode it is running in.",
+                 "rule": "Byte-identical across backtest, simulator, testnet and "
+                         "live. Only the data feed and the venue adapter change."},
+                {"n": 10, "name": "Risk engine vetoes",
+                 "does": "Sixteen limits, evaluated by a component independent "
+                         "of the strategy.",
+                 "rule": "Positions and orders are counted here, from observed "
+                         "fills — never from what the strategy reports. A "
+                         "strategy that miscounts its own state is the case "
+                         "these limits exist for. Enforced in every mode, so "
+                         "the limiter's first real execution is never with real "
+                         "money."},
+                {"n": 11, "name": "Write the intent, then send",
+                 "does": "Record what was wanted, with a deterministic order id, "
+                         "before calling the venue.",
+                 "rule": "Written before, never after. A process that dies on "
+                         "the next line leaves a record that startup can resolve "
+                         "by asking about a known id rather than guessing from a "
+                         "position delta."},
+                {"n": 12, "name": "Fold the fill",
+                 "does": "Update the position from the fill the venue reported.",
+                 "rule": "Positions move from fills and nothing else. A view "
+                         "derived from a second source can agree with the venue "
+                         "while both are wrong."},
+            ],
+        },
+    ]
 
-        Counts read from tables, never computed here — §20.1. The value of this
-        screen is that it shows **where things stop**, which is a fact about the
-        registry rather than a figure about performance.
+    @app.get("/api/algorithm")
+    def algorithm(who: Operator = operator,
+                  session: Session = session_dep) -> dict:
+        """The decision sequence, with live counts where a step has them.
+
+        Counts read from tables, never computed — §20.1. They are here so the
+        sequence is not an illustration: the trial number is the one that
+        deflates the next verdict.
         """
         def scalar(query: str) -> int:
             try:
                 return int(session.execute(sa.text(query)).scalar() or 0)
             except Exception:
-                # A stage whose table does not exist yet is legitimately zero.
-                # Failing the whole screen because phase 5 has no rows would
-                # hide the eight stages that do.
                 session.rollback()
                 return 0
 
-        stages = [
-            {
-                "key": "data", "name": "Data",
-                "count": scalar("SELECT count(*) FROM ingestion_runs"),
-                "unit": "ingestion runs",
-                "note": "Point-in-time by construction: event_time, ingest_time "
-                        "and available_at are separate columns, so a backtest "
-                        "reads what was knowable rather than what is known.",
-                "gate": "Blocking data-quality issues keep their window out of "
-                        "any study.",
-                "blocked": scalar(
-                    "SELECT count(*) FROM data_quality_issues "
-                    "WHERE resolved_at IS NULL AND severity = 'blocking'"),
-            },
-            {
-                "key": "features", "name": "Features",
-                "count": scalar("SELECT count(*) FROM feature_definitions"),
-                "unit": "definitions",
-                "note": "Every feature is causal by construction: a value "
-                        "computed from bar t may only act from bar t+1, applied "
-                        "centrally rather than left to each strategy.",
-                "gate": "Leakage canaries must still be caught, and must not be "
-                        "registered for real studies.",
-            },
-            {
-                "key": "hypothesis", "name": "Hypothesis",
-                "count": scalar("SELECT count(*) FROM strategies"),
-                "unit": "strategies",
-                "note": "Registered before the search, with its target effect "
-                        "size — so an inconclusive result can be told apart "
-                        "from a negative one.",
-                "gate": "A study that cannot resolve its own target is refused "
-                        "before it spends a trial.",
-            },
-            {
-                "key": "studies", "name": "Screening · tier A",
-                "count": scalar("SELECT coalesce(sum(executed_trials),0) FROM studies"),
-                "unit": "trials executed",
-                "note": "Vectorised mass screening. Results go to Parquet, not "
-                        "the registry: a campaign produces millions of rows and "
-                        "the registry would stop being queryable.",
-                "gate": "Every trial raises the bar for every result after it. "
-                        "The counter is monotonic.",
-            },
-            {
-                "key": "experiments", "name": "Experiments · tier B",
-                "count": scalar("SELECT count(*) FROM experiments WHERE tier >= 2"),
-                "unit": "experiments",
-                "note": "Event-driven, reproducible from its own row: params, "
-                        "seed, code version, image digest and cost model.",
-                "gate": "Selection scores on training bars only, and net of "
-                        "costs — both were defects before they were rules.",
-            },
-            {
-                "key": "validation", "name": "Validation",
-                "count": scalar("SELECT count(*) FROM validation_reports"),
-                "unit": "reports",
-                "note": "Deflated Sharpe, PBO, minimum track record and "
-                        "parameter stability, each against a recorded bar.",
-                "gate": "Three verdicts, and inconclusive is not a soft fail: "
-                        "it means the sample could not resolve the question.",
-                "passed": scalar(
-                    "SELECT count(*) FROM validation_reports WHERE verdict = 'pass'"),
-            },
-            {
-                "key": "simulator", "name": "Simulator",
-                "count": scalar("SELECT count(*) FROM runs WHERE mode = 'simulator'"),
-                "unit": "runs",
-                "note": "Live data, simulated fills. Proves alpha survives on "
-                        "unseen data in real time; proves nothing about whether "
-                        "the venue accepts the order.",
-                "gate": "60 continuous days, divergence within band and "
-                        "decomposed by cause.",
-            },
-            {
-                "key": "testnet", "name": "Testnet",
-                "count": scalar("SELECT count(*) FROM runs WHERE mode = 'testnet'"),
-                "unit": "runs",
-                "note": "Real matching engine, exchange play money. The only "
-                        "place signature errors, margin rejections and clock "
-                        "drift appear.",
-                "gate": "Two weeks with no rejection caused by our own bugs.",
-            },
-            {
-                "key": "live", "name": "Live",
-                "count": scalar("SELECT count(*) FROM runs WHERE mode = 'live'"),
-                "unit": "runs",
-                "note": "Reached through the capital ramp, never entered. The "
-                        "interface holds no venue credential and cannot start "
-                        "one.",
-                "gate": "Tiers L0 to L3, each with a minimum duration and "
-                        "metrics in band.",
-            },
-        ]
-
-        # Inputs that feed the funnel from the side rather than flowing down
-        # it. Each carries whether it is actually wired in, because two of them
-        # are not — and a diagram that draws an arrow which does not exist is
-        # worse than one that omits it.
-        inputs = [
-            {
-                "key": "parameters", "name": "Parameters",
-                "count": scalar("SELECT count(DISTINCT key) FROM app_settings"),
-                "unit": "settings",
-                "feeds": "Data · Screening",
-                "connected": False,
-                "note": "The research universe, the history window, the event "
-                        "retention. They are recorded, versioned and audited, "
-                        "and the study runner does not read them yet — it takes "
-                        "its universe and window from the call that starts it.",
-                "missing": "Nothing reads app_settings at study time, so "
-                           "changing one here does not change what the next "
-                           "campaign does.",
-            },
-            {
-                "key": "events", "name": "News and events",
-                "count": scalar("SELECT count(*) FROM events"),
-                "unit": "events",
-                "feeds": "Features",
-                "connected": False,
-                "note": "Recorded with their shape, direction and expiry, and "
-                        "their reactions measured in sigma. This is the raw "
-                        "material for the event reaction residual — observed "
-                        "minus expected — which is the one dataset a competitor "
-                        "cannot buy.",
-                "missing": "No feature reads them. The residual of §11.10 needs "
-                           "an expected-reaction model first, and §11.5 has not "
-                           "fitted one, so the corpus accumulates without "
-                           "entering a strategy.",
-                "detail": {
-                    "measured": scalar("SELECT count(*) FROM event_reactions"),
-                    "judged": scalar(
-                        "SELECT count(*) FROM event_annotations "
-                        "WHERE kind = 'judgement'"),
-                },
-            },
-            {
-                "key": "macro", "name": "Macro",
-                "count": scalar("SELECT count(*) FROM macro_series"),
-                "unit": "series",
-                "feeds": "Features · Regimes",
-                "connected": False,
-                "note": "Rates, yields, oil, gold and the dollar index, "
-                        "refreshed daily with the publication lag modelled so a "
-                        "backtest reads them when a subscriber could have.",
-                "missing": "No feature and no regime input reads them yet.",
-            },
-        ]
-
         return {
-            "stages": stages,
-            "inputs": inputs,
-            "events": scalar("SELECT count(*) FROM events"),
-            "reactions": scalar("SELECT count(*) FROM event_reactions"),
-            "judgements": scalar(
-                "SELECT count(*) FROM event_annotations WHERE kind = 'judgement'"),
+            "phases": ALGORITHM,
+            "observed": {
+                "trials": scalar("SELECT coalesce(sum(executed_trials),0) FROM studies"),
+                "experiments": scalar("SELECT count(*) FROM experiments"),
+                "verdicts": scalar("SELECT count(*) FROM validation_reports"),
+                "passed": scalar(
+                    "SELECT count(*) FROM validation_reports WHERE verdict='pass'"),
+                "runs": scalar("SELECT count(*) FROM runs"),
+                "risk_events": scalar("SELECT count(*) FROM risk_events"),
+            },
         }
 
+    @app.get("/algorithm", include_in_schema=False)
+    def algorithm_screen() -> FileResponse:
+        return FileResponse(STATIC / "algorithm.html")
+
     @app.get("/pipeline", include_in_schema=False)
-    def pipeline_screen() -> FileResponse:
-        return FileResponse(STATIC / "pipeline.html")
+    def old_pipeline() -> RedirectResponse:
+        """Renamed. It showed project status; the question it was asked was
+        about the decision sequence."""
+        return RedirectResponse("/algorithm", status_code=308)
 
     @app.get("/api/health")
     def health() -> dict:
