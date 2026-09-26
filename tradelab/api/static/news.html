@@ -80,6 +80,7 @@
     <div class="filters">
       <select id="type"><option value="">All types</option></select>
       <label class="inline"><input type="checkbox" id="only-unrated"> Unrated only</label>
+      <label class="inline"><input type="checkbox" id="show-routine"> Show routine</label>
       <span class="count" id="count"></span>
     </div>
 
@@ -320,7 +321,16 @@ function draw() {
             : tab === "active" ? all.filter((e) => e.active)
             : all.filter((e) => !e.active);
   if ($("only-unrated").checked) shown = shown.filter((e) => !e.rated);
-  $("count").textContent = shown.length + " shown";
+
+  // Listings, delistings and seed tags arrive in bulk and look alike. Hidden
+  // by default so a hack or a war is not buried under forty of them — the count
+  // stays visible, because silently dropping rows is how a screen starts lying.
+  const routine = shown.filter((e) => e.routine).length;
+  if (!$("show-routine").checked) shown = shown.filter((e) => !e.routine);
+
+  $("count").textContent = shown.length + " shown" +
+    (routine && !$("show-routine").checked
+      ? ` · ${routine} routine hidden` : "");
 
   $("rows").innerHTML = "";
   for (const event of shown) {
@@ -521,7 +531,8 @@ $("save").onclick = async () => {
 };
 
 $("type").onchange = load;
-$("only-unrated").onchange = load;
+$("only-unrated").onchange = draw;
+$("show-routine").onchange = draw;
 </script>
 </body>
 </html>

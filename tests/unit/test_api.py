@@ -959,3 +959,23 @@ def test_the_form_offers_the_catalogue(client: TestClient) -> None:
     assert "/api/event-templates" in page
     # And says the suggestion is a starting point, where it is about to be used.
     assert "not a verdict" in page
+
+
+@pytest.mark.fast
+def test_routine_events_are_folded_but_counted(client: TestClient) -> None:
+    """Silently dropping rows is how a screen starts lying, so the count stays
+    visible even when the rows do not."""
+    page = client.get("/news").text
+    assert 'id="show-routine"' in page
+    assert "routine hidden" in page
+    assert "e.routine" in page
+
+
+@pytest.mark.fast
+def test_the_api_reports_routine_rather_than_filtering_it(client: TestClient) -> None:
+    """The decision of what to show belongs to the screen. An endpoint that
+    filtered would make the rows unreachable for anything else that reads it —
+    a study, an export, a later screen."""
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    assert '"routine": is_routine(row["event_type"])' in source
+    assert "WHERE NOT routine" not in source

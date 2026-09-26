@@ -44,6 +44,7 @@ from tradelab.api.settings_rules import Invalid as InvalidSetting
 from tradelab.api.settings_rules import validate as validate_setting
 from tradelab.config import Settings
 from tradelab.news.expiry import resolve as resolve_expiry
+from tradelab.news.routine import is_routine
 from tradelab.news.strength import SIGMA_BY_STRENGTH, describe, to_sigma
 from tradelab.news.templates import CATALOGUE as TEMPLATES
 
@@ -516,6 +517,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "reopenable": expiry.reopenable,
                 "not_reopenable_because": expiry.not_reopenable_because,
                 "hand_entered": str(row["cluster_method"]).startswith("manual:"),
+                # Not "duplicate" and not "old": a venue lists perpetuals most
+                # weeks, and those rows are worth counting rather than reading.
+                # Folded away by default so the unusual ones are visible at all.
+                "routine": is_routine(row["event_type"]),
             })
         return out
 
