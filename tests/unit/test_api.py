@@ -1151,3 +1151,54 @@ def test_an_unchanged_reading_is_not_rewritten(monkeypatch) -> None:
     with engine.begin() as conn:
         conn.execute(sa_.text("DELETE FROM sentiment_readings WHERE day = :d"),
                      {"d": day.date()})
+
+
+@pytest.mark.fast
+def test_the_bars_show_what_is_applied_and_save_is_what_moves_them(
+    client: TestClient,
+) -> None:
+    """The sliders show what is being considered; the coloured bars show what is
+    in force. Between a drag and a save the two disagree on purpose, and that
+    disagreement is the whole reason there is a button.
+
+    Pinned because it is easy to undo by accident: wiring a pin to the slider
+    is the obvious thing to write, and it would make the screen say a value was
+    applied the moment it was dragged.
+    """
+    markup = client.get("/static/market_sentiment.html").text
+
+    assert "function paintApplied" in markup
+    # The pins are placed from `stored` — what the server confirmed — and from
+    # nothing else.
+    assert '$("s-pin").style.left = `${stored.sentiment}%`' in markup
+    assert "const magnitude = stored.magnitude" in markup
+
+    # And painted again right after a save, which is what makes the bar catch up.
+    body = markup[markup.index('$("save").onclick'):]
+    assert "paintApplied();" in body, "a save does not move the bars"
+
+
+@pytest.mark.fast
+def test_the_index_and_the_assumption_share_one_bar_but_not_one_mark(
+    client: TestClient,
+) -> None:
+    """The separate 'Test under' scale is gone: two gradients for one concept
+    read as two concepts. One bar now, with two marks — the thin one is what the
+    index printed, the solid one is what a simulation is told to assume.
+
+    They stay distinguishable because that is the distinction the whole screen
+    rests on. A single mark would put a measurement and an opinion in the same
+    place, which is what separate tables and separate routes exist to prevent.
+    """
+    markup = client.get("/static/market_sentiment.html").text
+
+    # One gradient in the Fear and Greed pane, carrying both marks.
+    pane = markup[markup.index("<h2>Fear and Greed</h2>"):markup.index('id="s-history"')]
+    assert pane.count('class="scale"') == 1, "the pane has more than one gradient"
+    assert 'class="mark" id="fg-pin"' in pane, "the measured mark is missing"
+    assert 'class="pin" id="s-pin"' in pane, "the applied pin is missing"
+    # Named on screen, not left to be inferred from two similar lines.
+    assert ">index<" in pane and ">applied<" in pane
+
+    # The slider sits above the bar it reads against, not below it.
+    assert pane.index('id="s-range"') < pane.index('class="scale"')

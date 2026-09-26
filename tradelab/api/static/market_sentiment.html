@@ -48,10 +48,9 @@
   .saved.pending { color:var(--warn); }
   .err:empty { display:none; }
 
-  /* -- the assumption, below the measurement and fenced off from it -- */
-  .assume { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
-  .assume-head { display:flex; align-items:center; justify-content:space-between;
-    margin-bottom:12px; }
+  /* -- the assumption, set on the same bar that shows the measurement -- */
+  .adjust-head { display:flex; align-items:center; justify-content:space-between;
+    margin:18px 0 10px; }
   .assume-label { font-size:13px; color:var(--muted); font-weight:620;
     letter-spacing:.06em; text-transform:uppercase; }
   button.tiny { font-size:12.5px; padding:4px 10px; }
@@ -92,6 +91,17 @@
       #9fd66f 68%,#4ac26b 100%); }
   .scale .pin { position:absolute; top:-4px; width:4px; height:18px; border-radius:2px;
     background:var(--text); box-shadow:0 0 0 2px var(--panel); transform:translateX(-2px); }
+  /* The measurement: present, and visibly not the thing being set. */
+  .scale .mark { position:absolute; top:-1px; width:2px; height:12px; border-radius:1px;
+    background:color-mix(in srgb, var(--text) 45%, transparent);
+    transform:translateX(-1px); }
+  .legend { display:flex; align-items:center; gap:6px; margin:10px 0 0;
+    font-size:12.5px; color:var(--muted); }
+  .legend .key-mark, .legend .key-pin { display:inline-block; border-radius:1px; }
+  .legend .key-mark { width:2px; height:11px;
+    background:color-mix(in srgb, var(--text) 45%, transparent); }
+  .legend .key-pin { width:4px; height:13px; border-radius:2px; background:var(--text);
+    margin-left:12px; }
   .ends { display:flex; justify-content:space-between; font-size:12px;
     color:var(--muted); letter-spacing:.04em; }
 
@@ -149,7 +159,7 @@
             <input type="range" id="w-mag" min="1" max="10" step="1" value="5">
             <input type="number" id="w-mag-value" min="1" max="10" step="1" value="5">
           </div>
-          <div class="scale small wave-scale">
+          <div class="scale wave-scale">
             <span class="pin" id="w-pin" style="left:50%"></span>
           </div>
           <!-- Only the three points the scale actually defines. Inventing a word
@@ -173,35 +183,41 @@
           <span class="v" id="fg-value">—</span>
           <span class="band" id="fg-band"></span>
         </div>
-        <div class="scale"><span class="pin" id="fg-pin" style="left:50%"></span></div>
+
+        <!-- The slider sits directly above the scale and shares its width, so
+             the thumb reads against the gradient underneath: where it stands is
+             where the value would land. That is what makes a separate preview
+             unnecessary. -->
+        <div class="adjust-head">
+          <span class="assume-label">Test under</span>
+          <button class="ghost tiny" id="fg-match">Match today</button>
+        </div>
+        <div class="slider-row">
+          <input type="range" id="s-range" min="1" max="100" step="1" value="50">
+          <input type="number" id="s-value" min="1" max="100" step="1" value="50">
+        </div>
+        <!-- Two marks, because the bar answers two questions. The thin one is
+             what the index printed; the solid one is what a simulation is being
+             told to assume, and it moves on Save rather than while dragging —
+             so the bar always shows what is in force, not what is being
+             considered. -->
+        <div class="scale">
+          <span class="mark" id="fg-pin" style="left:50%"></span>
+          <span class="pin" id="s-pin" style="left:50%"></span>
+        </div>
         <div class="ends"><span>0 · EXTREME FEAR</span><span>EXTREME GREED · 100</span></div>
+        <p class="legend"><span class="key-mark"></span>index<span
+          class="key-pin"></span>applied</p>
+        <p class="assume-band" id="s-band"></p>
 
         <table class="compare">
           <tbody id="fg-history"></tbody>
         </table>
         <p class="hint" id="fg-source"></p>
 
-        <!-- Below the line: what the simulation is told to assume, which is a
-             different thing from what the index printed and is kept visibly
-             apart from it. Sharing one number would make an opinion and a
-             measurement indistinguishable. -->
-        <div class="assume">
-          <div class="assume-head">
-            <span class="assume-label">Test under</span>
-            <button class="ghost tiny" id="fg-match">Match today</button>
-          </div>
-          <div class="slider-row">
-            <input type="range" id="s-range" min="1" max="100" step="1" value="50">
-            <input type="number" id="s-value" min="1" max="100" step="1" value="50">
-          </div>
-          <div class="scale small"><span class="pin" id="s-pin" style="left:50%"></span></div>
-          <div class="ends"><span>1 · EXTREME FEAR</span><span>EXTREME GREED · 100</span></div>
-          <p class="assume-band" id="s-band"></p>
-
         <div class="history">
           <div class="history-head">Changes</div>
           <ul id="s-history"></ul>
-        </div>
         </div>
       </section>
 
@@ -245,6 +261,25 @@ function current() {
   };
 }
 
+// The bars show what is in force, which is why Save is what moves them. The
+// sliders above show what is being considered; between a drag and a save the
+// two disagree on purpose, and that disagreement is the whole point of having
+// a button.
+function paintApplied() {
+  if (stored === null) return;
+  // 1 sits at the left end and 10 at the right, so the pin is placed across the
+  // nine steps between them rather than as a percentage of ten.
+  const magnitude = stored.magnitude || 1;
+  $("w-pin").style.left = `${((magnitude - 1) / 9) * 100}%`;
+  $("mag-wrap").style.setProperty("--pressure",
+    stored.direction === "NORMAL" ? "var(--muted)"
+      : stored.direction === "UP" ? "var(--up)" : "var(--down)");
+  // NORMAL has no magnitude to point at, so the bar carries no pin rather than
+  // one parked at the left end, which would read as a very weak wave.
+  $("w-pin").style.visibility = stored.direction === "NORMAL" ? "hidden" : "visible";
+  $("s-pin").style.left = `${stored.sentiment}%`;
+}
+
 function paintDirty() {
   if (stored === null) return;
   const now = current();
@@ -284,19 +319,16 @@ function paintWave() {
   // scale that could also express it would let the two controls disagree.
   const normal = direction === "NORMAL";
   $("mag-wrap").classList.toggle("muted", normal);
-  $("mag-wrap").style.setProperty("--pressure",
-    normal ? "var(--muted)" : direction === "UP" ? "var(--up)" : "var(--down)");
   paintMagnitude($("w-mag").value);
 }
 
 function paintMagnitude(value) {
   const n = Math.min(10, Math.max(1, Number(value) || 1));
   // Two views of one field, so neither may hold a value the other does not.
+  // Neither of them is the pin: the pin shows what is applied, and these show
+  // what is being considered. They agree again after a save.
   $("w-mag").value = String(n);
   $("w-mag-value").value = String(n);
-  // 1 sits at the left end and 10 at the right, so the pin is placed across the
-  // nine steps between them rather than as a percentage of ten.
-  $("w-pin").style.left = `${((n - 1) / 9) * 100}%`;
   $("w-band").textContent = direction === "NORMAL"
     ? "No pressure. NORMAL is the absence of a wave, not a weak one."
     : `${direction} ${n}${WORDS[n] ? ` — ${WORDS[n]}` : ""}`;
@@ -312,7 +344,6 @@ function paintSentiment(value) {
   // neither is allowed to hold a value the other does not.
   $("s-range").value = String(n);
   $("s-value").value = String(n);
-  $("s-pin").style.left = `${n}%`;
   const word = band(n);
   $("s-band").textContent = measured === null
     ? `${word} · ${n}`
@@ -414,6 +445,7 @@ async function load() {
   paintSentiment(scenario.sentiment);
   stored = {direction: scenario.direction, magnitude: scenario.magnitude,
             sentiment: scenario.sentiment};
+  paintApplied();
   paintDirty();
   await loadHistory();
 }
@@ -482,6 +514,7 @@ $("save").onclick = async () => {
       body: JSON.stringify({ direction, magnitude, sentiment }) });
     stored = {direction: saved.direction, magnitude: saved.magnitude,
               sentiment: saved.sentiment};
+    paintApplied();
     $("saved").textContent = saved.changed ? "Saved." : "No change.";
     $("saved").className = "saved";
     setTimeout(paintDirty, 2500);
