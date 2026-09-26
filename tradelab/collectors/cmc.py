@@ -18,6 +18,7 @@ project cares about live, and it stays in the collectors that own it.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -27,6 +28,13 @@ from coinmarketcap import CoinMarketCap, RateLimitError
 #: The documentation's own advice is to back off and retry on a rate limit.
 MAX_RETRIES = 5
 BACKOFF_SECONDS = 2.0
+
+#: The free plan allows 50 requests a minute. Paced to stay under it rather
+#: than discovered by hitting it: backing off after a rejection wastes the
+#: request that was rejected, and a backfill of a hundred pages would spend
+#: most of its time in retries. 1.3s leaves headroom for clock drift.
+MIN_INTERVAL_SECONDS = 1.3
+_last_call = 0.0
 
 
 class QuotaReached(RuntimeError):
@@ -45,18 +53,51 @@ class QuotaReached(RuntimeError):
         self.collected = collected or []
 
 
+#: Read from the environment, never from a repo file. §14.4 keeps credentials
+#: out of the tree, and this one is loaded the same way the operator password
+#: is: `set -a && . secrets/api.env`, which is git-ignored.
+KEY_VAR = "CMC_API_KEY"
+
+
+def has_key() -> bool:
+    return bool(os.environ.get(KEY_VAR, "").strip())
+
+
 def client() -> CoinMarketCap:
-    """Keyless. `public` is the base every endpoint on the keyless list serves
-    from; the ones that are not on it raise ForbiddenError, which is how
-    `globalmetrics_quotes_historical` turned out to need a key."""
+    """Keyed when a key is in the environment, keyless otherwise.
+
+    Both modes are kept working on purpose. The keyless path is what a fresh
+    checkout gets, and a collector that only runs with a credential is one that
+    stops silently on a machine that does not have it — so the fallback is a
+    working mode and not a degraded one. What the key changes is the quota and
+    the catalogue: `globalmetrics_quotes_historical` answers ForbiddenError
+    without it.
+
+    The key is never logged. It is a value that grants access, and a collector
+    that prints one puts it in every log that collector ever writes.
+    """
+    key = os.environ.get(KEY_VAR, "").strip()
+    if key:
+        return CoinMarketCap(api_key=key)
     return CoinMarketCap(environment="public")
 
 
+def _pace() -> None:
+    """Sleep until the minimum interval since the last call has passed."""
+    global _last_call
+    wait = MIN_INTERVAL_SECONDS - (time.monotonic() - _last_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call = time.monotonic()
+
+
 def call(fn: Any, collected: list[Any] | None = None, **kwargs: Any) -> Any:
-    """One SDK call, retried through a rate limit and stopped by a quota."""
+    """One SDK call, paced under the rate limit, retried through it, stopped by
+    a quota."""
     delay = BACKOFF_SECONDS
     for attempt in range(MAX_RETRIES):
         try:
+            _pace()
             return fn(**kwargs)
         except RateLimitError:
             # The SDK reports both throttles this way, so the two are told

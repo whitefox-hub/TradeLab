@@ -351,3 +351,63 @@ def test_every_coinmarketcap_call_goes_through_one_door() -> None:
             f"{module.__name__} calls CoinMarketCap directly")
         if "coinmarketcap" in source:
             assert "from tradelab.collectors.cmc import" in source
+
+
+@pytest.mark.fast
+def test_the_api_key_is_read_from_the_environment_and_never_stored() -> None:
+    """§14.4 keeps credentials out of the tree. This one is loaded the way the
+    operator password is — `set -a && . secrets/api.env`, which is git-ignored.
+
+    The keyless path stays a working mode and not a degraded one: a collector
+    that only runs with a credential is one that stops silently on a machine
+    that does not have it.
+    """
+    import inspect
+    import re
+    import subprocess
+    from pathlib import Path
+
+    from tradelab.collectors import cmc
+
+    source = inspect.getsource(cmc)
+    assert 'os.environ.get(KEY_VAR' in source
+    assert "environment=\"public\"" in source, "the keyless fallback is gone"
+
+    # Nothing prints it. A collector that logs a key puts it in every log that
+    # collector ever writes, and those outlive the key.
+    #
+    # Asked of the syntax tree rather than of the text: matching lines that
+    # mention "log" and "key" hits the sentence above this one, which is the
+    # over-blunt filter this codebase keeps having to narrow.
+    import ast
+
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if name not in {"print", "debug", "info", "warning", "error", "exception"}:
+            continue
+        for argument in ast.walk(node):
+            assert not (isinstance(argument, ast.Name) and argument.id == "key"), (
+                f"{name}() is handed the key itself")
+
+    # And no tracked file carries a bare 32-hex credential.
+    root = Path(__file__).resolve().parents[2]
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.split()
+    pattern = re.compile(r"\b[0-9a-f]{32}\b")
+    for name in tracked:
+        path = root / name
+        if not path.is_file() or path.suffix in {".png", ".jpg", ".parquet"}:
+            continue
+        try:
+            body = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        for hit in pattern.findall(body):
+            # Migration ids and digests are hex too; a credential is one that
+            # sits next to something naming it.
+            window = body[max(0, body.index(hit) - 60):body.index(hit)]
+            assert "api_key" not in window.lower() and "cmc_key" not in window.lower(), (
+                f"{name} looks like it carries a credential")
