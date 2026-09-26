@@ -32,6 +32,10 @@
      ignored — it is visibly unavailable. A control that accepts input the
      system discards teaches the operator it did something. */
   .magnitude.muted { opacity:.4; pointer-events:none; }
+  /* Intensity, not direction: the wave's own scale runs from calm to extreme
+     and takes its colour from whichever way the wave is pointing, set below. */
+  .wave-scale { background:linear-gradient(90deg,
+    color-mix(in srgb, var(--muted) 45%, transparent), var(--pressure, var(--muted))); }
   .save-bar { display:flex; align-items:center; gap:14px; margin:6px 0 4px; }
   .save-bar .spacer { flex:1; }
   .saved { color:var(--up); font-size:13.5px; font-weight:560; }
@@ -103,7 +107,18 @@
 
         <div class="magnitude" id="mag-wrap">
           <label class="field" for="w-mag">Magnitude</label>
-          <select id="w-mag"></select>
+          <div class="slider-row">
+            <input type="range" id="w-mag" min="1" max="10" step="1" value="5">
+            <input type="number" id="w-mag-value" min="1" max="10" step="1" value="5">
+          </div>
+          <div class="scale small wave-scale">
+            <span class="pin" id="w-pin" style="left:50%"></span>
+          </div>
+          <!-- Only the three points the scale actually defines. Inventing a word
+               for 7 would be a label with nothing behind it, which reads as a
+               finding. -->
+          <div class="ends"><span>1 · VERY WEAK</span><span>EXTREME · 10</span></div>
+          <p class="assume-band" id="w-band"></p>
         </div>
 
       </section>
@@ -198,10 +213,31 @@ function paintWave() {
   }
   // NORMAL and magnitude 0 are the same fact, so the control goes away rather
   // than sitting there accepting a number the database would refuse.
+  //
+  // The slider runs 1 to 10 and never holds 0. Zero is not a weak wave, it is
+  // the absence of one, and that is what the NORMAL button already says — a
+  // scale that could also express it would let the two controls disagree.
   const normal = direction === "NORMAL";
   $("mag-wrap").classList.toggle("muted", normal);
-  if (normal) $("w-mag").value = "0";
-  else if ($("w-mag").value === "0") $("w-mag").value = "5";
+  $("mag-wrap").style.setProperty("--pressure",
+    normal ? "var(--muted)" : direction === "UP" ? "var(--up)" : "var(--down)");
+  paintMagnitude($("w-mag").value);
+}
+
+function paintMagnitude(value) {
+  const n = Math.min(10, Math.max(1, Number(value) || 1));
+  // Two views of one field, so neither may hold a value the other does not.
+  $("w-mag").value = String(n);
+  $("w-mag-value").value = String(n);
+  // 1 sits at the left end and 10 at the right, so the pin is placed across the
+  // nine steps between them rather than as a percentage of ten.
+  $("w-pin").style.left = `${((n - 1) / 9) * 100}%`;
+  $("w-band").textContent = direction === "NORMAL"
+    ? "No pressure. NORMAL is the absence of a wave, not a weak one."
+    : `${direction} ${n}${WORDS[n] ? ` — ${WORDS[n]}` : ""}`;
+  $("w-band").className = direction === "NORMAL"
+    ? "assume-band b-neutral"
+    : `assume-band ${direction === "UP" ? "b-greed" : "b-fear"}`;
 }
 
 function paintSentiment(value) {
@@ -232,7 +268,9 @@ function row(label, entry) {
 async function load() {
   const scenario = await api("/api/scenario");
   direction = scenario.direction;
-  $("w-mag").value = String(scenario.magnitude);
+  // A stored 0 means NORMAL, which the buttons already carry; the slider takes
+  // the midpoint so that switching off NORMAL lands somewhere deliberate.
+  $("w-mag").value = String(scenario.magnitude || 5);
   paintWave();
 
   const fg = await api("/api/fear-greed");
@@ -272,8 +310,8 @@ async function load() {
   paintSentiment(scenario.sentiment);
 }
 
-$("w-mag").innerHTML = Array.from({ length: 11 }, (_, n) => n).map((n) =>
-  `<option value="${n}">${n}${WORDS[n] ? ` — ${WORDS[n]}` : ""}</option>`).join("");
+$("w-mag").oninput = () => paintMagnitude($("w-mag").value);
+$("w-mag-value").oninput = () => paintMagnitude($("w-mag-value").value);
 
 $("w-up").onclick = () => { direction = "UP"; paintWave(); };
 $("w-normal").onclick = () => { direction = "NORMAL"; paintWave(); };
@@ -288,7 +326,9 @@ $("fg-match").onclick = () => { if (measured !== null) paintSentiment(measured);
 
 $("save").onclick = async () => {
   $("err").textContent = ""; $("saved").textContent = "";
-  const magnitude = Number($("w-mag").value);
+  // NORMAL is stored as magnitude 0. Read from the button rather than from the
+  // slider, which never holds 0 — the direction is what decides it.
+  const magnitude = direction === "NORMAL" ? 0 : Number($("w-mag").value);
   const sentiment = Number($("s-value").value);
   // Checked here so the operator is told which field disagrees, and again by
   // the request model and a database CHECK. This is the friendliest of the

@@ -877,9 +877,17 @@ def test_the_screen_offers_the_three_states_and_nothing_dated(
     order = [markup.index(f'id="w-{name}"') for name in ("down", "normal", "up")]
     assert order == sorted(order), "the wave buttons do not run DOWN, NORMAL, UP"
 
-    # The sentiment input covers the whole scale. A slider that stops at 90
-    # silently caps the scenario.
-    assert 'min="1" max="100"' in markup
+    # Both dials cover their whole scale. A slider that stops short silently
+    # caps the scenario, and nothing downstream would report the ceiling.
+    assert 'min="1" max="100"' in markup, "the sentiment slider is not 1 to 100"
+    assert 'min="1" max="10"' in markup, "the magnitude slider is not 1 to 10"
+
+    # Magnitude 0 is not on the scale. Zero is not a weak wave, it is the
+    # absence of one, and the NORMAL button already says that. A slider that
+    # could also express it would let the two controls disagree about the same
+    # fact, which is the disagreement the database CHECK exists to make
+    # impossible.
+    assert 'min="0"' not in markup, "the magnitude slider can express 0"
 
 
 # -- the index ---------------------------------------------------------------
