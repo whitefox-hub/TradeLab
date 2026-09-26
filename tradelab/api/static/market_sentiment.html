@@ -32,10 +32,11 @@
      ignored — it is visibly unavailable. A control that accepts input the
      system discards teaches the operator it did something. */
   .magnitude.muted { opacity:.4; pointer-events:none; }
-  /* Intensity, not direction: the scale runs from calm to extreme and takes its
-     colour from whichever way the trend is pointing, set below. */
-  .trend-scale { background:linear-gradient(90deg,
-    color-mix(in srgb, var(--muted) 45%, transparent), var(--pressure, var(--muted))); }
+  /* Bearish left, neutral in the middle, bullish right — the same direction as
+     the sentiment scale beneath it, so the two cannot disagree about which way
+     is which. */
+  .trend-scale { background:linear-gradient(90deg,#ff6b63 0%,#e3a72c 30%,
+    #c9c9c9 44.4%,#9fd66f 65%,#4ac26b 100%); }
   /* The action sits with the title, not under the panes: one control governs
      both of them, so putting it below either one would read as belonging to
      that one. */
@@ -161,30 +162,25 @@
           from a list. It has no date, because it is a condition to test under and
           not a record of something that happened.</p>
 
-        <!-- DOWN, NORMAL, UP: the scale runs left to right the way every other
-             scale on this page does, so the buttons and the sentiment slider
-             below them cannot disagree about which way is bearish. -->
-        <div class="choice">
-          <button type="button" class="down" id="t-down" aria-pressed="false">DOWN</button>
-          <button type="button" class="normal" id="t-normal" aria-pressed="false">NORMAL</button>
-          <button type="button" class="up" id="t-up" aria-pressed="false">UP</button>
+        <!-- One scale, 5 neutral, mirroring the fear-and-greed index beside
+             it. It was a direction and a magnitude: two fields that could
+             disagree, kept in step by a constraint, and with no way to say
+             "nothing has happened" at the 5 an operator actually holds when
+             they have read no news. Worse, the old arithmetic read magnitude
+             as distance from zero, so a 5 tilted the book by a quarter at the
+             exact moment it was meant to say nothing. -->
+        <div class="slider-row">
+          <input type="range" id="t-mag" min="1" max="10" step="1" value="5">
+          <input type="number" id="t-mag-value" min="1" max="10" step="1" value="5">
         </div>
-
-        <div class="magnitude" id="mag-wrap">
-          <label class="field" for="t-mag">Magnitude</label>
-          <div class="slider-row">
-            <input type="range" id="t-mag" min="1" max="10" step="1" value="5">
-            <input type="number" id="t-mag-value" min="1" max="10" step="1" value="5">
-          </div>
-          <div class="scale trend-scale">
-            <span class="pin" id="t-pin" style="left:50%"></span>
-          </div>
-          <!-- Only the three points the scale actually defines. Inventing a word
-               for 7 would be a label with nothing behind it, which reads as a
-               finding. -->
-          <div class="ends"><span>1 · VERY WEAK</span><span>EXTREME · 10</span></div>
-          <p class="assume-band" id="t-band"></p>
+        <div class="scale trend-scale">
+          <span class="mark" id="t-neutral" style="left:44.4%"></span>
+          <span class="pin" id="t-pin" style="left:44.4%"></span>
         </div>
+        <div class="ends"><span>1 · BEARISH</span><span>BULLISH · 10</span></div>
+        <p class="legend"><span class="key-mark"></span>5, nothing new<span
+          class="key-pin"></span>applied</p>
+        <p class="assume-band" id="t-band"></p>
 
         <div class="history">
           <div class="history-head">Changes</div>
@@ -291,57 +287,43 @@ const WORDS = { 1: "very weak", 5: "medium", 10: "extreme" };
 const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-let direction = "NORMAL";
 let measured = null;      // the printed reading, kept apart from the assumed one
 let stored = null;        // what the server last confirmed, for the dirty check
+
+// 1 to 10, 5 neutral. Only the points the scale actually defines carry a word:
+// inventing one for 7 would be a label with nothing behind it.
+const TREND_WORDS = { 1: "as bearish as it gets", 5: "nothing new",
+                      10: "as bullish as it gets" };
+
+// Where a value sits on a 1-10 track. 1 is the left end and 10 the right, so
+// the position is across the nine steps between them and not a tenth of ten.
+const trackPct = (n) => ((n - 1) / 9) * 100;
 
 // The Save button sits with the title, away from the sliders it governs, so a
 // change made at the bottom of the page can be forgotten on the way up. This is
 // what makes that visible; without it the move trades a tidier header for a
 // setting the operator believes took effect.
 function current() {
-  return {
-    direction,
-    magnitude: direction === "NORMAL" ? 0 : Number($("t-mag").value),
-    sentiment: Number($("s-value").value),
-  };
-}
-
-// The bars show what is in force, which is why Save is what moves them. The
-// sliders above show what is being considered; between a drag and a save the
-// two disagree on purpose, and that disagreement is the whole point of having
-// a button.
-function paintApplied() {
-  if (stored === null) return;
-  // 1 sits at the left end and 10 at the right, so the pin is placed across the
-  // nine steps between them rather than as a percentage of ten.
-  const magnitude = stored.magnitude || 1;
-  $("t-pin").style.left = `${((magnitude - 1) / 9) * 100}%`;
-  $("mag-wrap").style.setProperty("--pressure",
-    stored.direction === "NORMAL" ? "var(--muted)"
-      : stored.direction === "UP" ? "var(--up)" : "var(--down)");
-  // NORMAL has no magnitude to point at, so the bar carries no pin rather than
-  // one parked at the left end, which would read as a very weak trend.
-  $("t-pin").style.visibility = stored.direction === "NORMAL" ? "hidden" : "visible";
-  $("s-pin").style.left = `${stored.sentiment}%`;
+  return { trend: Number($("t-mag").value), sentiment: Number($("s-value").value) };
 }
 
 function paintDirty() {
   if (stored === null) return;
   const now = current();
-  const dirty = now.direction !== stored.direction
-    || now.magnitude !== stored.magnitude
-    || now.sentiment !== stored.sentiment;
+  const dirty = now.trend !== stored.trend || now.sentiment !== stored.sentiment;
   $("saved").textContent = dirty ? "Unsaved changes" : "";
   $("saved").className = dirty ? "saved pending" : "saved";
 }
 
-// The vendor's own band boundaries, so the label under the slider says the same
-// word the index would for that number. Read off 3156 published days rather
-// than guessed: the vendor names the five bands and does not document the cut
-// points, and the guessed version put 50 in "Greed" and had no "Neutral" at all
-// although the series carries 401 days of one. Kept in step with
-// tradelab/scenario/tilt.py, which a test checks.
+// The bars show what is in force, which is why Save is what moves them. The
+// sliders above show what is being considered; between a drag and a save the
+// two disagree on purpose, and that disagreement is the whole point of a button.
+function paintApplied() {
+  if (stored === null) return;
+  $("t-pin").style.left = `${trackPct(stored.trend)}%`;
+  $("s-pin").style.left = `${stored.sentiment}%`;
+}
+
 function band(value) {
   if (value <= 25) return "Extreme Fear";
   if (value <= 46) return "Fear";
@@ -357,34 +339,26 @@ function bandClass(c) {
   return "b-neutral";
 }
 
-function paintTrend() {
-  for (const [id, value] of [["t-up", "UP"], ["t-normal", "NORMAL"], ["t-down", "DOWN"]]) {
-    $(id).setAttribute("aria-pressed", String(direction === value));
-  }
-  // NORMAL and magnitude 0 are the same fact, so the control goes away rather
-  // than sitting there accepting a number the database would refuse.
-  //
-  // The slider runs 1 to 10 and never holds 0. Zero is not a weak trend, it is
-  // the absence of one, and that is what the NORMAL button already says — a
-  // scale that could also express it would let the two controls disagree.
-  const normal = direction === "NORMAL";
-  $("mag-wrap").classList.toggle("muted", normal);
-  paintMagnitude($("t-mag").value);
-}
-
-function paintMagnitude(value) {
-  const n = Math.min(10, Math.max(1, Number(value) || 1));
+function paintTrend(value) {
+  const n = Math.min(10, Math.max(1, Number(value) || 5));
   // Two views of one field, so neither may hold a value the other does not.
-  // Neither of them is the pin: the pin shows what is applied, and these show
-  // what is being considered. They agree again after a save.
+  // Neither of them is the pin: the pin shows what is applied.
   $("t-mag").value = String(n);
   $("t-mag-value").value = String(n);
-  $("t-band").textContent = direction === "NORMAL"
-    ? "No pressure. NORMAL is the absence of a trend, not a weak one."
-    : `${direction} ${n}${WORDS[n] ? ` — ${WORDS[n]}` : ""}`;
-  $("t-band").className = direction === "NORMAL"
-    ? "assume-band b-neutral"
-    : `assume-band ${direction === "UP" ? "b-greed" : "b-fear"}`;
+
+  // The tilt, worked out the same way the engine does: each side normalised by
+  // its own reach, so 1 is exactly as bearish as 10 is bullish. Dividing both
+  // by five would make 1 worth less, and nothing about the reading is
+  // asymmetric.
+  const reach = n > 5 ? 5 : 4;
+  const tilt = n === 5 ? 0 : ((n - 5) / reach) * 0.5;
+  const word = TREND_WORDS[n];
+  $("t-band").textContent = n === 5
+    ? "5 — nothing new. Positions are left exactly as they are."
+    : `${n}${word ? ` — ${word}` : ""}. Longs ${(1 + tilt).toFixed(2)}×, `
+      + `shorts ${(1 - tilt).toFixed(2)}×.`;
+  $("t-band").className = `assume-band ${
+    n === 5 ? "b-neutral" : n > 5 ? "b-greed" : "b-fear"}`;
   paintDirty();
 }
 
@@ -415,8 +389,7 @@ function when(iso) {
 }
 
 function trendText(entry) {
-  return entry.direction === "NORMAL"
-    ? "NORMAL" : `${entry.direction} ${entry.magnitude}`;
+  return String(entry.trend);
 }
 
 function renderHistory(id, entries, label, moved) {
@@ -452,11 +425,7 @@ function row(label, entry) {
 
 async function load() {
   const scenario = await api("/api/scenario");
-  direction = scenario.direction;
-  // A stored 0 means NORMAL, which the buttons already carry; the slider takes
-  // the midpoint so that switching off NORMAL lands somewhere deliberate.
-  $("t-mag").value = String(scenario.magnitude || 5);
-  paintTrend();
+  paintTrend(scenario.trend);
 
   const fg = await api("/api/fear-greed");
   if (!fg.available) {
@@ -504,8 +473,7 @@ async function load() {
 
   // Painted last, because the comparison it prints needs the measured value.
   paintSentiment(scenario.sentiment);
-  stored = {direction: scenario.direction, magnitude: scenario.magnitude,
-            sentiment: scenario.sentiment};
+  stored = {trend: scenario.trend, sentiment: scenario.sentiment};
   paintApplied();
   paintDirty();
   await loadHistory();
@@ -580,24 +548,18 @@ async function loadHistory() {
   const entries = raw.map((e, i) => ({
     ...e,
     from: e.from ?? (raw[i + 1] ? {
-      direction: raw[i + 1].direction,
-      magnitude: raw[i + 1].magnitude,
-      sentiment: raw[i + 1].sentiment,
+      trend: raw[i + 1].trend, sentiment: raw[i + 1].sentiment,
     } : null),
   }));
 
-  renderHistory("t-history", entries, trendText, (e) => e.from === null
-    || e.direction !== e.from.direction || e.magnitude !== e.from.magnitude);
+  renderHistory("t-history", entries, trendText,
+    (e) => e.from === null || e.trend !== e.from.trend);
   renderHistory("s-history", entries, (e) => String(e.sentiment), (e) =>
     e.from === null || e.sentiment !== e.from.sentiment);
 }
 
-$("t-mag").oninput = () => paintMagnitude($("t-mag").value);
-$("t-mag-value").oninput = () => paintMagnitude($("t-mag-value").value);
-
-$("t-up").onclick = () => { direction = "UP"; paintTrend(); };
-$("t-normal").onclick = () => { direction = "NORMAL"; paintTrend(); };
-$("t-down").onclick = () => { direction = "DOWN"; paintTrend(); };
+$("t-mag").oninput = () => paintTrend($("t-mag").value);
+$("t-mag-value").oninput = () => paintTrend($("t-mag-value").value);
 
 $("s-range").oninput = () => paintSentiment($("s-range").value);
 $("s-value").oninput = () => paintSentiment($("s-value").value);
@@ -608,15 +570,13 @@ $("fg-match").onclick = () => { if (measured !== null) paintSentiment(measured);
 
 $("save").onclick = async () => {
   $("err").textContent = ""; $("saved").textContent = "";
-  // NORMAL is stored as magnitude 0. Read from the button rather than from the
-  // slider, which never holds 0 — the direction is what decides it.
-  const magnitude = direction === "NORMAL" ? 0 : Number($("t-mag").value);
+  const trend = Number($("t-mag").value);
   const sentiment = Number($("s-value").value);
   // Checked here so the operator is told which field disagrees, and again by
   // the request model and a database CHECK. This is the friendliest of the
   // three and the only one that can be bypassed.
-  if ((direction === "NORMAL") !== (magnitude === 0)) {
-    $("err").textContent = "NORMAL is magnitude 0; UP and DOWN take 1 to 10.";
+  if (!Number.isInteger(trend) || trend < 1 || trend > 10) {
+    $("err").textContent = "The market trend is a whole number from 1 to 10.";
     return;
   }
   if (!Number.isInteger(sentiment) || sentiment < 1 || sentiment > 100) {
@@ -627,9 +587,8 @@ $("save").onclick = async () => {
     // The baseline comes from the response, not from what was sent: if the
     // server normalised something, the form is now the stale copy.
     const saved = await api("/api/scenario", { method: "PUT",
-      body: JSON.stringify({ direction, magnitude, sentiment }) });
-    stored = {direction: saved.direction, magnitude: saved.magnitude,
-              sentiment: saved.sentiment};
+      body: JSON.stringify({ trend, sentiment }) });
+    stored = {trend: saved.trend, sentiment: saved.sentiment};
     paintApplied();
     $("saved").textContent = saved.changed ? "Saved." : "No change.";
     $("saved").className = "saved";

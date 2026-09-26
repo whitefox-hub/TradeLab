@@ -29,7 +29,7 @@ import sqlalchemy as sa
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 
 from tradelab.api.security import (
@@ -47,6 +47,7 @@ from tradelab.collectors.sentiment import CMC_SOURCE
 from tradelab.collectors.sentiment import SOURCE as FNG_SOURCE
 from tradelab.config import Settings
 from tradelab.scenario import run as scenario_run
+from tradelab.scenario.tilt import direction as trend_direction
 
 #: Shared chrome and the screens live here. Mounted rather than served per file,
 #: so adding a stylesheet does not mean adding a route.
@@ -102,12 +103,14 @@ class ScenarioRequest(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    direction: str = Field(pattern="^(UP|NORMAL|DOWN)$")
-    #: 0 when NORMAL, 1 to 10 otherwise. The pairing is checked below and again
-    #: by a database CHECK: a NORMAL market trend of magnitude 7 would read downstream
-    #: as pressure with no direction, and a DOWN market trend of 0 as direction with no
-    #: pressure. Both are states the engine would have to invent a meaning for.
-    magnitude: int = Field(ge=0, le=10)
+    #: The operator's reading of the news. 1 to 10, **5 neutral**: 5 is
+    #: what is held when nothing has happened, and it leaves every
+    #: position exactly as it was. Direction is which side of 5 it sits
+    #: on, derived and never stored - two fields that can disagree is what
+    #: this replaced, and the arithmetic reading magnitude as distance
+    #: from zero tilted the book by a quarter at the value meaning "I
+    #: have heard nothing".
+    trend: int = Field(ge=1, le=10)
     #: Where on the 1-100 scale to assume the rest of the market sits. An
     #: assumption, and deliberately a different field from the measured reading
     #: in `sentiment_readings` — holding both in one number would make an
@@ -121,15 +124,6 @@ class ScenarioRequest(BaseModel):
     #: computed from a trade count would confirm the wrong hypothesis, and after
     #: the fact the log could not tell them apart.
     source: str = Field(default="manual", pattern="^(manual|derived|adopted)$")
-
-    @model_validator(mode="after")
-    def normal_means_zero(self) -> ScenarioRequest:
-        if (self.direction == "NORMAL") != (self.magnitude == 0):
-            raise ValueError(
-                "NORMAL is magnitude 0 and magnitude 0 is NORMAL; "
-                "UP and DOWN take 1 to 10")
-        return self
-
 
 class RiskConfigRequest(BaseModel):
     """A new risk limit configuration. Plan.md §14.1, §12.4, §20.
@@ -219,9 +213,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     def _before_payload(before: Any) -> dict[str, Any] | None:
         return None if before is None else {
-            "direction": before["trend_direction"],
-            "magnitude": before["trend_magnitude"],
-            "sentiment": before["sentiment"]}
+            "trend": before["trend"], "sentiment": before["sentiment"]}
 
     def _run_payload(run_id: uuid.UUID, outcome: Any,
                      seconds: float) -> dict[str, Any]:
@@ -704,14 +696,13 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         is a decision.
         """
         row = session.execute(sa.text(
-            "SELECT trend_direction, trend_magnitude, sentiment, source "
-            "FROM market_conditions WHERE id = 1"
+            "SELECT trend, sentiment, source FROM market_conditions WHERE id = 1"
         )).mappings().first()
         if row is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 "the conditions row is missing; migration 0013 seeds it")
-        return {"direction": row["trend_direction"],
-                "magnitude": row["trend_magnitude"],
+        return {"trend": row["trend"],
+                "direction": trend_direction(row["trend"]),
                 "sentiment": row["sentiment"], "source": row["source"]}
 
     @app.put("/api/scenario")
@@ -726,8 +717,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # Read in the same transaction as the UPDATE below, so the "from" it
         # records is the value this write actually replaced.
         before = session.execute(sa.text(
-            "SELECT trend_direction, trend_magnitude, sentiment "
-            "FROM market_conditions WHERE id = 1 FOR UPDATE"
+            "SELECT trend, sentiment FROM market_conditions WHERE id = 1 FOR UPDATE"
         )).mappings().first()
 
         # The UPDATE carries its own no-op test, so a save that changes nothing
@@ -736,22 +726,19 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # another request can change the value, and the comparison would then be
         # against something that is no longer there.
         row = session.execute(sa.text(
-            "UPDATE market_conditions SET trend_direction = :d, trend_magnitude = :m, "
-            "sentiment = :s, source = :src WHERE id = 1 AND ("
-            "  trend_direction IS DISTINCT FROM :d"
-            "  OR trend_magnitude IS DISTINCT FROM :m"
-            "  OR sentiment IS DISTINCT FROM :s) "
-            "RETURNING trend_direction, trend_magnitude, sentiment, source"
-        ), {"d": body.direction, "m": body.magnitude,
-            "s": body.sentiment, "src": body.source}).mappings().first()
+            "UPDATE market_conditions SET trend = :t, sentiment = :s, "
+            "source = :src WHERE id = 1 AND ("
+            "  trend IS DISTINCT FROM :t OR sentiment IS DISTINCT FROM :s) "
+            "RETURNING trend, sentiment, source"
+        ), {"t": body.trend, "s": body.sentiment,
+            "src": body.source}).mappings().first()
 
         if row is None:
             # Either nothing moved, or the row is missing. Told apart by asking,
             # because returning "unchanged" for a missing row would hide the one
             # state that is actually broken.
             current = session.execute(sa.text(
-                "SELECT trend_direction, trend_magnitude, sentiment, source "
-                "FROM market_conditions WHERE id = 1"
+                "SELECT trend, sentiment, source FROM market_conditions WHERE id = 1"
             )).mappings().first()
             if current is None:
                 raise HTTPException(
@@ -761,8 +748,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # one entry in the log, not two. A change log that records
             # non-changes cannot answer when something was last changed, which
             # is the only question it exists for.
-            return {"direction": current["trend_direction"],
-                    "magnitude": current["trend_magnitude"],
+            return {"trend": current["trend"],
+                    "direction": trend_direction(current["trend"]),
                     "sentiment": current["sentiment"],
                     "source": current["source"], "changed": False}
 
@@ -784,30 +771,29 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         started = time.perf_counter()
         try:
             outcome = scenario_run.execute(
-                body.direction, body.magnitude, body.sentiment)
+                body.trend, body.sentiment)
         except FileNotFoundError as missing:
             # The scenario is saved either way. A run that cannot start is not a
             # reason to discard a setting the operator made.
             audit(session, who.email, "scenario.set", "scenario", "market",
-                  {"direction": body.direction, "magnitude": body.magnitude,
-                   "sentiment": body.sentiment, "source": body.source,
+                  {"trend": body.trend, "sentiment": body.sentiment,
+                   "source": body.source,
                    "from": _before_payload(before)})
             session.commit()
-            return {"direction": row["trend_direction"],
-                    "magnitude": row["trend_magnitude"],
+            return {"trend": row["trend"],
+                    "direction": trend_direction(row["trend"]),
                     "sentiment": row["sentiment"], "changed": True,
                     "run": None, "run_error": str(missing)}
 
         run_id = uuid.uuid4()
         session.execute(sa.text(
-            "INSERT INTO scenario_runs (id, actor, trend_direction, trend_magnitude, "
+            "INSERT INTO scenario_runs (id, actor, trend, "
             "  sentiment, sentiment_bucket, long_multiplier, short_multiplier, "
             "  reference, bars, baseline, conditioned, reached_step, "
             "  stopped_because, source) "
-            "VALUES (:i, :a, :d, :m, :s, :b, :lm, :sm, :r, :n, "
+            "VALUES (:i, :a, :t, :s, :b, :lm, :sm, :r, :n, "
             "  CAST(:base AS jsonb), CAST(:cond AS jsonb), :step, :why, :src)"
-        ), {"i": run_id, "a": who.email, "d": body.direction,
-            "m": body.magnitude, "s": body.sentiment,
+        ), {"i": run_id, "a": who.email, "t": body.trend, "s": body.sentiment,
             "b": outcome.sentiment_bucket, "lm": outcome.long_multiplier,
             "sm": outcome.short_multiplier, "r": outcome.reference,
             "n": outcome.bars, "base": json.dumps(outcome.baseline),
@@ -816,12 +802,12 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "src": body.source})
 
         audit(session, who.email, "scenario.set", "scenario", "market",
-              {"direction": body.direction, "magnitude": body.magnitude,
-               "sentiment": body.sentiment, "source": body.source,
+              {"trend": body.trend, "sentiment": body.sentiment,
+               "source": body.source,
                "from": _before_payload(before), "run": str(run_id)})
         session.commit()
-        return {"direction": row["trend_direction"],
-                "magnitude": row["trend_magnitude"],
+        return {"trend": row["trend"],
+                "direction": trend_direction(row["trend"]),
                 "sentiment": row["sentiment"], "source": row["source"],
                 "changed": True,
                 "run": _run_payload(run_id, outcome,
@@ -860,8 +846,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             out.append({
                 "at": row["occurred_at"].isoformat(),
                 "actor": row["actor"],
-                "direction": payload.get("direction"),
-                "magnitude": payload.get("magnitude"),
+                "trend": payload.get("trend"),
                 "sentiment": payload.get("sentiment"),
                 "from": payload.get("from"),
             })
@@ -878,14 +863,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         error that makes a backtest look prescient.
         """
         rows = session.execute(sa.text(
-            "SELECT id, ran_at, actor, trend_direction, trend_magnitude, sentiment, "
+            "SELECT id, ran_at, actor, trend, sentiment, "
             "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
             "  bars, baseline, conditioned, reached_step, stopped_because "
             "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT :n"
         ), {"n": max(1, min(limit, 100))}).mappings().all()
         return [{
             "id": str(r["id"]), "at": r["ran_at"].isoformat(), "actor": r["actor"],
-            "direction": r["trend_direction"], "magnitude": r["trend_magnitude"],
+            "trend": r["trend"], "direction": trend_direction(r["trend"]),
             "sentiment": r["sentiment"], "sentiment_bucket": r["sentiment_bucket"],
             "long_multiplier": float(r["long_multiplier"]),
             "short_multiplier": float(r["short_multiplier"]),
@@ -1409,7 +1394,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # The last scenario run, so the sequence shows where it got to rather
         # than describing a path nobody has walked. Read back, never recomputed.
         last = session.execute(sa.text(
-            "SELECT id, ran_at, trend_direction, trend_magnitude, sentiment, "
+            "SELECT id, ran_at, trend, sentiment, "
             "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
             "  bars, baseline, conditioned, reached_step, stopped_because, source "
             "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT 1"
@@ -1441,8 +1426,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             },
             "last_run": None if last is None else {
                 "id": str(last["id"]), "at": last["ran_at"].isoformat(),
-                "direction": last["trend_direction"],
-                "magnitude": last["trend_magnitude"],
+                "trend": last["trend"],
+                "direction": trend_direction(last["trend"]),
                 "sentiment": last["sentiment"],
                 "sentiment_bucket": last["sentiment_bucket"],
                 "long_multiplier": float(last["long_multiplier"]),

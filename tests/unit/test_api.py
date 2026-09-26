@@ -749,7 +749,7 @@ def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
 def test_reading_or_setting_the_scenario_requires_a_session(client: TestClient) -> None:
     assert client.get("/api/scenario").status_code == 401
     assert client.put("/api/scenario", json={
-        "direction": "DOWN", "magnitude": 8, "sentiment": 20}).status_code == 401
+        "trend": 2, "sentiment": 20}).status_code == 401
     assert client.get("/api/fear-greed").status_code == 401
 
 
@@ -808,34 +808,11 @@ def test_a_sentiment_outside_one_to_a_hundred_is_refused() -> None:
 
     for bad in (0, -1, 101, 1000):
         with pytest.raises(pydantic.ValidationError):
-            ScenarioRequest(direction="NORMAL", magnitude=0, sentiment=bad)
+            ScenarioRequest(trend=5, sentiment=bad)
     for good in (1, 50, 100):
-        assert ScenarioRequest(direction="NORMAL", magnitude=0,
-                               sentiment=good).sentiment == good
+        assert ScenarioRequest(trend=5, sentiment=good).sentiment == good
 
 
-@pytest.mark.fast
-def test_normal_and_magnitude_zero_are_the_same_fact() -> None:
-    """A NORMAL market trend of magnitude 7 reads downstream as pressure with no
-    direction, and a DOWN market trend of 0 as direction with no pressure. Both are
-    states the engine would have to invent a meaning for, so neither is
-    representable — here, and again in a database CHECK."""
-    import pydantic
-
-    from tradelab.api.app import ScenarioRequest
-
-    def make(direction: str, magnitude: int) -> ScenarioRequest:
-        return ScenarioRequest(direction=direction, magnitude=magnitude, sentiment=50)
-
-    assert make("NORMAL", 0).magnitude == 0
-    for good in (1, 5, 10):
-        assert make("UP", good).magnitude == good
-        assert make("DOWN", good).magnitude == good
-
-    for direction, magnitude in (("NORMAL", 7), ("NORMAL", 1),
-                                 ("UP", 0), ("DOWN", 0)):
-        with pytest.raises(pydantic.ValidationError):
-            make(direction, magnitude)
 
 
 @pytest.mark.fast
@@ -871,45 +848,12 @@ def test_the_scenario_carries_no_field_beyond_what_it_needs() -> None:
     from tradelab.api.app import ScenarioRequest
 
     assert set(ScenarioRequest.model_fields) == {
-        "direction", "magnitude", "sentiment", "source"}
+        "trend", "sentiment", "source"}
     for smuggled in ("asset", "happened_at", "duration_hours", "note", "mode"):
         with pytest.raises(pydantic.ValidationError):
-            ScenarioRequest(direction="UP", magnitude=5, sentiment=50,
-                            **{smuggled: 1})
+            ScenarioRequest(trend=6, sentiment=50, **{smuggled: 1})
 
 
-@pytest.mark.fast
-def test_the_screen_offers_the_three_states_and_nothing_dated(
-    client: TestClient,
-) -> None:
-    """The screen is the other half of the same refusal. A field the API would
-    reject is still worth not offering, because an input that errors on save is
-    one the operator has already spent time filling in."""
-    markup = client.get("/static/market_sentiment.html").text
-    for present in ('id="t-up"', 'id="t-normal"', 'id="t-down"', 'id="t-mag"',
-                    'id="s-range"', 'id="s-value"'):
-        assert present in markup, f"the screen is missing {present}"
-    for absent in ('type="date"', 'type="datetime-local"', 'id="t-asset"',
-                   'id="t-note"', 'id="t-when"'):
-        assert absent not in markup, f"the screen offers {absent}"
-
-    # DOWN, NORMAL, UP. The buttons run the same way as the sentiment scale
-    # beneath them, which runs fear on the left; a row ordered UP first would
-    # have the two disagreeing about which side is bearish on one screen.
-    order = [markup.index(f'id="t-{name}"') for name in ("down", "normal", "up")]
-    assert order == sorted(order), "the market trend buttons do not run DOWN, NORMAL, UP"
-
-    # Both dials cover their whole scale. A slider that stops short silently
-    # caps the scenario, and nothing downstream would report the ceiling.
-    assert 'min="1" max="100"' in markup, "the sentiment slider is not 1 to 100"
-    assert 'min="1" max="10"' in markup, "the magnitude slider is not 1 to 10"
-
-    # Magnitude 0 is not on the scale. Zero is not a weak market trend, it is the
-    # absence of one, and the NORMAL button already says that. A slider that
-    # could also express it would let the two controls disagree about the same
-    # fact, which is the disagreement the database CHECK exists to make
-    # impossible.
-    assert 'min="0"' not in markup, "the magnitude slider can express 0"
 
 
 # -- the index ---------------------------------------------------------------
@@ -1043,7 +987,7 @@ def test_the_scenario_screen_flags_unsaved_changes(client: TestClient) -> None:
     assert "function paintDirty" in markup
     # The baseline is what the server confirmed, never what the form holds. Read
     # back off the controls it would call a failed save clean.
-    assert "stored = {direction: saved.direction" in markup
+    assert "stored = {trend: saved.trend" in markup
 
 
 # -- nothing is written twice ------------------------------------------------
@@ -1193,7 +1137,7 @@ def test_the_bars_show_what_is_applied_and_save_is_what_moves_them(
     # The pins are placed from `stored` — what the server confirmed — and from
     # nothing else.
     assert '$("s-pin").style.left = `${stored.sentiment}%`' in markup
-    assert "const magnitude = stored.magnitude" in markup
+    assert '$("t-pin").style.left = `${trackPct(stored.trend)}%`' in markup
 
     # And painted again right after a save, which is what makes the bar catch up.
     body = markup[markup.index('$("save").onclick'):]
@@ -1644,3 +1588,27 @@ def test_the_screen_marks_one_active_and_the_rest_inactive(
     # Decided by the server from the row the values also come from, so the badge
     # and the numbers on the page cannot disagree.
     assert "h.active ?" in markup
+
+
+@pytest.mark.fast
+def test_the_screen_offers_one_scale_with_five_in_the_middle(
+    client: TestClient,
+) -> None:
+    """The three direction buttons are gone. Five is neutral, and the scale runs
+    bearish-left to bullish-right like the sentiment scale beneath it, so the
+    two cannot disagree about which way is which.
+
+    A date is still not offered: the trend is a condition to test under and not
+    a record of something that happened.
+    """
+    markup = client.get("/static/market_sentiment.html").text
+
+    for absent in ('id="t-up"', 'id="t-normal"', 'id="t-down"',
+                   'type="date"', 'type="datetime-local"', 'id="t-when"'):
+        assert absent not in markup, f"the screen still offers {absent}"
+
+    assert 'id="t-mag" min="1" max="10"' in markup
+    # The neutral point is marked on the bar, not left to be inferred from a
+    # number being halfway along a track that does not start at zero.
+    assert 'id="t-neutral"' in markup
+    assert "nothing new" in markup

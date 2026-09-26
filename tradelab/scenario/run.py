@@ -32,7 +32,13 @@ import polars as pl
 
 from tradelab.engines.tier_a.engine import BacktestResult, net_returns
 from tradelab.engines.tier_a.engine import run as backtest
-from tradelab.scenario.tilt import apply, exposure_multipliers, sentiment_bucket
+from tradelab.scenario.tilt import (
+    NEUTRAL,
+    apply,
+    direction,
+    exposure_multipliers,
+    sentiment_bucket,
+)
 from tradelab.validation.deflated import sharpe_stats
 from tradelab.validation.gates import evaluate
 from tradelab.validation.power import assess
@@ -67,6 +73,8 @@ class ScenarioRun:
     long_multiplier: float
     short_multiplier: float
     sentiment_bucket: str
+    #: Derived from the trend, carried so a reader need not re-derive it.
+    trend_direction: str
     baseline: dict[str, Any]
     conditioned: dict[str, Any]
     reached_step: int
@@ -99,7 +107,7 @@ def _summary(result: BacktestResult) -> dict[str, Any]:
     }
 
 
-def execute(direction: str, magnitude: int, sentiment: int,
+def execute(trend: int, sentiment: int,
             archive: Path = ARCHIVE) -> ScenarioRun:
     """One scenario run: both arms, the gate, and where it stopped."""
     close = _bars(archive)
@@ -109,8 +117,8 @@ def execute(direction: str, magnitude: int, sentiment: int,
     # run does not redo one. It takes the declared reference position instead,
     # which is why this cannot report a strategy result.
     baseline_position = np.ones(close.size)
-    conditioned_position = apply(baseline_position, direction, magnitude)
-    long_multiplier, short_multiplier = exposure_multipliers(direction, magnitude)
+    conditioned_position = apply(baseline_position, trend)
+    long_multiplier, short_multiplier = exposure_multipliers(trend)
 
     baseline = backtest(close, baseline_position, timeframe=TIMEFRAME)
     conditioned = backtest(close, conditioned_position, timeframe=TIMEFRAME)
@@ -155,9 +163,10 @@ def execute(direction: str, magnitude: int, sentiment: int,
                    + "; ".join(gate.reasons[:2]) if gate.reasons
                    else f"the gate returned {gate.verdict.upper()}")
 
-    if direction == "NORMAL":
-        notes.append("the market trend is NORMAL, so both arms are the same run and the "
-                     "difference below is zero by construction.")
+    if trend == NEUTRAL:
+        notes.append(
+            f"the market trend is {NEUTRAL}, which is neutral, so both arms are "
+            "the same run and the difference below is zero by construction.")
 
     return ScenarioRun(
         reference=REFERENCE,
@@ -165,6 +174,7 @@ def execute(direction: str, magnitude: int, sentiment: int,
         long_multiplier=long_multiplier,
         short_multiplier=short_multiplier,
         sentiment_bucket=sentiment_bucket(sentiment),
+        trend_direction=direction(trend),
         baseline=_summary(baseline),
         conditioned=_summary(conditioned),
         reached_step=reached,

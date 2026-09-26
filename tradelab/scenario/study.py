@@ -51,8 +51,14 @@ MARKET_ROBUSTNESS = "BTCUSDT"
 #: not an early answer, it is a guaranteed inconclusive being read as evidence.
 FIRST_LOOK_CALLS = 150
 
-#: A change to NORMAL is the absence of a call, not a call.
-DIRECTIONAL = ("UP", "DOWN")
+#: The reading that is not a call.
+#:
+#: The trend is one scale, 1 to 10, with 5 meaning nothing has happened. A
+#: change *to* 5 is the operator withdrawing a view, not offering one, so it is
+#: not counted — and neither is a change between two values on the same side
+#: that keeps the same sign, which is a revision of conviction rather than a
+#: new call. What counts is a change that leaves 5 or crosses it.
+NEUTRAL = 5
 
 #: The only source this study counts.
 #:

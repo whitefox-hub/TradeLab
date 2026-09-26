@@ -787,10 +787,14 @@ class MarketConditions(Base):
     __tablename__ = "market_conditions"
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
-    #: 'UP' bullish pressure, 'DOWN' bearish, 'NORMAL' neither.
-    trend_direction: Mapped[str] = mapped_column(Text, nullable=False)
-    #: 0 when NORMAL; otherwise 1 very weak, 5 medium, 10 extreme.
-    trend_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    #: The operator's reading of the news on one scale: 1 to 10, **5 neutral**,
+    #: direction derived from which side of 5 it sits on.
+    #:
+    #: One column, not a direction beside a magnitude. Those were two fields
+    #: that could disagree, kept in step by a CHECK, and there was no way to say
+    #: "nothing has happened" at the 5 the operator actually holds when they
+    #: have read no news.
+    trend: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=5)
     #: 1 extreme fear, 50 neutral, 100 extreme greed. Defaults to 50 rather than
     #: to today's printed value: seeding an assumption from a measurement would
     #: make "nobody set this" and "someone chose the market's own number" the
@@ -804,12 +808,8 @@ class MarketConditions(Base):
 
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_market_conditions_singleton"),
-        CheckConstraint("trend_direction IN ('UP','NORMAL','DOWN')",
-                        name="ck_market_conditions_trend_direction"),
-        CheckConstraint("trend_magnitude BETWEEN 0 AND 10",
-                        name="ck_market_conditions_trend_magnitude"),
-        CheckConstraint("(trend_direction = 'NORMAL') = (trend_magnitude = 0)",
-                        name="ck_market_conditions_normal_is_zero"),
+        CheckConstraint("trend BETWEEN 1 AND 10",
+                        name="ck_market_conditions_trend"),
         CheckConstraint("sentiment BETWEEN 1 AND 100",
                         name="ck_market_conditions_sentiment"),
         CheckConstraint("source IN ('manual','derived','adopted')",
@@ -875,8 +875,7 @@ class ScenarioRun(Base):
     ran_at: Mapped[datetime] = mapped_column(
         TS, nullable=False, server_default=func.now())
     actor: Mapped[str] = mapped_column(Text, nullable=False)
-    trend_direction: Mapped[str] = mapped_column(Text, nullable=False)
-    trend_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    trend: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment_bucket: Mapped[str] = mapped_column(Text, nullable=False)
     #: What the market trend did, stored so a result can be read without re-deriving the
@@ -898,10 +897,7 @@ class ScenarioRun(Base):
     source: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
     __table_args__ = (
-        CheckConstraint("trend_direction IN ('UP','NORMAL','DOWN')",
-                        name="ck_scenario_runs_trend_direction"),
-        CheckConstraint("trend_magnitude BETWEEN 0 AND 10",
-                        name="ck_scenario_runs_trend_magnitude"),
+        CheckConstraint("trend BETWEEN 1 AND 10", name="ck_scenario_runs_trend"),
         CheckConstraint("sentiment BETWEEN 1 AND 100",
                         name="ck_scenario_runs_sentiment"),
         CheckConstraint("bars > 0", name="ck_scenario_runs_bars"),

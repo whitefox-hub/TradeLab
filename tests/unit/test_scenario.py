@@ -6,7 +6,6 @@ a position size, so most of what follows is about what it cannot do.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from tradelab.scenario.tilt import (
@@ -16,68 +15,6 @@ from tradelab.scenario.tilt import (
     exposure_multipliers,
     sentiment_bucket,
 )
-
-
-@pytest.mark.fast
-def test_a_normal_trend_is_the_identity() -> None:
-    """The default has to change nothing, or every run ever made carries an
-    adjustment nobody chose."""
-    position = np.array([1.0, -0.5, 0.0, 0.25])
-    assert exposure_multipliers("NORMAL", 0) == (1.0, 1.0)
-    assert np.array_equal(apply(position, "NORMAL", 0), position)
-    # Magnitude is stored as 0 under NORMAL, but a stray non-zero must not tilt.
-    assert np.array_equal(apply(position, "NORMAL", 7), position)
-
-
-@pytest.mark.fast
-def test_the_trend_never_changes_a_sign() -> None:
-    """It conditions, it does not signal. §11.3 puts direction as an input to an
-    expected-reaction model and never a signal in itself, so a view about the
-    environment may scale a position and must never decide one."""
-    position = np.array([1.0, -1.0, 0.3, -0.2, 0.0])
-    for direction in ("UP", "DOWN"):
-        for magnitude in range(1, 11):
-            out = apply(position, direction, magnitude)
-            assert np.array_equal(np.sign(out), np.sign(position)), (
-                f"{direction} {magnitude} changed a sign")
-
-
-@pytest.mark.fast
-def test_a_tilt_on_a_flat_book_is_still_flat() -> None:
-    """It scales a position and never creates one. An operator's view alone
-    cannot open a trade, however strongly it is held."""
-    flat = np.zeros(20)
-    for magnitude in range(0, 11):
-        assert not apply(flat, "UP", magnitude).any()
-        assert not apply(flat, "DOWN", magnitude).any()
-
-
-@pytest.mark.fast
-def test_the_tilt_is_bounded_at_half() -> None:
-    """An operator who could turn a systematic book into a directional bet with
-    one slider would have the slider as the strategy. The ceiling is what stops
-    that, so it is asserted rather than left to the arithmetic."""
-    assert TILT_CEILING == 0.5
-    for direction in ("UP", "DOWN"):
-        for magnitude in range(0, 11):
-            for multiplier in exposure_multipliers(direction, magnitude):
-                assert 0.5 <= multiplier <= 1.5, (
-                    f"{direction} {magnitude} gives {multiplier}")
-
-
-@pytest.mark.fast
-def test_longs_and_shorts_move_in_opposite_directions() -> None:
-    """Scaled separately, not by one factor. A single multiplier would push a
-    short *further* into the market trend it disagrees with, which is the opposite of
-    what was asked for and would be invisible in any aggregate."""
-    for magnitude in (1, 5, 10):
-        long_up, short_up = exposure_multipliers("UP", magnitude)
-        assert long_up > 1.0 > short_up
-        long_down, short_down = exposure_multipliers("DOWN", magnitude)
-        assert long_down < 1.0 < short_down
-        # And the two directions are mirrors, so neither is quietly favoured.
-        assert long_up == pytest.approx(short_down)
-        assert short_up == pytest.approx(long_down)
 
 
 @pytest.mark.fast
@@ -160,7 +97,7 @@ def test_a_run_reports_the_step_it_reached_rather_than_a_verdict() -> None:
             return []
 
     with pytest.raises(FileNotFoundError):
-        execute("UP", 9, 74, archive=_Archive())  # type: ignore[arg-type]
+        execute(10, 74, archive=_Archive())  # type: ignore[arg-type]
 
     assert GATE_STEP == 7
     del np_
@@ -234,14 +171,29 @@ def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "tradelab"
-    importers = [
+    # The execution path, which is what step 10 sits on. Narrowed from "any
+    # module outside tradelab/scenario" once the API began importing the tilt's
+    # `direction` to *label* a number: putting a word beside a reading is not
+    # applying it to a position, and a check that cannot tell those apart has
+    # to be loosened for the wrong reason eventually.
+    reached = [
+        f.relative_to(root).as_posix()
+        for part in ("risk", "execution", "engines")
+        for f in (root / part).rglob("*.py")
+        if "tradelab.scenario" in f.read_text()
+    ]
+    assert reached == [], (
+        f"the tilt now reaches {reached}; step 10 says it does not, and one "
+        "of the two has to change")
+
+    # And nothing outside the scenario package applies it to a position.
+    appliers = [
         f.relative_to(root).as_posix()
         for f in root.rglob("*.py")
-        if "scenario.tilt" in f.read_text() and "scenario/" not in f.relative_to(root).as_posix()
+        if "scenario/" not in f.relative_to(root).as_posix()
+        and ("tilt import apply" in f.read_text() or "tilt.apply" in f.read_text())
     ]
-    assert importers == [], (
-        f"the tilt now reaches {importers}; step 10 says it does not, and one "
-        "of the two has to change")
+    assert appliers == [], f"the tilt is applied in {appliers}"
 
     from tradelab.api.app import create_app
 
@@ -273,7 +225,7 @@ def test_the_study_terms_match_the_registration() -> None:
     assert study.MARKET in text
     assert study.MARKET_ROBUSTNESS in text, (
         "the robustness market in code is not named in the registration")
-    assert study.DIRECTIONAL == ("UP", "DOWN")
+    assert study.NEUTRAL == 5
     # The sensitivity horizons are declared, and declared as not deciding.
     for horizon in study.SENSITIVITY_HORIZONS:
         assert f"{horizon}-day" in text
@@ -300,7 +252,7 @@ def test_the_study_counts_only_what_a_person_set() -> None:
 
     # And defaulted to manual, which is true of every row that existed before
     # anything else could write one.
-    assert ScenarioRequest(direction="UP", magnitude=5, sentiment=50).source == "manual"
+    assert ScenarioRequest(trend=6, sentiment=50).source == "manual"
 
     text = (Path(__file__).resolve().parents[2]
             / "research/PREREG-005-operator-trend.md").read_text()
@@ -414,7 +366,7 @@ def test_the_api_key_is_read_from_the_environment_and_never_stored() -> None:
 
 
 @pytest.mark.fast
-def test_a_run_cannot_spend_more_than_its_ceiling() -> None:
+def test_a_run_cannot_spend_more_than_its_ceiling(monkeypatch) -> None:
     """A credit is spent per request, not per row — measured, not assumed. So a
     loop that does not end is a loop that empties the month, and the ceiling is
     what makes that cost a bad afternoon instead.
@@ -423,6 +375,12 @@ def test_a_run_cannot_spend_more_than_its_ceiling() -> None:
     the largest legitimate operation with room.
     """
     from tradelab.collectors import cmc
+
+    # The pacing was added to `call` after this test was written, and 200 calls
+    # at 1.3s each is four minutes of sleeping to prove an arithmetic bound.
+    # Zeroed here rather than special-cased in the collector: the interval is a
+    # courtesy to the vendor, and there is no vendor in this test.
+    monkeypatch.setattr(cmc, "MIN_INTERVAL_SECONDS", 0.0)
 
     cmc.reset_budget()
     assert cmc.spent() == 0
@@ -470,3 +428,104 @@ def test_reading_the_budget_costs_nothing_and_works_keyless() -> None:
     finally:
         if previous is not None:
             os.environ[cmc.KEY_VAR] = previous
+
+
+# -- the scale ---------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_five_is_neutral_and_does_nothing_at_all() -> None:
+    """Five is what the operator holds when they have read no news, so it must
+    leave every position exactly as it was.
+
+    The first version read magnitude as distance from zero, so a 5 tilted the
+    book by a quarter — leaning hard in a direction at the exact moment the
+    operator meant to say nothing had happened. That is the defect this pins.
+    """
+    import numpy as np_
+
+    from tradelab.scenario.tilt import (
+        NEUTRAL,
+        direction,
+        strength,
+    )
+
+    assert NEUTRAL == 5
+    assert strength(NEUTRAL) == 0.0
+    assert exposure_multipliers(NEUTRAL) == (1.0, 1.0)
+    assert direction(NEUTRAL) == "NEUTRAL"
+
+    position = np_.array([1.0, -0.5, 0.0, 0.25])
+    assert np_.array_equal(apply(position, NEUTRAL), position)
+
+
+@pytest.mark.fast
+def test_the_ends_of_the_scale_are_equally_extreme() -> None:
+    """On 1 to 10 with 5 neutral there are four steps below and five above, so
+    dividing both by five would make 1 mean minus forty percent while 10 meant
+    plus fifty — the same "as extreme as it gets" reading, worth less when it is
+    bearish. Nothing about the operator's intent is asymmetric."""
+    from tradelab.scenario.tilt import HIGHEST, LOWEST, strength
+
+    assert (LOWEST, HIGHEST) == (1, 10)
+    assert strength(HIGHEST) == pytest.approx(TILT_CEILING)
+    assert strength(LOWEST) == pytest.approx(-TILT_CEILING)
+    # And monotonic across the whole scale, so a higher reading is never a
+    # smaller tilt.
+    values = [strength(n) for n in range(LOWEST, HIGHEST + 1)]
+    assert values == sorted(values)
+
+
+@pytest.mark.fast
+def test_the_trend_never_changes_a_sign_and_cannot_open_a_position() -> None:
+    """It conditions, it does not signal. §11.3 puts direction as an input to an
+    expected-reaction model and never a signal in itself, so a view about the
+    environment may scale a position and must never decide one."""
+    import numpy as np_
+
+    from tradelab.scenario.tilt import HIGHEST, LOWEST
+
+    position = np_.array([1.0, -1.0, 0.3, -0.2, 0.0])
+    flat = np_.zeros(20)
+    for n in range(LOWEST, HIGHEST + 1):
+        out = apply(position, n)
+        assert np_.array_equal(np_.sign(out), np_.sign(position)), f"{n} flipped a sign"
+        # A reading alone cannot open a trade, however strongly it is held.
+        assert not apply(flat, n).any()
+
+
+@pytest.mark.fast
+def test_the_tilt_is_bounded_at_half() -> None:
+    """An operator who could turn a systematic book into a directional bet with
+    one slider would have the slider as the strategy."""
+    from tradelab.scenario.tilt import HIGHEST, LOWEST
+
+    assert TILT_CEILING == 0.5
+    for n in range(LOWEST, HIGHEST + 1):
+        for multiplier in exposure_multipliers(n):
+            assert 0.5 <= multiplier <= 1.5, f"{n} gives {multiplier}"
+
+    # Longs and shorts move opposite ways, scaled separately. A single factor
+    # would push a short further into the trend it disagrees with, which is the
+    # opposite of what was asked for and invisible in any aggregate.
+    for n in (HIGHEST, HIGHEST - 1):
+        long_up, short_up = exposure_multipliers(n)
+        assert long_up > 1.0 > short_up
+    for n in (LOWEST, LOWEST + 1):
+        long_down, short_down = exposure_multipliers(n)
+        assert long_down < 1.0 < short_down
+
+
+@pytest.mark.fast
+def test_direction_is_derived_and_never_stored() -> None:
+    """A stored direction beside a stored magnitude is two fields that can
+    disagree, and they did: NORMAL had to be kept in step with a zero by a
+    constraint, and there was no way to express "nothing has happened" at the
+    five an operator actually holds."""
+    from tradelab.registry.models import MarketConditions, ScenarioRun
+
+    for table in (MarketConditions.__table__, ScenarioRun.__table__):
+        columns = set(table.columns.keys())
+        assert "trend" in columns
+        assert "trend_direction" not in columns
+        assert "trend_magnitude" not in columns

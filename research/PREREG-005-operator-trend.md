@@ -36,7 +36,7 @@ The claim implicit in setting it is that this reading carries information about
 where the market goes next. That claim has never been tested here, and the tilt
 built on it in §20 is applied on the strength of it.
 
-> **H1.** When the operator sets a directional trend, the market moves that way
+> **H1.** When the operator moves the trend off 5, the market moves that way
 > over the following horizon more often than chance.
 
 Note what is *not* claimed. Not that the tilt improves a return — a tilt on a
@@ -49,11 +49,11 @@ is nothing for any sizing rule to exploit.
 | | |
 |---|---|
 | Observation | One per **change** to the trend direction, taken from `audit_log` at `scenario.set` |
-| Included | Changes to `UP` or `DOWN` **with `source = 'manual'`**. A change to `NORMAL` is the absence of a call, not a call |
+| Included | Changes **away from 5** with `source = 'manual'`. A change *to* 5 withdraws a view rather than offering one |
 | Market | **CMC100**, close to close, `market_index_readings` where `source = 'cmc100'`. BTCUSDT is the declared robustness check |
 | Entry | The first bar whose `available_at` is strictly after the setting's timestamp |
 | Horizon | **7 days**, or until the trend changes again, whichever is shorter |
-| Outcome | `sign(return) == +1 for UP, -1 for DOWN` |
+| Outcome | `sign(return)` matches `sign(trend - 5)` |
 | Test | One-sided binomial against 0.5 |
 
 Seven days is the longest horizon on §11.5's grid, taken from there rather than
@@ -126,6 +126,23 @@ fourteen hours of its horizon are unobserved. Registered as a known blind spot
 rather than patched with an intraday source, because the intraday endpoint
 refreshes every five minutes and mixing the two definitions in one column would
 mean the day's row meant midnight on every day but the current one.
+
+### Amendment, 2026-09-26, before any observation exists
+
+The trend was a direction and a magnitude; it is now one scale, 1 to 10, with
+**5 meaning nothing has happened**. That is how the operator was already using
+it — "if I hear nothing I keep it at 5" — and the old arithmetic read magnitude
+as distance from zero, so a 5 tilted the book by a quarter at the exact value
+meant to say nothing.
+
+What counts as a call changes with it, and only in wording. A directional call
+was `UP` or `DOWN`; it is now any setting away from 5, with the direction being
+which side of 5 it sits on. A change *to* 5 withdraws a view rather than
+offering one and is not counted, exactly as a change to `NORMAL` was not.
+
+Nothing else moves: not the horizon, not the stopping count, not the market.
+No observation exists — the log holds only settings made while building the
+screen, all before the cutoff above.
 
 ## How long this takes, stated before anyone waits for it
 
