@@ -1190,6 +1190,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         )
 
         defaults = RiskLimits()
+        # The one in force. The same row the limits below are read from, so
+        # the badge and the values on the page cannot disagree about which
+        # configuration is active.
         stored = session.execute(sa.text(
             "SELECT * FROM risk_limit_configs ORDER BY valid_from DESC LIMIT 1"
         )).mappings().first()
@@ -1252,10 +1255,15 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # a configured number: a halt already in force, a position below the
             # minimum viable size, and news cutting a size down.
             "breach_kinds": sorted(b.value for b in Breach),
+            # ACTIVE is the newest by valid_from, so exactly one row carries
+            # it — by construction and not by a flag somebody has to keep
+            # correct. A flag can be set on two rows; a maximum cannot be
+            # reached twice, and a tie is refused by a unique constraint.
             "history": [{
                 "id": str(h["id"]), "name": h["name"],
                 "valid_from": h["valid_from"].isoformat(),
                 "rationale": h["rationale"], "runs": int(h["runs"]),
+                "active": stored is not None and h["id"] == stored["id"],
             } for h in history],
             "events": [{
                 "rule": e["rule"], "observed": str(e["observed"]),

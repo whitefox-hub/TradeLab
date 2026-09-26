@@ -33,6 +33,9 @@
   .tag.halts { color:var(--down); }
   .tag.person { color:var(--warn); margin-left:6px; }
   .tag.order { color:var(--muted); }
+  .tag.active { color:var(--up); }
+  .tag.inactive { color:var(--muted); }
+  tr.inactive td { color:var(--muted); }
 
   .kinds { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
   .kinds span { font-family:ui-monospace,SFMono-Regular,monospace; font-size:12.5px;
@@ -94,10 +97,14 @@
       exist for.</p>
 
     <h2>Configurations</h2>
+    <p class="hint">Exactly one is active: the newest. That holds by construction
+      rather than by a flag someone has to keep correct — a flag can be set on two
+      rows, and a maximum cannot be reached twice. Two sharing a timestamp would
+      make "newest" ambiguous, so the database refuses the tie.</p>
     <table>
       <thead><tr>
-        <th>Name</th><th class="num">Valid from</th><th>Rationale</th>
-        <th class="num">Runs</th>
+        <th>Name</th><th>State</th><th class="num">Valid from</th>
+        <th>Rationale</th><th class="num">Runs</th>
       </tr></thead>
       <tbody id="history"></tbody>
     </table>
@@ -239,13 +246,15 @@ async function load() {
 
   $("history").innerHTML = data.history.length
     ? data.history.map((h) => `
-      <tr>
+      <tr class="${h.active ? "" : "inactive"}">
         <td><strong>${escape(h.name)}</strong></td>
+        <td><span class="tag ${h.active ? "active" : "inactive"}">${
+          h.active ? "active" : "inactive"}</span></td>
         <td class="num">${escape(h.valid_from.slice(0, 16).replace("T", " "))}</td>
         <td>${escape(h.rationale || "—")}</td>
         <td class="num">${h.runs}</td>
       </tr>`).join("")
-    : `<tr><td colspan="4" class="empty">None has been created. The engine's
+    : `<tr><td colspan="5" class="empty">None has been created. The engine's
         defaults are in force, which is a working state and not a configured
         one — a run records the configuration it ran under, so until one
         exists there is nothing for a run to record.</td></tr>`;

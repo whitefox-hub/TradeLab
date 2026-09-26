@@ -413,6 +413,14 @@ class RiskLimitConfig(Base):
     valid_from: Mapped[datetime] = mapped_column(TS, nullable=False)
 
 
+    __table_args__ = (
+        # The configuration in force is the newest by valid_from, so "only one
+        # is active" holds by construction rather than by a flag somebody has
+        # to keep correct. A tie would make "newest" ambiguous, and the screen
+        # could show ACTIVE against a row a run would not pick up.
+        UniqueConstraint("valid_from", name="uq_risk_limit_configs_valid_from"),
+    )
+
 class Run(Base):
     """One execution in any mode (§12).
 

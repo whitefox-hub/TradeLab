@@ -1572,3 +1572,75 @@ def test_the_form_cannot_offer_what_the_server_refuses(client: TestClient) -> No
     # And a rationale is required, because a limit change nobody can review is
     # one nobody did.
     assert 'id="c-why"' in markup
+
+
+@pytest.mark.integration
+def test_exactly_one_risk_configuration_is_active(monkeypatch) -> None:
+    """The one in force is the newest, so "only one is active" holds by
+    construction rather than by a flag somebody has to keep correct. A flag can
+    be set on two rows; a maximum cannot be reached twice.
+
+    The case that would break it is a tie, which the database refuses — two
+    configurations sharing a timestamp would make "newest" ambiguous, and the
+    screen could show ACTIVE against a row a run would not pick up.
+    """
+    import uuid as uuid_
+
+    import sqlalchemy as sa_
+
+    from tradelab.config import Settings
+
+    monkeypatch.setenv("TRADELAB_ADMIN_SALT", SALT)
+    monkeypatch.setenv("TRADELAB_ADMIN_HASH", hash_password(PASSWORD, SALT))
+    monkeypatch.setenv("TRADELAB_SESSION_SECRET", new_secret())
+    engine = sa_.create_engine(Settings().database_url)
+    client = TestClient(create_app(engine=engine))
+
+    email = engine.connect().execute(
+        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
+    if email is None:
+        pytest.skip("no operator row")
+    assert client.post(
+        "/api/session", json={"email": email, "password": PASSWORD}).status_code == 200
+
+    probes = [uuid_.uuid4() for _ in range(2)]
+    stamp = "2031-01-01 00:00:00+00"
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa_.text(
+                "INSERT INTO risk_limit_configs VALUES (:i,'ZZPROBE-A',5,2,10,10,"
+                f"10000,0.001,0.1,60,2.0,1.0,3.0,0.05,0.2,10,3,50,'{stamp}')"),
+                {"i": probes[0]})
+
+        body = client.get("/api/risk-limits").json()
+        active = [h for h in body["history"] if h["active"]]
+        assert len(active) == 1, f"{len(active)} configurations claim to be active"
+        # The newest wins, and the values on the page come from that same row.
+        assert active[0]["name"] == "ZZPROBE-A"
+        assert body["config_name"] == "ZZPROBE-A"
+
+        # A tie is refused rather than ordered by something nobody would look at.
+        with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
+            conn.execute(sa_.text(
+                "INSERT INTO risk_limit_configs VALUES (:i,'ZZPROBE-B',5,2,10,10,"
+                f"10000,0.001,0.1,60,2.0,1.0,3.0,0.05,0.2,10,3,50,'{stamp}')"),
+                {"i": probes[1]})
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa_.text("DELETE FROM risk_limit_configs WHERE id = ANY(:i)"),
+                         {"i": probes})
+
+
+@pytest.mark.fast
+def test_the_screen_marks_one_active_and_the_rest_inactive(
+    client: TestClient,
+) -> None:
+    """Which one is in force is shown, not inferred from a date being the
+    largest — that is a comparison the reader has to make, and gets wrong when
+    the list is long."""
+    markup = client.get("/static/risk_limits.html").text
+    assert "h.active" in markup
+    assert '"active" : "inactive"' in markup or "active\" : \"inactive" in markup
+    # Decided by the server from the row the values also come from, so the badge
+    # and the numbers on the page cannot disagree.
+    assert "h.active ?" in markup
