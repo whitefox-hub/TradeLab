@@ -20,6 +20,26 @@ from tradelab.collectors.sentiment import (
 from tradelab.config import Settings
 
 
+def _report_budget(label: str) -> None:
+    """What the vendor says, and what this run spent. Free to ask.
+
+    Printed on every run rather than only when something is wrong: a quota is
+    the kind of thing nobody looks at until it has already stopped the
+    collection, and by then the series has a hole that looks like a quiet
+    market.
+    """
+    from tradelab.collectors.cmc import budget, spent
+
+    allowance = budget()
+    if allowance is None:
+        print(f"{label}: {spent()} requests, keyless "
+              "(no credit budget; the anonymous quota is per IP and unpublished)")
+        return
+    print(f"{label}: {spent()} requests this run \u00b7 "
+          f"{allowance.used_month}/{allowance.limit_month} credits used this month "
+          f"({allowance.share_used:.1%}), {allowance.left_month} left")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     # 0 is the whole history. The default is small because the daily run needs
@@ -61,6 +81,7 @@ def main() -> int:
         print(f"{label}: {written} changed, newest "
               f"{newest.day.date()} = {newest.value} ({newest.classification})")
 
+    _report_budget("budget")
     # Non-zero only when *every* source failed, so cron notices an outage but
     # not a quiet day. Counting sources reached rather than rows written: zero
     # rows is the normal result once a series is up to date, and treating that

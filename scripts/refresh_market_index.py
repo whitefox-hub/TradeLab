@@ -17,6 +17,26 @@ from tradelab.collectors.market_index import INCEPTION, fetch_history, resume_fr
 from tradelab.config import Settings
 
 
+def _report_budget(label: str) -> None:
+    """What the vendor says, and what this run spent. Free to ask.
+
+    Printed on every run rather than only when something is wrong: a quota is
+    the kind of thing nobody looks at until it has already stopped the
+    collection, and by then the series has a hole that looks like a quiet
+    market.
+    """
+    from tradelab.collectors.cmc import budget, spent
+
+    allowance = budget()
+    if allowance is None:
+        print(f"{label}: {spent()} requests, keyless "
+              "(no credit budget; the anonymous quota is per IP and unpublished)")
+        return
+    print(f"{label}: {spent()} requests this run \u00b7 "
+          f"{allowance.used_month}/{allowance.limit_month} credits used this month "
+          f"({allowance.share_used:.1%}), {allowance.left_month} left")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--full", action="store_true",
@@ -37,6 +57,7 @@ def main() -> int:
         # pages already fetched.
         print(f"{store(engine, stopped.collected)} changed from {since}, "
               f"then {stopped}")
+    _report_budget("budget")
     return 0
 
 

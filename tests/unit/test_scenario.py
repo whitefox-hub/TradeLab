@@ -411,3 +411,62 @@ def test_the_api_key_is_read_from_the_environment_and_never_stored() -> None:
             window = body[max(0, body.index(hit) - 60):body.index(hit)]
             assert "api_key" not in window.lower() and "cmc_key" not in window.lower(), (
                 f"{name} looks like it carries a credential")
+
+
+@pytest.mark.fast
+def test_a_run_cannot_spend_more_than_its_ceiling() -> None:
+    """A credit is spent per request, not per row — measured, not assumed. So a
+    loop that does not end is a loop that empties the month, and the ceiling is
+    what makes that cost a bad afternoon instead.
+
+    A full CMC100 backfill is about a hundred requests, so the ceiling clears
+    the largest legitimate operation with room.
+    """
+    from tradelab.collectors import cmc
+
+    cmc.reset_budget()
+    assert cmc.spent() == 0
+    assert cmc.MAX_REQUESTS_PER_RUN >= 100, (
+        "the ceiling is below a legitimate CMC100 backfill")
+
+    calls = 0
+
+    def counted() -> object:
+        nonlocal calls
+        calls += 1
+        return object()
+
+    try:
+        with pytest.raises(cmc.BudgetExceeded):
+            for _ in range(cmc.MAX_REQUESTS_PER_RUN + 5):
+                cmc.call(counted)
+        # Stopped at the ceiling, not after it: the request that would have
+        # breached it is never made, because the vendor charges for attempts.
+        assert calls == cmc.MAX_REQUESTS_PER_RUN
+        assert cmc.spent() == cmc.MAX_REQUESTS_PER_RUN
+    finally:
+        cmc.reset_budget()
+
+
+@pytest.mark.fast
+def test_reading_the_budget_costs_nothing_and_works_keyless() -> None:
+    """Measured at zero credits, so there is no reason for a script not to
+    report it — and a quota is the kind of thing nobody looks at until it has
+    already stopped the collection, by which time the series has a hole that
+    looks like a quiet market."""
+    import inspect
+    import os
+
+    from tradelab.collectors import cmc
+
+    source = inspect.getsource(cmc.budget)
+    assert "key/info" in source
+
+    # Without a key there is no credit budget to read, and saying so beats
+    # returning a zero that would read as an exhausted one.
+    previous = os.environ.pop(cmc.KEY_VAR, None)
+    try:
+        assert cmc.budget() is None
+    finally:
+        if previous is not None:
+            os.environ[cmc.KEY_VAR] = previous
