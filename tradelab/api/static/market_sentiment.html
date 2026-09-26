@@ -36,9 +36,17 @@
      and takes its colour from whichever way the wave is pointing, set below. */
   .wave-scale { background:linear-gradient(90deg,
     color-mix(in srgb, var(--muted) 45%, transparent), var(--pressure, var(--muted))); }
-  .save-bar { display:flex; align-items:center; gap:14px; margin:6px 0 4px; }
-  .save-bar .spacer { flex:1; }
-  .saved { color:var(--up); font-size:13.5px; font-weight:560; }
+  /* The action sits with the title, not under the panes: one control governs
+     both of them, so putting it below either one would read as belonging to
+     that one. */
+  .page-head { display:flex; align-items:flex-start; justify-content:space-between;
+    gap:24px; flex-wrap:wrap; }
+  .page-title { min-width:0; flex:1 1 320px; }
+  .head-actions { display:flex; align-items:center; gap:14px; flex:0 0 auto;
+    padding-top:2px; }
+  .saved { color:var(--up); font-size:13.5px; font-weight:560; white-space:nowrap; }
+  .saved.pending { color:var(--warn); }
+  .err:empty { display:none; }
 
   /* -- the assumption, below the measurement and fenced off from it -- */
   .assume { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
@@ -82,10 +90,22 @@
 <body>
 <div class="layout">
   <main class="content">
-    <h1>Market Sentiment</h1>
-    <p class="sub">What the book is leaning into, and what everyone else is doing.
-      Both on one page because reading either alone is how a lean gets mistaken for
-      a consensus.</p>
+    <div class="page-head">
+      <div class="page-title">
+        <h1>Market Sentiment</h1>
+        <p class="sub">What the book is leaning into, and what everyone else is doing.
+          Both on one page because reading either alone is how a lean gets mistaken
+          for a consensus.</p>
+      </div>
+      <div class="head-actions">
+        <span class="saved" id="saved"></span>
+        <button class="primary" id="save">Save scenario</button>
+      </div>
+    </div>
+    <!-- Full width and under the header rather than beside the button: the
+         messages name a field and a range, and squeezed into the corner they
+         would wrap to three lines or be clipped. -->
+    <p class="err" id="err"></p>
 
     <div class="panes">
 
@@ -160,12 +180,7 @@
 
     </div>
 
-    <div class="save-bar">
-      <span class="saved" id="saved"></span>
-      <span class="err" id="err"></span>
-      <span class="spacer"></span>
-      <button class="primary" id="save">Save scenario</button>
-    </div>
+
 
     <p class="hint">The index is a vendor number and is stored where it can be looked
       at, not where a study reaches for it. Its method is not auditable and it is
@@ -189,6 +204,29 @@ const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
 
 let direction = "NORMAL";
 let measured = null;      // the printed reading, kept apart from the assumed one
+let stored = null;        // what the server last confirmed, for the dirty check
+
+// The Save button sits with the title, away from the sliders it governs, so a
+// change made at the bottom of the page can be forgotten on the way up. This is
+// what makes that visible; without it the move trades a tidier header for a
+// setting the operator believes took effect.
+function current() {
+  return {
+    direction,
+    magnitude: direction === "NORMAL" ? 0 : Number($("w-mag").value),
+    sentiment: Number($("s-value").value),
+  };
+}
+
+function paintDirty() {
+  if (stored === null) return;
+  const now = current();
+  const dirty = now.direction !== stored.direction
+    || now.magnitude !== stored.magnitude
+    || now.sentiment !== stored.sentiment;
+  $("saved").textContent = dirty ? "Unsaved changes" : "";
+  $("saved").className = dirty ? "saved pending" : "saved";
+}
 
 // The vendor's own band boundaries, so the label under the slider says the same
 // word the index would for that number. Written once here rather than inferred
@@ -238,6 +276,7 @@ function paintMagnitude(value) {
   $("w-band").className = direction === "NORMAL"
     ? "assume-band b-neutral"
     : `assume-band ${direction === "UP" ? "b-greed" : "b-fear"}`;
+  paintDirty();
 }
 
 function paintSentiment(value) {
@@ -254,6 +293,7 @@ function paintSentiment(value) {
       + (n === measured ? "the same." : `${n > measured ? "greedier" : "more fearful"} `
         + `by ${Math.abs(n - measured)}.`);
   $("s-band").className = `assume-band ${bandClass(word)}`;
+  paintDirty();
 }
 
 function row(label, entry) {
@@ -308,6 +348,9 @@ async function load() {
 
   // Painted last, because the comparison it prints needs the measured value.
   paintSentiment(scenario.sentiment);
+  stored = {direction: scenario.direction, magnitude: scenario.magnitude,
+            sentiment: scenario.sentiment};
+  paintDirty();
 }
 
 $("w-mag").oninput = () => paintMagnitude($("w-mag").value);
@@ -342,10 +385,15 @@ $("save").onclick = async () => {
     return;
   }
   try {
-    await api("/api/scenario", { method: "PUT",
+    // The baseline comes from the response, not from what was sent: if the
+    // server normalised something, the form is now the stale copy.
+    const saved = await api("/api/scenario", { method: "PUT",
       body: JSON.stringify({ direction, magnitude, sentiment }) });
+    stored = {direction: saved.direction, magnitude: saved.magnitude,
+              sentiment: saved.sentiment};
     $("saved").textContent = "Saved.";
-    setTimeout(() => { $("saved").textContent = ""; }, 2500);
+    $("saved").className = "saved";
+    setTimeout(paintDirty, 2500);
   } catch (e) { $("err").textContent = e.message; }
 };
 </script>

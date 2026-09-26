@@ -1005,3 +1005,20 @@ def test_the_menu_offers_no_screen_that_is_gone(client: TestClient) -> None:
     assert "/waves" not in menu
     for href in set(re.findall(r'href: "(/[a-z_-]+)"', menu)):
         assert client.get(href).status_code == 200, f"{href} is in the menu but 404s"
+
+
+@pytest.mark.fast
+def test_the_scenario_screen_flags_unsaved_changes(client: TestClient) -> None:
+    """The Save button sits with the title, away from the sliders it governs, so
+    a change made at the bottom of the page can be forgotten on the way up.
+
+    Without the flag the move trades a tidier header for a setting the operator
+    believes took effect — which is the same failure as a silently dropped field,
+    arriving through the layout instead.
+    """
+    markup = client.get("/static/market_sentiment.html").text
+    assert "Unsaved changes" in markup
+    assert "function paintDirty" in markup
+    # The baseline is what the server confirmed, never what the form holds. Read
+    # back off the controls it would call a failed save clean.
+    assert "stored = {direction: saved.direction" in markup
