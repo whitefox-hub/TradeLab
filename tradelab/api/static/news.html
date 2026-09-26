@@ -137,6 +137,16 @@
   <div class="shape">Something the collectors did not catch, or cannot: a hack, a
     regulation, a war.</div>
 
+  <label for="n-template">Start from a known event</label>
+  <select id="n-template" style="width:100%">
+    <option value="">— blank —</option>
+  </select>
+  <p class="hint" id="n-tpl-note">Fills the type, shape and a suggested rating.
+    The suggestion is a starting point, not a verdict: a rating left exactly
+    where the catalogue put it is recorded as template-derived, so a later
+    calibration can tell it from one you chose. A curve built from unmoved
+    suggestions measures the catalogue rather than you.</p>
+
   <label for="n-title">Headline</label>
   <input id="n-title" placeholder="What happened">
 
@@ -245,9 +255,31 @@ let tab = "active";
 let all = [];
 
 mount("/news", { onReady: async () => {
-  await Promise.all([loadTypes(), loadScale()]);
+  await Promise.all([loadTypes(), loadScale(), loadTemplates()]);
   load();
 } });
+
+let templates = [];
+
+async function loadTemplates() {
+  templates = await api("/api/event-templates");
+  $("n-template").innerHTML = '<option value="">— blank —</option>' +
+    templates.map((t) =>
+      `<option value="${t.key}">${t.signed > 0 ? "+" : ""}${t.signed}  ${t.label}</option>`
+    ).join("");
+}
+
+$("n-template").addEventListener("change", () => {
+  const chosen = templates.find((t) => t.key === $("n-template").value);
+  if (!chosen) { $("n-tpl-note").textContent = ""; return; }
+  $("n-type").value = chosen.event_type;
+  $("n-shape").value = chosen.shape;
+  $("n-title").value = chosen.label;
+  $("n-tpl-note").textContent =
+    `${chosen.shape}, ${chosen.market_wide ? "market-wide" : "one sector"}. ` +
+    `Suggested ${chosen.signed > 0 ? "+" : ""}${chosen.signed}. ` +
+    (chosen.note || "");
+});
 
 async function loadTypes() {
   const types = await api("/api/events/types");
@@ -408,6 +440,7 @@ $("end-confirm").onclick = async () => {
 
 $("add").onclick = () => {
   $("n-err").textContent = "";
+  $("n-template").value = "";
   $("n-when").value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
     .toISOString().slice(0, 16);
   $("new").showModal();
@@ -426,6 +459,7 @@ $("n-save").onclick = async () => {
       direction: Number($("n-dir").value),
       happened_at: iso($("n-when").value),
       scheduled_for: iso($("n-sched").value),
+      template: $("n-template").value || null,
     }) });
     $("new").close();
     await loadTypes();

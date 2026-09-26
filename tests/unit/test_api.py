@@ -930,3 +930,32 @@ def test_every_built_screen_appears_in_the_menu(client: TestClient) -> None:
     assert served - linked == {"/login"}, (
         f"served but not in the menu: {served - linked - {'/login'}}"
     )
+
+
+@pytest.mark.fast
+def test_a_template_derived_rating_is_recorded_as_one() -> None:
+    """§20.5 stores ratings in sigma so the *annotator's* calibration becomes
+    knowable. A curve that cannot tell a chosen rating from one left where the
+    catalogue put it is measuring the catalogue."""
+    from tradelab.api.app import AnnotationRequest, NewEventRequest
+
+    annotation = AnnotationRequest(kind="judgement", strength=10, direction=-1,
+                                   from_template="war_us_iran")
+    assert annotation.from_template == "war_us_iran"
+    assert annotation.signed_sigma == -5.0
+
+    event = NewEventRequest(event_type="war", title="Escalation",
+                            template="war_us_iran")
+    assert event.template == "war_us_iran"
+
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    assert 'payload["from_template"] = body.from_template' in source
+
+
+@pytest.mark.fast
+def test_the_form_offers_the_catalogue(client: TestClient) -> None:
+    page = client.get("/news").text
+    assert 'id="n-template"' in page
+    assert "/api/event-templates" in page
+    # And says the suggestion is a starting point, where it is about to be used.
+    assert "not a verdict" in page

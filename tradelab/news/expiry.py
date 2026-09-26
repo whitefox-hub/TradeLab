@@ -58,6 +58,13 @@ ASSUMED_DECAY_HOURS: dict[str, float] = {
     "regulation": 336.0,
     "macro_release": 48.0,
     "unlock": 120.0,
+    "technology": 96.0,
+    "financial_crisis": 336.0,
+    "trade_policy": 240.0,
+    "monetary_policy": 96.0,
+    "exchange_collapse": 336.0,
+    "war": 336.0,
+    "peace": 336.0,
 }
 
 DEFAULT_DECAY_HOURS = 72.0

@@ -45,6 +45,7 @@ from tradelab.api.settings_rules import validate as validate_setting
 from tradelab.config import Settings
 from tradelab.news.expiry import resolve as resolve_expiry
 from tradelab.news.strength import SIGMA_BY_STRENGTH, describe, to_sigma
+from tradelab.news.templates import CATALOGUE as TEMPLATES
 
 #: Shared chrome and the screens live here. Mounted rather than served per file,
 #: so adding a stylesheet does not mean adding a route.
@@ -91,6 +92,13 @@ class NewEventRequest(BaseModel):
     happened_at: datetime | None = None
     scheduled_for: datetime | None = None
     title: str = Field(min_length=3, max_length=400)
+    #: Which catalogue entry this came from, if any.
+    #:
+    #: Recorded so a later calibration can tell a rating the operator chose from
+    #: one left at a suggestion. §20.5 stores ratings in sigma so the
+    #: *annotator's* calibration becomes knowable, and a curve that cannot
+    #: separate those is measuring the template file.
+    template: str | None = None
 
 
 class AnnotationRequest(BaseModel):
@@ -114,6 +122,10 @@ class AnnotationRequest(BaseModel):
     #: cannot be scored against one.
     strength: int | None = Field(default=None, ge=1, le=10)
     direction: int = Field(default=0, ge=-1, le=1)
+    #: True when the operator left the rating exactly where a template put it.
+    #: Not a lesser judgement, but a distinguishable one — a calibration built
+    #: from unmoved suggestions measures the catalogue.
+    from_template: str | None = None
     #: Accepted for callers that already work in sigma. When `strength` is given
     #: it wins, so the two cannot disagree in a stored row.
     rating: float | None = Field(default=None, ge=-10.0, le=10.0)
@@ -550,7 +562,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "INSERT INTO event_annotations (id, event_id, kind, available_at, "
             "payload, author) VALUES (:i, :e, 'correction', :a, CAST(:p AS jsonb), :u)"
         ), {"i": uuid.uuid4(), "e": event_id, "a": happened,
-            "p": json.dumps({"title": body.title, "entered_by_hand": True}),
+            "p": json.dumps({"title": body.title, "entered_by_hand": True,
+                             **({"template": body.template} if body.template else {})}),
             "u": user.id})
 
         audit(session, who.email, "event.add", "event", str(event_id),
@@ -652,6 +665,16 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         "partnership", "exchange_collapse", "ban", "fork", "mainnet",
         "listing_rumour", "treasury_purchase",
     )
+
+    @app.get("/api/event-templates")
+    def event_templates(who: Operator = operator) -> list[dict]:
+        """High-impact events with their shape and a suggested rating."""
+        return [
+            {"key": t.key, "label": t.label, "event_type": t.event_type,
+             "shape": t.shape, "strength": t.strength, "direction": t.direction,
+             "signed": t.signed, "market_wide": t.market_wide, "note": t.note}
+            for t in TEMPLATES
+        ]
 
     @app.get("/api/rating-scale")
     def rating_scale(who: Operator = operator) -> list[dict]:
@@ -760,6 +783,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # Kept alongside the sigma so a later reader can see what was
             # actually chosen, not only what it was converted to.
             payload["strength"] = body.strength
+        if body.from_template:
+            payload["from_template"] = body.from_template
         if body.note:
             payload["note"] = body.note
 
