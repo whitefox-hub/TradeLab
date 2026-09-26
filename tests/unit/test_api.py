@@ -869,5 +869,43 @@ def test_every_stage_states_the_gate_that_follows_it(client: TestClient) -> None
     """A funnel without its gates is a list of stages. What makes it a funnel is
     what has to be true to leave each one."""
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index('def pipeline('):source.index('def pipeline_screen(')]
+    # The stages block only. The inputs below it carry names too, and counting
+    # across both made this fail the moment they were added — which is the test
+    # being imprecise rather than the code being wrong.
+    block = source[source.index('stages = ['):source.index('inputs = [')]
     assert block.count('"gate":') == block.count('"name":')
+
+
+@pytest.mark.fast
+def test_the_pipeline_shows_its_inputs_and_whether_they_are_wired(
+    client: TestClient,
+) -> None:
+    """Parameters, news and macro feed the funnel from the side, and none of
+    them is connected yet. A diagram that draws an arrow which does not exist is
+    worse than one that leaves it out."""
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    block = source[source.index('inputs = ['):source.index('return {\n            "stages"')]
+    for key in ("parameters", "events", "macro"):
+        assert f'"key": "{key}"' in block
+    # Every input states whether it is connected, and an unconnected one says
+    # what is missing rather than leaving a blank.
+    assert block.count('"connected":') == block.count('"key":')
+    assert block.count('"missing":') == block.count('"key":')
+
+    page = client.get("/pipeline").text
+    assert "unwired" in page
+    assert "i.missing" in page
+
+
+@pytest.mark.fast
+def test_an_unwired_input_is_not_drawn_as_wired(client: TestClient) -> None:
+    """The claim this screen makes is about the system, so an input marked
+    connected has to be one something reads."""
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    block = source[source.index('inputs = ['):source.index('return {\n            "stages"')]
+    # All three are currently false. If one flips to true, the feature or study
+    # that reads it has to exist — which is what this assertion is here to
+    # force someone to check.
+    assert '"connected": True' not in block, (
+        "an input claims to be wired in; confirm something actually reads it"
+    )

@@ -1183,8 +1183,63 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             },
         ]
 
+        # Inputs that feed the funnel from the side rather than flowing down
+        # it. Each carries whether it is actually wired in, because two of them
+        # are not — and a diagram that draws an arrow which does not exist is
+        # worse than one that omits it.
+        inputs = [
+            {
+                "key": "parameters", "name": "Parameters",
+                "count": scalar("SELECT count(DISTINCT key) FROM app_settings"),
+                "unit": "settings",
+                "feeds": "Data · Screening",
+                "connected": False,
+                "note": "The research universe, the history window, the event "
+                        "retention. They are recorded, versioned and audited, "
+                        "and the study runner does not read them yet — it takes "
+                        "its universe and window from the call that starts it.",
+                "missing": "Nothing reads app_settings at study time, so "
+                           "changing one here does not change what the next "
+                           "campaign does.",
+            },
+            {
+                "key": "events", "name": "News and events",
+                "count": scalar("SELECT count(*) FROM events"),
+                "unit": "events",
+                "feeds": "Features",
+                "connected": False,
+                "note": "Recorded with their shape, direction and expiry, and "
+                        "their reactions measured in sigma. This is the raw "
+                        "material for the event reaction residual — observed "
+                        "minus expected — which is the one dataset a competitor "
+                        "cannot buy.",
+                "missing": "No feature reads them. The residual of §11.10 needs "
+                           "an expected-reaction model first, and §11.5 has not "
+                           "fitted one, so the corpus accumulates without "
+                           "entering a strategy.",
+                "detail": {
+                    "measured": scalar("SELECT count(*) FROM event_reactions"),
+                    "judged": scalar(
+                        "SELECT count(*) FROM event_annotations "
+                        "WHERE kind = 'judgement'"),
+                },
+            },
+            {
+                "key": "macro", "name": "Macro",
+                "count": scalar("SELECT count(*) FROM macro_series"),
+                "unit": "series",
+                "feeds": "Features · Regimes",
+                "connected": False,
+                "note": "Rates, yields, oil, gold and the dollar index, "
+                        "refreshed daily with the publication lag modelled so a "
+                        "backtest reads them when a subscriber could have.",
+                "missing": "No feature and no regime input reads them yet.",
+            },
+        ]
+
         return {
             "stages": stages,
+            "inputs": inputs,
             "events": scalar("SELECT count(*) FROM events"),
             "reactions": scalar("SELECT count(*) FROM event_reactions"),
             "judgements": scalar(

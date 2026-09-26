@@ -31,6 +31,21 @@
     font-variant-numeric:tabular-nums; }
   .counters b { font-size:19px; }
   .counters span { color:var(--muted); font-size:14px; }
+  .inputs { display:grid; gap:14px; margin:20px 0 8px;
+    grid-template-columns:repeat(auto-fit,minmax(310px,1fr)); }
+  .input { padding:18px 20px; border-radius:12px; background:var(--panel);
+    border:1px solid var(--line); }
+  .input.unwired { border-style:dashed; }
+  .input .head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  .input .name { font-size:16px; font-weight:640; }
+  .input .n { font-size:22px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .input .feeds { font-size:13px; color:var(--muted); margin-left:auto; }
+  .input .note { font-size:14px; line-height:1.55; margin-top:8px; color:var(--text); }
+  .wire { margin-top:10px; font-size:13.5px; padding-left:12px; line-height:1.5;
+    border-left:2px solid var(--warn); color:var(--warn); }
+  .wire.on { border-color:var(--up); color:var(--up); }
+  .sub-counts { font-size:13px; color:var(--muted); margin-top:8px;
+    font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
@@ -45,6 +60,13 @@
       if you can see which stage is holding, and a number that appears only on a
       screen is one nobody can reproduce.</p>
 
+    <h2>Inputs</h2>
+    <p class="hint">These feed the funnel from the side rather than flowing down
+      it. Each says whether it is actually wired in — a diagram that draws an
+      arrow which does not exist is worse than one that leaves it out.</p>
+    <div class="inputs" id="inputs"></div>
+
+    <h2>The funnel</h2>
     <div class="flow" id="flow"></div>
 
     <div class="loop">
@@ -68,6 +90,21 @@ const escape = (t) => (t || "").replace(/[<>&"]/g,
 
 async function load() {
   const data = await api("/api/pipeline");
+
+  $("inputs").innerHTML = (data.inputs || []).map((i) => `
+    <div class="input ${i.connected ? "" : "unwired"}">
+      <div class="head">
+        <span class="n">${i.count.toLocaleString()}</span>
+        <span class="name">${escape(i.name)}</span>
+        <span class="feeds">&#8594; ${escape(i.feeds)}</span>
+      </div>
+      <div class="note">${escape(i.note)}</div>
+      ${i.detail ? `<div class="sub-counts">
+        ${i.detail.measured} measured · ${i.detail.judged} judged</div>` : ""}
+      <div class="wire ${i.connected ? "on" : ""}">
+        ${i.connected ? "Wired in." : escape(i.missing)}
+      </div>
+    </div>`).join("");
 
   $("flow").innerHTML = data.stages.map((s, index) => `
     <div class="stage ${s.count ? "" : "empty-stage"}">
