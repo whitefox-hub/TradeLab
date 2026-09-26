@@ -33,6 +33,34 @@
     border-radius:12px; font-variant-numeric:tabular-nums; }
   .observed b { font-size:21px; }
   .observed span { color:var(--muted); font-size:14px; display:block; }
+
+  /* -- what the last run did with each step -- */
+  .run-head { margin-top:22px; padding:16px 20px; background:var(--panel);
+    border:1px solid var(--line); border-radius:12px; }
+  .run-head h2 { margin:0 0 6px; font-size:17px; font-weight:640; }
+  .run-head p { margin:0; font-size:14.5px; line-height:1.6; max-width:88ch; }
+  .run-head .none { color:var(--muted); }
+
+  .step.ran .n { border-color:var(--up); color:var(--up); }
+  .step.stopped { border-color:var(--warn); }
+  .step.stopped .n { border-color:var(--warn); color:var(--warn); }
+  .step.substituted .n { border-color:var(--accent); color:var(--accent); }
+  .step.never .n { opacity:.45; }
+  .step.never .name, .step.never .does { opacity:.6; }
+
+  .verdict { display:inline-block; margin-left:10px; padding:2px 9px;
+    border-radius:99px; font-size:12px; font-weight:650; letter-spacing:.04em;
+    text-transform:uppercase; border:1px solid currentColor; vertical-align:2px; }
+  .verdict.ran { color:var(--up); }
+  .verdict.stopped { color:var(--warn); }
+  .verdict.substituted { color:var(--accent); }
+  .verdict.never { color:var(--muted); }
+
+  .why { margin-top:11px; font-size:14px; line-height:1.6; max-width:82ch;
+    border-left:2px solid var(--warn); padding-left:13px; }
+  .why .k { color:var(--warn); font-weight:650; font-size:12.5px;
+    text-transform:uppercase; letter-spacing:.05em; display:block;
+    margin-bottom:3px; }
 </style>
 </head>
 <body>
@@ -49,6 +77,7 @@
       produces a visibly wrong answer rather than a plausible one.</p>
 
     <div class="observed" id="observed"></div>
+    <div class="run-head" id="run-head"></div>
 
     <div id="phases"></div>
   </main>
@@ -61,6 +90,67 @@ mount("/algorithm", { onReady: load });
 const escape = (t) => (t || "").replace(/[<>&"]/g,
   (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]);
 
+const pct = (v) => `${(Number(v) * 100).toFixed(2)}%`;
+
+// What the last run did with a given step. Derived from what the run reported
+// and from the counts, never asserted here: a screen that decides for itself
+// which steps ran is a screen that keeps saying so after they stop.
+function verdictFor(n, data) {
+  const run = data.last_run;
+  const steps = data.scenario_steps;
+  const execution = n > steps.gate;
+
+  if (execution) {
+    // Not "unreached" — never executed at all. The runs table is empty, and
+    // that is a measured fact rather than an inference from the last run.
+    return data.observed.runs === 0
+      ? { cls: "never", label: "never run",
+          note: "No execution run exists. These steps need a strategy promoted "
+              + "through §15, and none has been." }
+      : { cls: "ran", label: "has run" };
+  }
+  if (!run) return { cls: "never", label: "not yet run" };
+
+  if (steps.substituted.includes(n)) {
+    return { cls: "substituted", label: "substituted",
+             note: `A scenario run does not redo the search. It takes the `
+                 + `declared reference — ${escape(run.reference)} — which is `
+                 + `why it cannot report a strategy result.` };
+  }
+  if (n === run.reached_step) {
+    return { cls: "stopped", label: "stopped here", note: run.stopped_because };
+  }
+  if (steps.executed.includes(n) && n < run.reached_step) {
+    return { cls: "ran", label: "ran" };
+  }
+  return { cls: "never", label: "not reached" };
+}
+
+function renderRunHead(data) {
+  const run = data.last_run;
+  if (!run) {
+    $("run-head").innerHTML = '<h2>No run yet</h2><p class="none">Saving the '
+      + 'scenario on <a href="/market-sentiment">Market Sentiment</a> starts one. '
+      + 'Until then the sequence below is a description and not a record.</p>';
+    return;
+  }
+  const tilted = run.long_multiplier !== 1 || run.short_multiplier !== 1;
+  const d = run.conditioned.total_return - run.baseline.total_return;
+  $("run-head").innerHTML = `
+    <h2>Last run · step ${run.reached_step} of 13</h2>
+    <p>${escape(run.at.slice(0, 16).replace("T", " "))} ·
+      trend <strong>${escape(run.direction)}${
+        run.direction === "NORMAL" ? "" : " " + run.magnitude}</strong>,
+      sentiment ${run.sentiment} (${escape(run.sentiment_bucket)}),
+      set ${escape(run.source)}.
+      ${tilted
+        ? `Longs scaled to ${run.long_multiplier}× and shorts to `
+          + `${run.short_multiplier}×, moving the return by ${
+            d >= 0 ? "+" : ""}${pct(d)} on ${escape(run.reference)}.`
+        : `The trend is NORMAL, so both arms are the same run.`}
+    </p>`;
+}
+
 async function load() {
   const data = await api("/api/algorithm");
   const o = data.observed;
@@ -69,27 +159,35 @@ async function load() {
     [o.trials.toLocaleString(), "trials executed — each one deflates the next verdict"],
     [o.experiments, "experiments"],
     [`${o.passed} / ${o.verdicts}`, "verdicts passed"],
+    [o.scenario_runs, "scenario runs"],
     [o.runs, "execution runs"],
     [o.risk_events, "risk limits fired"],
   ].map(([n, k]) => `<div><b>${n}</b><span>${k}</span></div>`).join("");
 
+  renderRunHead(data);
+
   $("phases").innerHTML = data.phases.map((phase) => `
     <div class="phase">
       <h2>${escape(phase.phase)}</h2>
-      ${phase.steps.map((step, index) => `
-        <div class="step">
+      ${phase.steps.map((step, index) => {
+        const v = verdictFor(step.n, data);
+        return `
+        <div class="step ${v.cls}">
           <div class="n">${step.n}</div>
           <div>
-            <div class="name">${escape(step.name)}</div>
+            <div class="name">${escape(step.name)}<span class="verdict ${v.cls}">${
+              escape(v.label)}</span></div>
             <div class="does">${escape(step.does)}</div>
+            ${v.note ? `<div class="why"><span class="k">this run</span>${
+              v.note}</div>` : ""}
             <div class="rule"><span class="k">must hold</span>${escape(step.rule)}</div>
             ${step.cost
               ? `<div class="cost"><span class="k">what it cost to learn</span>${escape(step.cost)}</div>`
               : ""}
           </div>
         </div>
-        ${index < phase.steps.length - 1 ? '<div class="tick">&#8595;</div>' : ""}
-      `).join("")}
+        ${index < phase.steps.length - 1 ? '<div class="tick">&#8595;</div>' : ""}`;
+      }).join("")}
     </div>`).join("");
 }
 </script>

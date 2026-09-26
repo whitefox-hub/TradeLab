@@ -1152,6 +1152,15 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 session.rollback()
                 return 0
 
+        # The last scenario run, so the sequence shows where it got to rather
+        # than describing a path nobody has walked. Read back, never recomputed.
+        last = session.execute(sa.text(
+            "SELECT id, ran_at, trend_direction, trend_magnitude, sentiment, "
+            "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
+            "  bars, baseline, conditioned, reached_step, stopped_because, source "
+            "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT 1"
+        )).mappings().first()
+
         return {
             "phases": ALGORITHM,
             "observed": {
@@ -1160,8 +1169,35 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "verdicts": scalar("SELECT count(*) FROM validation_reports"),
                 "passed": scalar(
                     "SELECT count(*) FROM validation_reports WHERE verdict='pass'"),
+                "scenario_runs": scalar("SELECT count(*) FROM scenario_runs"),
+                # Execution runs, which is a different thing from a scenario
+                # run and is the count that says whether steps 8 to 13 have
+                # ever executed. Zero is the honest answer and the screen says
+                # so rather than leaving them looking merely unreached.
                 "runs": scalar("SELECT count(*) FROM runs"),
                 "risk_events": scalar("SELECT count(*) FROM risk_events"),
+            },
+            # Which steps a scenario run executes and which it substitutes a
+            # reference for. Declared by the runner rather than assumed by the
+            # screen, so the two cannot disagree about what ran.
+            "scenario_steps": {
+                "executed": list(scenario_run.EXECUTED_STEPS),
+                "substituted": list(scenario_run.SUBSTITUTED_STEPS),
+                "gate": scenario_run.GATE_STEP,
+            },
+            "last_run": None if last is None else {
+                "id": str(last["id"]), "at": last["ran_at"].isoformat(),
+                "direction": last["trend_direction"],
+                "magnitude": last["trend_magnitude"],
+                "sentiment": last["sentiment"],
+                "sentiment_bucket": last["sentiment_bucket"],
+                "long_multiplier": float(last["long_multiplier"]),
+                "short_multiplier": float(last["short_multiplier"]),
+                "reference": last["reference"], "bars": last["bars"],
+                "baseline": last["baseline"], "conditioned": last["conditioned"],
+                "reached_step": last["reached_step"],
+                "stopped_because": last["stopped_because"],
+                "source": last["source"],
             },
         }
 

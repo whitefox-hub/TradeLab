@@ -40,6 +40,20 @@ from tradelab.validation.power import assess
 #: Where the sequence gets to when the gate does not open. §15 is step 7, and
 #: steps 8 onward are execution.
 GATE_STEP = 7
+
+#: The steps a scenario run actually executes.
+#:
+#: Load bars, check power, evaluate, judge. Not a subset chosen for speed: a
+#: scenario run asks what a given set of conditions does to a known position,
+#: and the search is a different question.
+EXECUTED_STEPS = (1, 2, 6, 7)
+
+#: The steps it substitutes a declared reference for.
+#:
+#: Materialise, score, select — the search. A scenario run does not redo one,
+#: which is exactly why it cannot report a strategy result, and saying so here
+#: keeps the screen from showing them as having run.
+SUBSTITUTED_STEPS = (3, 4, 5)
 ARCHIVE = Path("data/parquet/ohlcv")
 REFERENCE = "buy-and-hold BTCUSDT 1m"
 TIMEFRAME = "1m"

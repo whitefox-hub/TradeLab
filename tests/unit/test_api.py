@@ -1258,3 +1258,49 @@ def test_the_algorithm_screen_no_longer_credits_news_for_the_sizing(
     # And it says what the tilt cannot do, since that is the part an operator
     # has to be able to read without opening the code.
     assert "it does not signal" in source
+
+
+@pytest.mark.fast
+def test_the_algorithm_screen_reports_a_run_rather_than_describing_a_path(
+    client: TestClient,
+) -> None:
+    """The sequence used to be a static list. Saving the scenario now runs it,
+    so the screen marks what each step actually did — and the marking is
+    derived, never asserted in the page.
+
+    A screen that decides for itself which steps ran keeps saying so after they
+    stop.
+    """
+    markup = client.get("/static/algorithm.html").text
+
+    assert "function verdictFor" in markup
+    # Which steps a scenario run executes comes from the runner, so the two
+    # cannot disagree about what ran.
+    assert "data.scenario_steps" in markup
+    assert "steps.substituted.includes(n)" in markup
+
+    # Execution steps are "never run", not "not reached": the runs table is
+    # empty and that is measured, not inferred from the last scenario run.
+    assert "data.observed.runs === 0" in markup
+    assert "never run" in markup
+
+    # And no step's status is hardcoded by number.
+    import re
+
+    assert not re.search(r'step\.n\s*(===|==)\s*\d', markup), (
+        "a step's status is decided by its number rather than by what happened")
+
+
+@pytest.mark.fast
+def test_the_runner_declares_which_steps_it_skips(client: TestClient) -> None:
+    """A scenario run does not redo the search — it takes a declared reference,
+    which is exactly why it cannot report a strategy result. Marking steps 3 to
+    5 as having run would make the screen claim one."""
+    from tradelab.scenario.run import EXECUTED_STEPS, GATE_STEP, SUBSTITUTED_STEPS
+
+    assert SUBSTITUTED_STEPS == (3, 4, 5)
+    assert GATE_STEP in EXECUTED_STEPS
+    assert not set(EXECUTED_STEPS) & set(SUBSTITUTED_STEPS), (
+        "a step is both executed and substituted")
+    # Every research step is accounted for, so none is silently unclassified.
+    assert set(EXECUTED_STEPS) | set(SUBSTITUTED_STEPS) == set(range(1, GATE_STEP + 1))
