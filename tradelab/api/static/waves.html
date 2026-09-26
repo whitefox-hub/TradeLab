@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waves — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .bar { display:flex; gap:10px; align-items:center; margin:18px 0 6px; }
+  .bar .spacer { flex:1; }
+
+  /* Asset first and widest, then the two fields that carry the meaning, then
+     the actions pinned right. Widths are nth-child rules, so a rule left
+     pointing past the last column silently squeezes a different one — they are
+     renumbered whenever a column moves. */
+  table.waves th:nth-child(1), table.waves td:nth-child(1) { width:34%; }
+  table.waves th:nth-child(2), table.waves td:nth-child(2) { width:16%; }
+  table.waves th:nth-child(3), table.waves td:nth-child(3) { width:34%; }
+  table.waves th:nth-child(4), table.waves td:nth-child(4) { width:16%; }
+
+  .asset { font-weight:640; font-size:16px; letter-spacing:.01em; }
+
+  .dir { display:inline-flex; align-items:center; gap:6px; font-weight:620;
+    font-size:14px; letter-spacing:.04em; }
+  .dir.up { color:var(--up); } .dir.down { color:var(--down); }
+
+  /* The number and a bar of it. Ten written as a numeral reads the same as one
+     until you look; the width does not. */
+  .mag { display:flex; align-items:center; gap:10px; }
+  .mag .n { font-variant-numeric:tabular-nums; font-weight:640; min-width:22px;
+    text-align:right; font-size:15px; }
+  .mag .track { flex:1; max-width:160px; height:8px; border-radius:99px;
+    background:var(--panel-2); overflow:hidden; }
+  .mag .fill { height:100%; border-radius:99px; }
+  .mag .fill.up { background:var(--up); } .mag .fill.down { background:var(--down); }
+
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:14px; padding:22px 24px; width:min(420px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { margin:0 0 4px; font-size:19px; font-weight:630; }
+  dialog p.sub { margin:0 0 4px; }
+  dialog label { display:block; margin:16px 0 6px; font-size:14px; color:var(--muted);
+    font-weight:560; }
+  dialog input, dialog select { width:100%; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .row2 label { margin-top:0; }
+  .actions-end { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; }
+
+  /* The two directions are the whole decision, so they are a pair of buttons
+     rather than a dropdown: a select hides the option you did not pick. */
+  .choice { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .choice button { font-weight:620; letter-spacing:.04em; }
+  .choice button[aria-pressed="true"].up {
+    background:color-mix(in srgb, var(--up) 20%, transparent);
+    border-color:var(--up); color:var(--up); }
+  .choice button[aria-pressed="true"].down {
+    background:color-mix(in srgb, var(--down) 20%, transparent);
+    border-color:var(--down); color:var(--down); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <main class="content">
+    <h1>Waves</h1>
+    <p class="sub">A wave is a standing market pressure: an asset, a direction and
+      how hard. The engine reads them as variables when testing indicators,
+      strategies and parameter combinations.</p>
+
+    <div class="bar">
+      <div class="spacer"></div>
+      <button class="primary" id="add">New wave</button>
+    </div>
+
+    <table class="waves">
+      <thead><tr>
+        <th>Asset</th><th>Direction</th><th>Magnitude</th><th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="hint">One wave per asset. A second wave on the same asset pointing the
+      other way is a contradiction rather than a richer description, and with no dates
+      there is nothing to order them by — so a repeat is an edit.</p>
+    <div class="err" id="err"></div>
+  </main>
+</div>
+
+<dialog id="edit">
+  <h2 id="edit-title">New wave</h2>
+  <p class="sub" id="edit-sub">Asset, direction, magnitude. Nothing else.</p>
+
+  <label for="w-asset">Asset</label>
+  <input id="w-asset" maxlength="20" placeholder="BTC" autocomplete="off">
+
+  <label>Direction</label>
+  <div class="choice">
+    <button type="button" class="up" id="w-up" aria-pressed="false">UP</button>
+    <button type="button" class="down" id="w-down" aria-pressed="false">DOWN</button>
+  </div>
+
+  <label for="w-mag">Magnitude</label>
+  <select id="w-mag"></select>
+
+  <div class="actions-end">
+    <button class="ghost" id="edit-cancel">Cancel</button>
+    <button class="primary" id="edit-save">Save</button>
+  </div>
+</dialog>
+
+<dialog id="confirm">
+  <h2>Delete this wave?</h2>
+  <p class="sub" id="confirm-sub"></p>
+  <div class="actions-end">
+    <button class="ghost" id="confirm-no">Keep it</button>
+    <button class="danger" id="confirm-yes">Delete</button>
+  </div>
+</dialog>
+
+<script src="/static/app.js"></script>
+<script>
+mount("/waves", { onReady: load });
+
+// 1 very weak, 5 medium, 10 extreme. The words are on the options rather than in
+// a legend underneath, so the scale is readable at the moment of choosing.
+const WORDS = { 1: "very weak", 5: "medium", 10: "extreme" };
+const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let editing = null;      // the wave being edited, or null when creating
+let direction = null;    // 'UP' | 'DOWN' | null
+
+function row(w) {
+  const d = w.direction === "UP" ? "up" : "down";
+  const arrow = w.direction === "UP" ? "▲" : "▼";
+  return `
+    <tr>
+      <td><span class="asset">${escape(w.asset)}</span></td>
+      <td><span class="dir ${d}">${arrow} ${escape(w.direction)}</span></td>
+      <td>
+        <div class="mag">
+          <span class="n">${w.magnitude}</span>
+          <span class="track"><span class="fill ${d}"
+            style="width:${w.magnitude * 10}%"></span></span>
+        </div>
+      </td>
+      <td class="actions">
+        <button class="accent" data-edit="${w.id}">Edit</button>
+        <button class="danger" data-del="${w.id}">Delete</button>
+      </td>
+    </tr>`;
+}
+
+function paintDirection() {
+  $("w-up").setAttribute("aria-pressed", String(direction === "UP"));
+  $("w-down").setAttribute("aria-pressed", String(direction === "DOWN"));
+}
+
+function openEditor(wave) {
+  editing = wave;
+  $("edit-title").textContent = wave ? `Edit ${wave.asset}` : "New wave";
+  $("edit-sub").textContent = wave
+    ? "An asset cannot be changed here — that is a delete and a create."
+    : "Asset, direction, magnitude. Nothing else.";
+  $("w-asset").value = wave ? wave.asset : "";
+  $("w-asset").disabled = Boolean(wave);
+  $("w-mag").value = String(wave ? wave.magnitude : 5);
+  direction = wave ? wave.direction : null;
+  paintDirection();
+  $("err").textContent = "";
+  $("edit").showModal();
+  if (!wave) $("w-asset").focus();
+}
+
+async function load() {
+  const waves = await api("/api/waves");
+  $("rows").innerHTML = waves.length
+    ? waves.map(row).join("")
+    : `<tr><td colspan="4" class="empty">No waves yet. A simulation with none runs
+        against an unpressured market, which is a scenario like any other — it is
+        just not the one you came here to set.</td></tr>`;
+
+  for (const b of $("rows").querySelectorAll("[data-edit]")) {
+    b.onclick = () => openEditor(waves.find((w) => w.id === b.dataset.edit));
+  }
+  for (const b of $("rows").querySelectorAll("[data-del]")) {
+    b.onclick = () => {
+      const wave = waves.find((w) => w.id === b.dataset.del);
+      $("confirm-sub").textContent =
+        `${wave.asset} · ${wave.direction} · magnitude ${wave.magnitude}. `
+        + "The row goes; the audit log keeps the record.";
+      $("confirm-yes").dataset.id = wave.id;
+      $("confirm").showModal();
+    };
+  }
+}
+
+$("w-mag").innerHTML = Array.from({ length: 10 }, (_, i) => i + 1).map((n) =>
+  `<option value="${n}">${n}${WORDS[n] ? ` — ${WORDS[n]}` : ""}</option>`).join("");
+
+$("add").onclick = () => openEditor(null);
+$("w-up").onclick = () => { direction = "UP"; paintDirection(); };
+$("w-down").onclick = () => { direction = "DOWN"; paintDirection(); };
+$("edit-cancel").onclick = () => $("edit").close();
+$("confirm-no").onclick = () => $("confirm").close();
+
+$("edit-save").onclick = async () => {
+  $("err").textContent = "";
+  const magnitude = Number($("w-mag").value);
+  // Checked here so the operator is told which field is wrong, and again by the
+  // API and by a database CHECK. The screen is the friendliest of the three and
+  // the only one that can be bypassed.
+  if (!direction) { $("err").textContent = "Pick a direction."; return; }
+  const asset = $("w-asset").value.trim().toUpperCase();
+  if (!editing && !/^[A-Z0-9]{1,20}$/.test(asset)) {
+    $("err").textContent = "Asset must be 1-20 letters or digits, e.g. BTC or SP500.";
+    return;
+  }
+  try {
+    if (editing) {
+      await api(`/api/waves/${editing.id}`, { method: "PATCH",
+        body: JSON.stringify({ direction, magnitude }) });
+    } else {
+      await api("/api/waves", { method: "POST",
+        body: JSON.stringify({ asset, direction, magnitude }) });
+    }
+    $("edit").close();
+    load();
+  } catch (e) { $("err").textContent = e.message; }
+};
+
+$("confirm-yes").onclick = async () => {
+  $("err").textContent = "";
+  try {
+    await api(`/api/waves/${$("confirm-yes").dataset.id}`, { method: "DELETE" });
+    $("confirm").close();
+    load();
+  } catch (e) { $("confirm").close(); $("err").textContent = e.message; }
+};
+</script>
+</body>
+</html>

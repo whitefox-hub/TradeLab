@@ -123,6 +123,11 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     # moment to ask whether the write belongs on this surface at all — which is
     # a question worth being forced to answer, and the reason three copies of
     # this assertion were collapsed into one after the third went stale.
+    # §20 adds waves, which are simulation inputs: an asset, a direction and a
+    # magnitude, with no date and no effect on anything running. They are the
+    # opposite of the write this test exists to forbid — a mode change alters
+    # what a live system does, and a wave alters only what a simulation is asked
+    # to assume.
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
         ("/api/events", "POST"),
@@ -133,6 +138,9 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
         ("/api/settings/{key}", "POST"),
+        ("/api/waves", "POST"),
+        ("/api/waves/{wave_id}", "DELETE"),
+        ("/api/waves/{wave_id}", "PATCH"),
     ], f"a new write route appeared: {writable}"
 
 
@@ -979,3 +987,194 @@ def test_the_api_reports_routine_rather_than_filtering_it(client: TestClient) ->
     source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
     assert '"routine": is_routine(row["event_type"])' in source
     assert "WHERE NOT routine" not in source
+
+
+# -- waves -------------------------------------------------------------------
+#
+# A wave is three fields: asset, direction, magnitude. The tests below are
+# mostly about what it is *not* allowed to become, because the pressure on a
+# screen like this is always to add one more field, and the fourth field is the
+# one nothing downstream reads.
+
+
+@pytest.mark.fast
+def test_every_wave_write_requires_a_session(client: TestClient) -> None:
+    body = {"asset": "BTC", "direction": "DOWN", "magnitude": 8}
+    wave = uuid.uuid4()
+    assert client.get("/api/waves").status_code == 401
+    assert client.post("/api/waves", json=body).status_code == 401
+    assert client.patch(f"/api/waves/{wave}", json={
+        "direction": "UP", "magnitude": 3}).status_code == 401
+    assert client.delete(f"/api/waves/{wave}").status_code == 401
+
+
+@pytest.mark.fast
+def test_a_magnitude_outside_one_to_ten_is_refused() -> None:
+    """The scale is defined as 1 to 10. A 70 is not a stronger wave, it is a
+    number the engine would read as seven times the defined extreme — and
+    nothing downstream could tell it from a real one."""
+    import pydantic
+
+    from tradelab.api.app import WaveRequest
+
+    for bad in (0, -1, 11, 70, 1000):
+        with pytest.raises(pydantic.ValidationError):
+            WaveRequest(asset="BTC", direction="DOWN", magnitude=bad)
+
+    for good in (1, 5, 10):
+        assert WaveRequest(asset="BTC", direction="UP", magnitude=good).magnitude == good
+
+
+@pytest.mark.fast
+def test_a_direction_other_than_up_or_down_is_refused() -> None:
+    import pydantic
+
+    from tradelab.api.app import WaveEdit, WaveRequest
+
+    for bad in ("SIDEWAYS", "up", "", "UP ", "NEUTRAL", "0"):
+        with pytest.raises(pydantic.ValidationError):
+            WaveRequest(asset="BTC", direction=bad, magnitude=5)
+        with pytest.raises(pydantic.ValidationError):
+            WaveEdit(direction=bad, magnitude=5)
+
+
+@pytest.mark.fast
+def test_an_asset_that_is_not_a_ticker_is_refused() -> None:
+    import pydantic
+
+    from tradelab.api.app import WaveRequest
+
+    for bad in ("", "BTC USDT", "BTC/USD", "<script>", "A" * 21, "БТЦ"):
+        with pytest.raises(pydantic.ValidationError):
+            WaveRequest(asset=bad, direction="UP", magnitude=5)
+
+    for good in ("BTC", "eth", "SP500"):
+        WaveRequest(asset=good, direction="UP", magnitude=5)
+
+
+@pytest.mark.fast
+def test_a_wave_carries_no_field_beyond_the_three() -> None:
+    """The spec is three fields and no fourth: no date, no duration, no note, no
+    link to a news event. Asserted against the model rather than trusted, because
+    the way a fourth field arrives is one request at a time.
+
+    `extra="forbid"` matters as much as the field list. Without it a client
+    sending `duration` gets a 201 and the value is dropped, which is how an
+    operator comes to believe a setting took effect.
+    """
+    import pydantic
+
+    from tradelab.api.app import WaveEdit, WaveRequest
+
+    assert set(WaveRequest.model_fields) == {"asset", "direction", "magnitude"}
+    # Asset is absent from the edit on purpose: moving a wave to another asset is
+    # a delete and a create, and doing it as an edit would slide one past the
+    # per-asset uniqueness.
+    assert set(WaveEdit.model_fields) == {"direction", "magnitude"}
+
+    for smuggled in ("happened_at", "duration_hours", "note", "event_id", "mode"):
+        with pytest.raises(pydantic.ValidationError):
+            WaveRequest(asset="BTC", direction="UP", magnitude=5, **{smuggled: 1})
+
+
+@pytest.mark.fast
+def test_the_waves_screen_asks_for_nothing_it_was_told_not_to(client: TestClient) -> None:
+    """The screen is the other half of the same refusal. A field the API would
+    reject is still worth not offering, because an input that errors on save is
+    an input the operator has already spent time filling in."""
+    page = client.get("/static/waves.html")
+    assert page.status_code == 200
+    markup = page.text
+    for absent in ('type="date"', 'type="datetime-local"', 'id="w-when"',
+                   'id="w-duration"', 'id="w-note"', 'id="w-source"'):
+        assert absent not in markup, f"the waves screen offers {absent}"
+    # And the three it must have.
+    for present in ('id="w-asset"', 'id="w-mag"', 'id="w-up"', 'id="w-down"'):
+        assert present in markup
+
+
+@pytest.mark.fast
+def test_deleting_a_wave_asks_first(client: TestClient) -> None:
+    """Delete is the one irreversible control on the screen. §20.3's confirmation
+    habit applies to it for the same reason it applies elsewhere: the cost of a
+    mis-click is not symmetric with the cost of a second click."""
+    markup = client.get("/static/waves.html").text
+    assert 'id="confirm"' in markup
+    assert 'id="confirm-yes"' in markup
+    assert "showModal" in markup
+
+
+@pytest.mark.integration
+def test_a_wave_round_trips_and_the_database_holds_the_scale(monkeypatch) -> None:
+    """The API's validation and the database's CHECK are two copies of one rule,
+    and only the second survives a client that is not this screen. Tested by
+    going around the API entirely — which is the only way to find out whether the
+    guarantee is in the schema or merely in the form.
+    """
+    import sqlalchemy as sa_
+
+    from tradelab.config import Settings
+
+    monkeypatch.setenv("TRADELAB_ADMIN_SALT", SALT)
+    monkeypatch.setenv("TRADELAB_ADMIN_HASH", hash_password(PASSWORD, SALT))
+    monkeypatch.setenv("TRADELAB_SESSION_SECRET", new_secret())
+    engine = sa_.create_engine(Settings().database_url)
+    client = TestClient(create_app(engine=engine))
+
+    with engine.begin() as conn:
+        conn.execute(sa_.text("DELETE FROM waves WHERE asset IN ('ZZPROBE','ZZOTHER')"))
+
+    email = engine.connect().execute(
+        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
+    if email is None:
+        pytest.skip("no operator row")
+    signed_in = client.post("/api/session", json={"email": email, "password": PASSWORD})
+    assert signed_in.status_code == 200, signed_in.text
+
+    created = client.post("/api/waves", json={
+        "asset": "zzprobe", "direction": "DOWN", "magnitude": 8})
+    assert created.status_code == 201, created.text
+    wave_id = created.json()["id"]
+    # Upper-cased on the way in, so BTC and btc cannot become two waves.
+    assert created.json()["asset"] == "ZZPROBE"
+
+    listed = {w["asset"]: w for w in client.get("/api/waves").json()}
+    assert listed["ZZPROBE"]["direction"] == "DOWN"
+    assert listed["ZZPROBE"]["magnitude"] == 8
+
+    # One per asset: a repeat is an edit, not a second row.
+    again = client.post("/api/waves", json={
+        "asset": "ZZPROBE", "direction": "UP", "magnitude": 2})
+    assert again.status_code == 409, again.text
+
+    edited = client.patch(f"/api/waves/{wave_id}",
+                          json={"direction": "UP", "magnitude": 3})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["direction"] == "UP"
+
+    # Around the API: the scale has to hold against a client that is not this one.
+    for bad in ("11", "0", "-1", "70"):
+        with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
+            conn.execute(sa_.text(
+                "INSERT INTO waves (id, asset, direction, magnitude) "
+                f"VALUES (gen_random_uuid(), 'ZZOTHER', 'UP', {bad})"))
+    with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
+        conn.execute(sa_.text(
+            "INSERT INTO waves (id, asset, direction, magnitude) VALUES "
+            "(gen_random_uuid(), 'ZZOTHER', 'SIDEWAYS', 5)"))
+    with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
+        conn.execute(sa_.text(
+            "INSERT INTO waves (id, asset, direction, magnitude) VALUES "
+            "(gen_random_uuid(), 'zzother', 'UP', 5)"))
+
+    assert client.delete(f"/api/waves/{wave_id}").status_code == 200
+    assert "ZZPROBE" not in {w["asset"] for w in client.get("/api/waves").json()}
+    assert client.delete(f"/api/waves/{wave_id}").status_code == 404
+
+    # The row is gone and the record is not: which pressures were being simulated
+    # last month is a question the log has to answer after the row is deleted.
+    with engine.begin() as conn:
+        actions = conn.execute(sa_.text(
+            "SELECT action FROM audit_log WHERE subject_id = :i ORDER BY id"
+        ), {"i": wave_id}).scalars().all()
+    assert actions == ["wave.add", "wave.edit", "wave.delete"]

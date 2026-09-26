@@ -167,6 +167,45 @@ class SettingRequest(BaseModel):
     rationale: str = Field(min_length=8)
 
 
+class WaveRequest(BaseModel):
+    """A market pressure to test under. Plan.md §20.
+
+    Three fields and no fourth. No date, no duration, no source: a wave is not a
+    record of something that happened, it is a condition a simulation runs
+    inside. Everything that *did* happen belongs in `events`, which is dated and
+    point-in-time, and blending the two would put an assumption into the corpus
+    a study reads.
+
+    `extra="forbid"` so a client that sends a field this does not have gets an
+    error instead of having it dropped. A silently ignored field is how an
+    operator comes to believe a setting took effect.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    #: Free text, upper-cased on the way in: BTC, ETH, SP500. Not validated
+    #: against the traded universe, because a wave on an asset this deployment
+    #: does not yet carry is a legitimate thing to want to simulate.
+    asset: str = Field(min_length=1, max_length=20, pattern="^[A-Za-z0-9]{1,20}$")
+    direction: str = Field(pattern="^(UP|DOWN)$")
+    #: 1 very weak, 5 medium, 10 extreme. Bounded here and again by a database
+    #: CHECK: a magnitude of 70 reaching the engine reads as seven times the
+    #: defined extreme, and nothing downstream would flag it as impossible.
+    magnitude: int = Field(ge=1, le=10)
+
+
+class WaveEdit(BaseModel):
+    """What an existing wave may be changed to. Asset is absent on purpose —
+    moving a wave to another asset is deleting one and creating another, and
+    doing it as an edit would slide a wave past the per-asset uniqueness the
+    database enforces."""
+
+    model_config = {"extra": "forbid"}
+
+    direction: str = Field(pattern="^(UP|DOWN)$")
+    magnitude: int = Field(ge=1, le=10)
+
+
 class ApprovalRequest(BaseModel):
     subject_kind: str = Field(pattern="^(strategy|capital_tier|gate_change)$")
     subject_id: uuid.UUID
@@ -1063,6 +1102,94 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def macro_screen() -> FileResponse:
         return FileResponse(STATIC / "macro.html")
 
+    # -- waves --------------------------------------------------------------
+
+    @app.get("/api/waves")
+    def list_waves(who: Operator = operator,
+                   session: Session = session_dep) -> list[dict[str, Any]]:
+        """Every wave, strongest first.
+
+        Ordered by magnitude rather than by asset: the screen exists to show
+        what is under the most pressure, and an alphabetical list buries a 10 on
+        SOL behind a 2 on ADA.
+        """
+        rows = session.execute(sa.text(
+            "SELECT id, asset, direction, magnitude FROM waves "
+            "ORDER BY magnitude DESC, asset ASC"
+        )).mappings().all()
+        return [{"id": str(r["id"]), "asset": r["asset"],
+                 "direction": r["direction"], "magnitude": r["magnitude"]}
+                for r in rows]
+
+    @app.post("/api/waves", status_code=status.HTTP_201_CREATED)
+    def add_wave(body: WaveRequest, who: Operator = operator,
+                 session: Session = session_dep) -> dict[str, Any]:
+        """Create a wave. One per asset; a second is a conflict, not a second row.
+
+        The duplicate is caught by asking the database rather than by checking
+        first and then inserting — between those two statements another request
+        can insert the same asset, and the unique constraint is the only thing
+        that holds under concurrency.
+        """
+        asset = body.asset.upper()
+        wave_id = uuid.uuid4()
+        try:
+            session.execute(sa.text(
+                "INSERT INTO waves (id, asset, direction, magnitude) "
+                "VALUES (:i, :a, :d, :m)"
+            ), {"i": wave_id, "a": asset, "d": body.direction, "m": body.magnitude})
+        except sa.exc.IntegrityError:
+            session.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{asset} already has a wave; edit it instead") from None
+
+        audit(session, who.email, "wave.add", "wave", str(wave_id),
+              {"asset": asset, "direction": body.direction,
+               "magnitude": body.magnitude})
+        session.commit()
+        return {"id": str(wave_id), "asset": asset,
+                "direction": body.direction, "magnitude": body.magnitude}
+
+    @app.patch("/api/waves/{wave_id}")
+    def edit_wave(wave_id: uuid.UUID, body: WaveEdit, who: Operator = operator,
+                  session: Session = session_dep) -> dict[str, Any]:
+        """Change a wave's direction or magnitude."""
+        row = session.execute(sa.text(
+            "UPDATE waves SET direction = :d, magnitude = :m "
+            "WHERE id = :i RETURNING asset"
+        ), {"i": wave_id, "d": body.direction, "m": body.magnitude}).first()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such wave")
+
+        audit(session, who.email, "wave.edit", "wave", str(wave_id),
+              {"asset": row.asset, "direction": body.direction,
+               "magnitude": body.magnitude})
+        session.commit()
+        return {"id": str(wave_id), "asset": row.asset,
+                "direction": body.direction, "magnitude": body.magnitude}
+
+    @app.delete("/api/waves/{wave_id}")
+    def remove_wave(wave_id: uuid.UUID, who: Operator = operator,
+                    session: Session = session_dep) -> dict[str, Any]:
+        """Delete a wave.
+
+        The row goes; the audit entry stays. A wave is an input someone chose,
+        so which pressures were being simulated last month is a question the log
+        has to be able to answer after the row is gone.
+        """
+        row = session.execute(sa.text(
+            "DELETE FROM waves WHERE id = :i RETURNING asset, direction, magnitude"
+        ), {"i": wave_id}).first()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such wave")
+
+        audit(session, who.email, "wave.delete", "wave", str(wave_id),
+              {"asset": row.asset, "direction": row.direction,
+               "magnitude": row.magnitude})
+        session.commit()
+        return {"id": str(wave_id), "deleted": True}
+
     # -- the screen ---------------------------------------------------------
 
     @app.get("/trade_lab", include_in_schema=False)
@@ -1086,6 +1213,17 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         """The entry point. Screens hang off the sidebar rather than being
         reached by knowing their paths."""
         return FileResponse(STATIC / "index.html")
+
+    @app.get("/waves", include_in_schema=False)
+    def waves_screen() -> FileResponse:
+        """Create, edit and delete market pressures. Plan.md §20.
+
+        Deliberately the plainest screen here. A wave has three fields and the
+        engine will read them as variables, so anything this page added — a
+        date, a note, a source — would be an input nothing consumes, and an
+        input nothing consumes is one an operator eventually believes in.
+        """
+        return FileResponse(STATIC / "waves.html")
 
     @app.get("/news", include_in_schema=False)
     def news_screen() -> FileResponse:

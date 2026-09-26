@@ -751,6 +751,38 @@ class Event(Base):
     )
 
 
+class Wave(Base):
+    """A standing market pressure, used as a variable in simulation. Plan.md §20.
+
+    Deliberately not an event. An event is individual, dated and point-in-time,
+    and `events` is the corpus a study reads; a wave has no date because it is
+    not a record of something that happened but a condition to test under. The
+    two are separate tables so neither can be read as the other.
+
+    One row per asset, enforced by the database. Two waves on the same asset
+    pointing opposite ways is a contradiction rather than a richer description,
+    and with no dates there is nothing to order them by — so a second one is an
+    edit, not an ambiguity a simulation has to resolve.
+    """
+
+    __tablename__ = "waves"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    asset: Mapped[str] = mapped_column(Text, nullable=False)
+    #: 'UP' for bullish pressure, 'DOWN' for bearish.
+    direction: Mapped[str] = mapped_column(Text, nullable=False)
+    #: 1 very weak, 5 medium, 10 extreme.
+    magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("direction IN ('UP','DOWN')", name="ck_waves_direction"),
+        CheckConstraint("magnitude BETWEEN 1 AND 10", name="ck_waves_magnitude"),
+        CheckConstraint("asset = upper(asset) AND asset ~ '^[A-Z0-9]{1,20}$'",
+                        name="ck_waves_asset"),
+        UniqueConstraint("asset", name="uq_waves_asset"),
+    )
+
+
 class ScheduleRevision(Base):
     """What the expected date was believed to be, and when. Plan.md §11.6.
 
