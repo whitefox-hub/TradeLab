@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 import numpy as np
 import pytest
 
-from tradelab.news.reaction import (
+from tradelab.events.reaction import (
     HORIZONS,
     BenchmarkKind,
     Window,

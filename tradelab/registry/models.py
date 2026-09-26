@@ -7,13 +7,14 @@ their own tables per §17; nothing here is speculative.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -751,35 +752,71 @@ class Event(Base):
     )
 
 
-class Wave(Base):
-    """A standing market pressure, used as a variable in simulation. Plan.md §20.
+class MarketWave(Base):
+    """The market's standing pressure, used as a variable in simulation. §20.
+
+    One row, always. The primary key is fixed at 1, so a second wave collides
+    rather than being created — the singleton is in the schema and not in the
+    API remembering to update instead of insert.
 
     Deliberately not an event. An event is individual, dated and point-in-time,
     and `events` is the corpus a study reads; a wave has no date because it is
-    not a record of something that happened but a condition to test under. The
-    two are separate tables so neither can be read as the other.
+    not a record of something that happened but a condition to test under.
 
-    One row per asset, enforced by the database. Two waves on the same asset
-    pointing opposite ways is a contradiction rather than a richer description,
-    and with no dates there is nothing to order them by — so a second one is an
-    edit, not an ambiguity a simulation has to resolve.
+    `NORMAL` is a real state and the default. A wave forced to be either UP or
+    DOWN makes the operator pick a lean they may not hold, and magnitude 0 is
+    the same fact as NORMAL — so the table refuses to hold the two apart.
     """
 
-    __tablename__ = "waves"
+    __tablename__ = "market_wave"
 
-    id: Mapped[uuid.UUID] = _uuid_pk()
-    asset: Mapped[str] = mapped_column(Text, nullable=False)
-    #: 'UP' for bullish pressure, 'DOWN' for bearish.
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    #: 'UP' bullish pressure, 'DOWN' bearish, 'NORMAL' neither.
     direction: Mapped[str] = mapped_column(Text, nullable=False)
-    #: 1 very weak, 5 medium, 10 extreme.
+    #: 0 when NORMAL; otherwise 1 very weak, 5 medium, 10 extreme.
     magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 
     __table_args__ = (
-        CheckConstraint("direction IN ('UP','DOWN')", name="ck_waves_direction"),
-        CheckConstraint("magnitude BETWEEN 1 AND 10", name="ck_waves_magnitude"),
-        CheckConstraint("asset = upper(asset) AND asset ~ '^[A-Z0-9]{1,20}$'",
-                        name="ck_waves_asset"),
-        UniqueConstraint("asset", name="uq_waves_asset"),
+        CheckConstraint("id = 1", name="ck_market_wave_singleton"),
+        CheckConstraint("direction IN ('UP','NORMAL','DOWN')",
+                        name="ck_market_wave_direction"),
+        CheckConstraint("magnitude BETWEEN 0 AND 10",
+                        name="ck_market_wave_magnitude"),
+        CheckConstraint("(direction = 'NORMAL') = (magnitude = 0)",
+                        name="ck_market_wave_normal_is_zero"),
+    )
+
+
+class SentimentReading(Base):
+    """A day's Fear and Greed value. Plan.md §11.4, §4.3.
+
+    Kept out of `macro_series` on purpose. That table is the point-in-time
+    corpus a study reads, and §11.4's objection to a bought index stands: the
+    method is not auditable and it is composed partly of data already collected
+    here. This is for looking at.
+
+    `available_at` is the day's own midnight, because the index publishes once a
+    day and does not revise. Stamping a backfilled 2018 reading with the moment
+    it was downloaded would make eight years of history look as though it
+    arrived today.
+    """
+
+    __tablename__ = "sentiment_readings"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    value: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    classification: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    ingest_time: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("value BETWEEN 0 AND 100", name="ck_sentiment_value"),
+        CheckConstraint(
+            "classification IN ('Extreme Fear','Fear','Neutral','Greed','Extreme Greed')",
+            name="ck_sentiment_classification"),
+        Index("ix_sentiment_available", "available_at"),
     )
 
 

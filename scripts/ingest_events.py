@@ -29,7 +29,7 @@ import sqlalchemy as sa
 
 from tradelab.collectors.binance import announcements as taxonomy
 from tradelab.config import Settings
-from tradelab.news.retention import retention_days
+from tradelab.events.retention import retention_days
 
 #: Which §11.7 shape each announcement class behaves as.
 #:

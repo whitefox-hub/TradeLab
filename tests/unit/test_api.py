@@ -100,48 +100,6 @@ def test_recording_an_approval_requires_a_session(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-@pytest.mark.fast
-def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
-    """§20.2, the most important thing in that section. Not a button, not a
-    dropdown, not a config field. Asserted against the route table so that
-    adding one later fails here rather than in production."""
-    app = client.app
-    writable = [
-        (route.path, method)
-        for route in app.routes
-        for method in getattr(route, "methods", set())
-        if method in {"POST", "PUT", "PATCH", "DELETE"}
-    ]
-    # The complete set of writes this surface is allowed, and the only place it
-    # is asserted. §20.1 permits approvals and lifecycle transitions; §20.5 adds
-    # event annotations and §20.6 a macro consensus, both of which are
-    # observations recorded with their time rather than computed figures.
-    # §12.4 adds operator settings, which reach only the column that does not
-    # define a strategy.
-    #
-    # Written as equality so a new route fails here. Extending this list is the
-    # moment to ask whether the write belongs on this surface at all — which is
-    # a question worth being forced to answer, and the reason three copies of
-    # this assertion were collapsed into one after the third went stale.
-    # §20 adds waves, which are simulation inputs: an asset, a direction and a
-    # magnitude, with no date and no effect on anything running. They are the
-    # opposite of the write this test exists to forbid — a mode change alters
-    # what a live system does, and a wave alters only what a simulation is asked
-    # to assume.
-    assert sorted(writable) == [
-        ("/api/approvals", "POST"),
-        ("/api/events", "POST"),
-        ("/api/events/{event_id}/annotations", "POST"),
-        ("/api/events/{event_id}/reopen", "POST"),
-        ("/api/events/{event_id}/resolve", "POST"),
-        ("/api/macro/releases/{release_id}/consensus", "POST"),
-        ("/api/session", "DELETE"),
-        ("/api/session", "POST"),
-        ("/api/settings/{key}", "POST"),
-        ("/api/waves", "POST"),
-        ("/api/waves/{wave_id}", "DELETE"),
-        ("/api/waves/{wave_id}", "PATCH"),
-    ], f"a new write route appeared: {writable}"
 
 
 @pytest.mark.fast
@@ -283,63 +241,12 @@ def test_the_cooling_off_is_enforced_by_the_database(monkeypatch) -> None:
                                {"i": operator_id})
 
 
-@pytest.mark.fast
-def test_the_news_screen_is_served_without_a_session(client: TestClient) -> None:
-    """The page itself is not sensitive; the data behind it is.
-
-    Gating the HTML too would mean the sign-in form lives somewhere else, and
-    every endpoint it calls already refuses without a session.
-    """
-    response = client.get("/news")
-    assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
 
 
-@pytest.mark.fast
-def test_the_screen_calls_only_endpoints_that_exist(client: TestClient) -> None:
-    """A screen referring to a route nobody implemented fails in the browser,
-    where nothing watches. Checked here instead."""
-    import re
-
-    page = client.get("/news").text
-    called = set(re.findall(r'["`](/api/[a-z/]+)', page))
-    known = {route.path for route in client.app.routes}
-    for path in called:
-        assert any(path == p or p.startswith(path) for p in known), f"{path} has no route"
 
 
-@pytest.mark.fast
-def test_the_rating_field_is_bounded_and_signed() -> None:
-    """Sigma, signed, and not an open range. A rating of 400 is a typo, and
-    storing it would move every calibration statistic computed from it."""
-    from tradelab.api.app import AnnotationRequest
-
-    assert AnnotationRequest(kind="judgement", rating=-2.5).rating == -2.5
-    with pytest.raises(ValueError):
-        AnnotationRequest(kind="judgement", rating=400)
-    with pytest.raises(ValueError):
-        AnnotationRequest(kind="judgement", confidence=1.4)
-    with pytest.raises(ValueError):
-        AnnotationRequest(kind="guess")
 
 
-@pytest.mark.fast
-def test_a_judgement_cannot_carry_a_caller_supplied_time() -> None:
-    """The model accepts `available_at` for corrections only; the handler
-    overrides it for judgements, and the database refuses a backdated one
-    regardless. Three layers, because this is the invariant that makes the
-    ratings worth collecting."""
-    from datetime import UTC, datetime, timedelta
-
-    from tradelab.api.app import AnnotationRequest
-
-    body = AnnotationRequest(kind="judgement", rating=1.0,
-                             available_at=datetime.now(UTC) - timedelta(days=5))
-    # The field parses, and the handler ignores it. Asserted on the source so a
-    # future edit that starts honouring it fails here.
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    assert 'datetime.now(UTC) if body.kind == "judgement"' in source
-    assert body.available_at is not None
 
 
 @pytest.mark.fast
@@ -377,15 +284,6 @@ def test_the_sidebar_only_links_screens_that_exist(client: TestClient) -> None:
         assert path in served, f"{path} is in the menu but not served"
 
 
-@pytest.mark.fast
-def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
-    """Three copies of the chrome drift, and the copy nobody looks at is the one
-    still styling a class that was renamed."""
-    for path, active in (("/home", "/home"), ("/news", "/news"), ("/macro", "/macro")):
-        page = client.get(path).text
-        assert '<link rel="stylesheet" href="/static/app.css">' in page, path
-        assert '<script src="/static/app.js"></script>' in page, path
-        assert f'mount("{active}"' in page, f"{path} does not mark itself active"
 
 
 @pytest.mark.fast
@@ -528,212 +426,36 @@ def test_a_locked_parameter_is_refused_by_name() -> None:
                    for item in allowed["locked"])
 
 
-@pytest.mark.fast
-def test_a_hand_entered_event_may_be_backdated_but_a_rating_may_not() -> None:
-    """The asymmetry that keeps the corpus honest.
-
-    An event happened when it happened, so entering one from last week is
-    legitimate. A *judgement* about it is created at the moment it is made, and
-    backdating that is hindsight with a form around it.
-    """
-    from datetime import UTC, datetime, timedelta
-
-    from tradelab.api.app import NewEventRequest
-
-    last_week = datetime.now(UTC) - timedelta(days=7)
-    event = NewEventRequest(event_type="hack", title="Bridge exploit",
-                            happened_at=last_week)
-    assert event.happened_at == last_week
-
-    # The annotation model accepts the field; the handler overrides it for a
-    # judgement and the database refuses a backdated one regardless.
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    assert 'datetime.now(UTC) if body.kind == "judgement"' in source
 
 
-@pytest.mark.fast
-def test_the_news_screen_separates_influencing_from_spent(client: TestClient) -> None:
-    """Tabs, not a date sort. §11.8's distinction is not about age."""
-    page = client.get("/news").text
-    assert 'id="tab-active"' in page and "Still influencing" in page
-    assert 'id="tab-expired"' in page and "No longer" in page
-    assert 'id="add"' in page, "no way to add news by hand"
-    # And the assumed horizon is labelled on screen rather than presented as
-    # measured.
-    assert "expiry_assumed" in page
 
 
-@pytest.mark.fast
-def test_row_actions_carry_their_weight_in_colour(client: TestClient) -> None:
-    """One advances the work, one ends something. A row of identical grey boxes
-    makes the operator read the labels every time, and read them wrong once."""
-    page = client.get("/news").text
-    assert 'rate.className = "accent"' in page
-    assert 'end.className = "danger"' in page
-
-    css = client.get("/static/app.css").text
-    assert "button.accent" in css and "button.danger" in css
 
 
-@pytest.mark.fast
-def test_the_tab_styling_does_not_capture_every_button_in_the_bar(
-    client: TestClient,
-) -> None:
-    """Written unscoped, it stripped the background off the Add button sitting
-    in the same bar and left it looking like a link."""
-    page = client.get("/news").text
-    assert ".tabs button.tab {" in page
-    assert ".tabs button {" not in page, "the rule is unscoped again"
-    # And the Add button keeps its own class rather than inheriting the tabs'.
-    assert '<button class="primary" id="add">' in page
 
 
-@pytest.mark.fast
-def test_ending_an_item_asks_first(client: TestClient) -> None:
-    """It moves the row to another tab and there is no undo on the screen, so it
-    is not a single click."""
-    page = client.get("/news").text
-    assert 'id="confirm-end"' in page
-    assert "openEnding(event)" in page
-    # The dialog says what the action means, not just "are you sure".
-    assert "supersession" in page.lower()
-    assert "no undo" in page.lower()
 
 
-@pytest.mark.fast
-def test_rating_is_offered_only_while_an_item_still_influences(
-    client: TestClient,
-) -> None:
-    """A judgement recorded after an item stopped influencing can never be
-    scored against a forward reaction, so it calibrates nothing — which is the
-    entire reason for collecting ratings in sigma."""
-    page = client.get("/news").text
-    rate_block = page[page.index("if (event.active) {"):page.index("} else if (event.reopenable)")]
-    assert "openRating(event)" in rate_block, "Rate moved out of the active branch"
-    assert "Still matters" not in rate_block
 
 
-@pytest.mark.fast
-def test_an_ending_that_cannot_be_reversed_says_so_in_the_row(
-    client: TestClient,
-) -> None:
-    """A control that is simply absent reads as an oversight; one that states
-    its reason reads as a decision."""
-    page = client.get("/news").text
-    assert "not_reopenable_because" in page
-    assert 'id="confirm-back"' in page
 
 
-@pytest.mark.fast
-def test_direction_is_recorded_but_labelled_as_an_input_not_a_signal() -> None:
-    """§11.7: what is tradeable is the residual, observed minus expected.
-
-    News that should have moved two sigma and moved a fifth of one is bearish
-    however bullish it read. A system trading sign directly trades the part
-    everyone has already priced, so the field exists as an input to the
-    expected-reaction model and the form says so.
-    """
-    from tradelab.api.app import NewEventRequest
-
-    assert NewEventRequest(event_type="war", title="Escalation", direction=-1).direction == -1
-    assert NewEventRequest(event_type="hack", title="Bridge exploit").direction == 0
-    with pytest.raises(ValueError):
-        NewEventRequest(event_type="hack", title="Bridge exploit", direction=5)
 
 
-@pytest.mark.fast
-def test_the_form_offers_the_fourth_shape_and_explains_it(client: TestClient) -> None:
-    page = client.get("/news").text
-    assert 'value="regime_shift"' in page
-    assert "replace the baseline" in page or "replaces the baseline" in page
-    # And the screen warns that sign is not the signal, where the operator is
-    # about to enter one.
-    assert "residual" in page
 
 
-@pytest.mark.fast
-def test_the_type_list_is_derived_rather_than_declared(client: TestClient) -> None:
-    """A hand-written list drifts from the data the moment something is seeded.
-
-    `halving` existed in three rows and in none of the suggestions, which is the
-    defect this replaced: the screen offered a set the corpus had outgrown.
-    """
-    page = client.get("/news").text
-    assert '<datalist id="types"></datalist>' in page, "the options are hardcoded again"
-    assert "loadTypes()" in page
-    assert "/api/events/types" in page
-    # The filter shows only types with rows — filtering to one with none returns
-    # an empty table and reads as a bug.
-    assert "types.filter((t) => t.in_use)" in page
 
 
-@pytest.mark.fast
-def test_a_type_added_by_hand_refreshes_the_lists(client: TestClient) -> None:
-    """Otherwise the operator adds a type and cannot then filter by it until a
-    reload, which reads as the entry having failed."""
-    page = client.get("/news").text
-    save_block = page[page.index('$("n-save").onclick'):]
-    assert "await loadTypes();" in save_block
 
 
-@pytest.mark.fast
-def test_the_headline_is_a_column_not_an_annotation() -> None:
-    """`event_annotations` holds what a *person* asserted about an event. A
-    collected headline is the event's own words, and filing it there would also
-    make every collected event look annotated — which is the flag the screen
-    uses to find the ones nobody has read."""
-    from tradelab.registry.models import Event
-
-    assert "headline" in Event.__table__.columns
 
 
-@pytest.mark.fast
-def test_rated_counts_judgements_only(client: TestClient) -> None:
-    """Once the ingestor writes titles, counting every annotation would mark the
-    whole corpus as read on the first import."""
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    assert "FILTER (WHERE n.kind = 'judgement')" in source
 
 
-@pytest.mark.fast
-def test_the_two_controls_cannot_disagree_in_a_stored_row() -> None:
-    """Direction and strength are separate controls now, which was a deliberate
-    change: the operator picks a direction instead of typing a minus sign.
-
-    The risk that split creates is a row holding two readings that contradict
-    each other, so the conversion happens in one place and `strength` wins over
-    any `rating` sent alongside it.
-    """
-    from tradelab.api.app import AnnotationRequest
-
-    assert AnnotationRequest(
-        kind="judgement", strength=4, direction=-1, rating=9.0
-    ).signed_sigma == -2.0
 
 
-@pytest.mark.fast
-def test_direction_still_follows_the_sign_of_what_is_stored(
-    client: TestClient,
-) -> None:
-    """The asset's expected direction is set from the sign of the stored sigma,
-    not from the form field, so the two can never come apart in the database."""
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    assert "UPDATE event_assets SET expected_direction" in source
-    assert "(rating > 0) - (rating < 0)" in source
-    assert 'if body.kind == "judgement" and rating is not None:' in source
-    # And no free-text note, which was neither scored nor read.
-    assert 'id="note"' not in client.get("/news").text
 
 
-@pytest.mark.fast
-def test_the_table_shows_the_headline_and_escapes_it(client: TestClient) -> None:
-    """Titles arrive from a venue feed, so they are untrusted text going into
-    innerHTML."""
-    page = client.get("/news").text
-    assert "<th>Direction</th>" in page
-    assert "event.headline" in page
-    assert "const escape = (text)" in page
-    assert "escape(event.headline)" in page
 
 
 @pytest.mark.fast
@@ -747,13 +469,6 @@ def test_the_content_area_is_not_capped(client: TestClient) -> None:
     assert ".hint { font-size:14px; color:var(--muted); margin:10px 0 0; max-width:74ch;" in css
 
 
-@pytest.mark.fast
-def test_the_row_actions_sit_on_one_line(client: TestClient) -> None:
-    """The column sized itself from its contents and wrapped the two buttons
-    onto separate lines, which reads as two rows of one control."""
-    css = client.get("/static/app.css").text
-    assert "td.actions { white-space:nowrap;" in css
-    assert 'cell.className = "actions";' in client.get("/news").text
 
 
 @pytest.mark.fast
@@ -809,37 +524,8 @@ def test_experiments_states_why_tier_a_is_absent(client: TestClient) -> None:
     assert "Tier A is not here" in page
 
 
-@pytest.mark.fast
-def test_the_rating_is_picked_on_a_scale_and_stored_in_sigma() -> None:
-    """Two controls, no negative number typed, and the stored unit unchanged."""
-    from tradelab.api.app import AnnotationRequest
-
-    bearish = AnnotationRequest(kind="judgement", strength=6, direction=-1)
-    assert bearish.signed_sigma == -3.0
-
-    bullish = AnnotationRequest(kind="judgement", strength=6, direction=1)
-    assert bullish.signed_sigma == 3.0
-
-    # A caller already working in sigma is still accepted.
-    direct = AnnotationRequest(kind="judgement", rating=-2.5)
-    assert direct.signed_sigma == -2.5
-
-    # And strength wins when both are given, so a stored row cannot hold two
-    # readings that disagree.
-    both = AnnotationRequest(kind="judgement", strength=2, direction=1, rating=-9.0)
-    assert both.signed_sigma == 1.0
 
 
-@pytest.mark.fast
-def test_the_dialog_offers_the_scale_from_the_server(client: TestClient) -> None:
-    """Served rather than written into the page, so the options cannot drift
-    from what the endpoint stores."""
-    page = client.get("/news").text
-    assert 'id="strength"' in page and 'id="direction"' in page
-    assert "/api/rating-scale" in page
-    assert 'id="rating"' not in page, "the free-number input is back"
-    # The readout shows the sigma that will be stored.
-    assert "sigma" in page
 
 
 
@@ -912,81 +598,14 @@ def test_the_chrome_is_revalidated_rather_than_cached(client: TestClient) -> Non
     assert client.get("/algorithm").status_code == 200
 
 
-@pytest.mark.fast
-def test_every_built_screen_appears_in_the_menu(client: TestClient) -> None:
-    """A route that serves a page and is not linked is a page nobody finds."""
-    import re
-
-    menu = client.get("/static/app.js").text
-    linked = set(re.findall(r'href: "(/[a-z_-]+)"', menu))
-
-    # A screen is a route whose handler returns a FileResponse. Checked that way
-    # rather than by listing exceptions: an exception list needs editing every
-    # time something is added, and the edit that gets forgotten is the one that
-    # lets an unlinked page through.
-    served = set()
-    for route in client.app.routes:
-        annotation = getattr(getattr(route, "endpoint", None), "__annotations__", {})
-        # The string, not the class: app.py uses `from __future__ import
-        # annotations`, so every annotation there is already a string.
-        if annotation.get("return") in (FileResponse, "FileResponse"):
-            served.add(route.path)
-
-    assert served, "no screens found; the check is not looking at anything"
-    # /login is deliberately absent from the menu: it is where an unauthenticated
-    # visitor is sent, not somewhere to navigate to.
-    assert served - linked == {"/login"}, (
-        f"served but not in the menu: {served - linked - {'/login'}}"
-    )
 
 
-@pytest.mark.fast
-def test_a_template_derived_rating_is_recorded_as_one() -> None:
-    """§20.5 stores ratings in sigma so the *annotator's* calibration becomes
-    knowable. A curve that cannot tell a chosen rating from one left where the
-    catalogue put it is measuring the catalogue."""
-    from tradelab.api.app import AnnotationRequest, NewEventRequest
-
-    annotation = AnnotationRequest(kind="judgement", strength=10, direction=-1,
-                                   from_template="war_us_iran")
-    assert annotation.from_template == "war_us_iran"
-    assert annotation.signed_sigma == -5.0
-
-    event = NewEventRequest(event_type="war", title="Escalation",
-                            template="war_us_iran")
-    assert event.template == "war_us_iran"
-
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    assert 'payload["from_template"] = body.from_template' in source
 
 
-@pytest.mark.fast
-def test_the_form_offers_the_catalogue(client: TestClient) -> None:
-    page = client.get("/news").text
-    assert 'id="n-template"' in page
-    assert "/api/event-templates" in page
-    # And says the suggestion is a starting point, where it is about to be used.
-    assert "not a verdict" in page
 
 
-@pytest.mark.fast
-def test_routine_events_are_folded_but_counted(client: TestClient) -> None:
-    """Silently dropping rows is how a screen starts lying, so the count stays
-    visible even when the rows do not."""
-    page = client.get("/news").text
-    assert 'id="show-routine"' in page
-    assert "routine hidden" in page
-    assert "e.routine" in page
 
 
-@pytest.mark.fast
-def test_the_api_reports_routine_rather_than_filtering_it(client: TestClient) -> None:
-    """The decision of what to show belongs to the screen. An endpoint that
-    filtered would make the rows unreachable for anything else that reads it —
-    a study, an export, a later screen."""
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    assert '"routine": is_routine(row["event_type"])' in source
-    assert "WHERE NOT routine" not in source
 
 
 # -- waves -------------------------------------------------------------------
@@ -997,19 +616,165 @@ def test_the_api_reports_routine_rather_than_filtering_it(client: TestClient) ->
 # one nothing downstream reads.
 
 
-@pytest.mark.fast
-def test_every_wave_write_requires_a_session(client: TestClient) -> None:
-    body = {"asset": "BTC", "direction": "DOWN", "magnitude": 8}
-    wave = uuid.uuid4()
-    assert client.get("/api/waves").status_code == 401
-    assert client.post("/api/waves", json=body).status_code == 401
-    assert client.patch(f"/api/waves/{wave}", json={
-        "direction": "UP", "magnitude": 3}).status_code == 401
-    assert client.delete(f"/api/waves/{wave}").status_code == 401
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# -- what this surface is allowed to do --------------------------------------
 
 
 @pytest.mark.fast
-def test_a_magnitude_outside_one_to_ten_is_refused() -> None:
+def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
+    """§20.2, the most important thing in that section. Not a button, not a
+    dropdown, not a config field. Asserted against the route table so that
+    adding one later fails here rather than in production."""
+    app = client.app
+    writable = [
+        (route.path, method)
+        for route in app.routes
+        for method in getattr(route, "methods", set())
+        if method in {"POST", "PUT", "PATCH", "DELETE"}
+    ]
+    # The complete set of writes this surface is allowed, and the only place it
+    # is asserted. §20.1 permits approvals and lifecycle transitions; §20.6 adds
+    # a macro consensus, an observation recorded with its time rather than a
+    # computed figure. §12.4 adds operator settings, which reach only the column
+    # that does not define a strategy. §20 adds the wave, which changes what a
+    # simulation is asked to assume and nothing that is running.
+    #
+    # The event writes are gone with the news screen. They were the largest
+    # group here, and their removal is the reason this list is worth keeping as
+    # an equality: a write that no longer has a caller is a write that should no
+    # longer have a route.
+    #
+    # Written as equality so a new route fails here. Extending this list is the
+    # moment to ask whether the write belongs on this surface at all.
+    assert sorted(writable) == [
+        ("/api/approvals", "POST"),
+        ("/api/macro/releases/{release_id}/consensus", "POST"),
+        ("/api/session", "DELETE"),
+        ("/api/session", "POST"),
+        ("/api/settings/{key}", "POST"),
+        ("/api/wave", "PUT"),
+    ], f"a new write route appeared: {writable}"
+
+
+def _screens(client: TestClient) -> set[str]:
+    """Every route whose handler returns a page.
+
+    Found by return annotation rather than by a hand-written list: a list needs
+    editing whenever a screen is added, and the edit that gets forgotten is the
+    one that lets an unchecked page through.
+    """
+    served = set()
+    for route in client.app.routes:
+        annotation = getattr(getattr(route, "endpoint", None), "__annotations__", {})
+        # The string, not the class: app.py uses `from __future__ import
+        # annotations`, so every annotation there is already a string.
+        if annotation.get("return") in (FileResponse, "FileResponse"):
+            served.add(route.path)
+    assert served, "no screens found; the check is not looking at anything"
+    return served
+
+
+@pytest.mark.fast
+def test_every_screen_calls_only_endpoints_that_exist(client: TestClient) -> None:
+    """A screen referring to a route nobody implemented fails in the browser,
+    where nothing watches. Checked here instead.
+
+    Over every screen rather than one named page. The previous version checked
+    /news alone, so when /news was deleted the check went with it and the other
+    eight screens were never covered at all.
+    """
+    import re
+
+    for path in _screens(client):
+        page = client.get(path).text
+        called = set(re.findall(r'["`](/api/[a-z/-]+)', page))
+        known = {route.path for route in client.app.routes}
+        for endpoint in called:
+            assert any(endpoint == p or p.startswith(endpoint) for p in known), (
+                f"{path} calls {endpoint}, which has no route")
+
+
+@pytest.mark.fast
+def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
+    """Three copies of the chrome drift, and the copy nobody looks at is the one
+    still styling a class that was renamed.
+
+    Over every screen, for the same reason as above: the hand-written list this
+    replaced named three pages out of nine.
+    """
+    for path in _screens(client) - {"/login"}:
+        page = client.get(path).text
+        assert '<link rel="stylesheet" href="/static/app.css">' in page, path
+        assert '<script src="/static/app.js"></script>' in page, path
+        assert f'mount("{path}"' in page, f"{path} does not mark itself active"
+
+
+# -- the wave ----------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_reading_or_setting_the_wave_requires_a_session(client: TestClient) -> None:
+    assert client.get("/api/wave").status_code == 401
+    assert client.put("/api/wave", json={
+        "direction": "DOWN", "magnitude": 8}).status_code == 401
+    assert client.get("/api/sentiment").status_code == 401
+
+
+@pytest.mark.fast
+def test_there_is_no_route_that_creates_a_second_wave(client: TestClient) -> None:
+    """One wave. A POST or a DELETE on it would imply otherwise, and an API that
+    implies a second wave is one a client will eventually try to make."""
+    paths = {route.path for route in client.app.routes}
+    assert "/api/wave" in paths
+    assert not any(p.startswith("/api/waves") for p in paths)
+
+    methods = {
+        method
+        for route in client.app.routes
+        if getattr(route, "path", None) == "/api/wave"
+        for method in getattr(route, "methods", set())
+    }
+    assert methods == {"GET", "PUT"}, f"the wave answers to {methods}"
+
+
+@pytest.mark.fast
+def test_normal_and_magnitude_zero_are_the_same_fact() -> None:
+    """A NORMAL wave of magnitude 7 reads downstream as pressure with no
+    direction, and a DOWN wave of 0 as direction with no pressure. Both are
+    states the engine would have to invent a meaning for, so neither is
+    representable — here, and again in a database CHECK."""
+    import pydantic
+
+    from tradelab.api.app import WaveRequest
+
+    assert WaveRequest(direction="NORMAL", magnitude=0).magnitude == 0
+    for good in (1, 5, 10):
+        assert WaveRequest(direction="UP", magnitude=good).magnitude == good
+        assert WaveRequest(direction="DOWN", magnitude=good).magnitude == good
+
+    for direction, magnitude in (("NORMAL", 7), ("NORMAL", 1),
+                                 ("UP", 0), ("DOWN", 0)):
+        with pytest.raises(pydantic.ValidationError):
+            WaveRequest(direction=direction, magnitude=magnitude)
+
+
+@pytest.mark.fast
+def test_a_magnitude_outside_the_scale_is_refused() -> None:
     """The scale is defined as 1 to 10. A 70 is not a stronger wave, it is a
     number the engine would read as seven times the defined extreme — and
     nothing downstream could tell it from a real one."""
@@ -1017,164 +782,158 @@ def test_a_magnitude_outside_one_to_ten_is_refused() -> None:
 
     from tradelab.api.app import WaveRequest
 
-    for bad in (0, -1, 11, 70, 1000):
+    for bad in (-1, 11, 70, 1000):
         with pytest.raises(pydantic.ValidationError):
-            WaveRequest(asset="BTC", direction="DOWN", magnitude=bad)
-
-    for good in (1, 5, 10):
-        assert WaveRequest(asset="BTC", direction="UP", magnitude=good).magnitude == good
+            WaveRequest(direction="UP", magnitude=bad)
 
 
 @pytest.mark.fast
-def test_a_direction_other_than_up_or_down_is_refused() -> None:
-    import pydantic
-
-    from tradelab.api.app import WaveEdit, WaveRequest
-
-    for bad in ("SIDEWAYS", "up", "", "UP ", "NEUTRAL", "0"):
-        with pytest.raises(pydantic.ValidationError):
-            WaveRequest(asset="BTC", direction=bad, magnitude=5)
-        with pytest.raises(pydantic.ValidationError):
-            WaveEdit(direction=bad, magnitude=5)
-
-
-@pytest.mark.fast
-def test_an_asset_that_is_not_a_ticker_is_refused() -> None:
-    import pydantic
-
-    from tradelab.api.app import WaveRequest
-
-    for bad in ("", "BTC USDT", "BTC/USD", "<script>", "A" * 21, "БТЦ"):
-        with pytest.raises(pydantic.ValidationError):
-            WaveRequest(asset=bad, direction="UP", magnitude=5)
-
-    for good in ("BTC", "eth", "SP500"):
-        WaveRequest(asset=good, direction="UP", magnitude=5)
-
-
-@pytest.mark.fast
-def test_a_wave_carries_no_field_beyond_the_three() -> None:
-    """The spec is three fields and no fourth: no date, no duration, no note, no
-    link to a news event. Asserted against the model rather than trusted, because
-    the way a fourth field arrives is one request at a time.
+def test_the_wave_carries_no_field_beyond_the_two() -> None:
+    """Two fields and no third: no asset, because there is one wave and it is
+    the market's; no date, because a wave is a condition to test under and not a
+    record of something that happened.
 
     `extra="forbid"` matters as much as the field list. Without it a client
-    sending `duration` gets a 201 and the value is dropped, which is how an
+    sending `asset` gets a 200 and the value is dropped, which is how an
     operator comes to believe a setting took effect.
     """
     import pydantic
 
-    from tradelab.api.app import WaveEdit, WaveRequest
+    from tradelab.api.app import WaveRequest
 
-    assert set(WaveRequest.model_fields) == {"asset", "direction", "magnitude"}
-    # Asset is absent from the edit on purpose: moving a wave to another asset is
-    # a delete and a create, and doing it as an edit would slide one past the
-    # per-asset uniqueness.
-    assert set(WaveEdit.model_fields) == {"direction", "magnitude"}
-
-    for smuggled in ("happened_at", "duration_hours", "note", "event_id", "mode"):
+    assert set(WaveRequest.model_fields) == {"direction", "magnitude"}
+    for smuggled in ("asset", "happened_at", "duration_hours", "note", "mode"):
         with pytest.raises(pydantic.ValidationError):
-            WaveRequest(asset="BTC", direction="UP", magnitude=5, **{smuggled: 1})
+            WaveRequest(direction="UP", magnitude=5, **{smuggled: 1})
 
 
 @pytest.mark.fast
-def test_the_waves_screen_asks_for_nothing_it_was_told_not_to(client: TestClient) -> None:
+def test_the_screen_offers_the_three_states_and_nothing_dated(
+    client: TestClient,
+) -> None:
     """The screen is the other half of the same refusal. A field the API would
     reject is still worth not offering, because an input that errors on save is
-    an input the operator has already spent time filling in."""
-    page = client.get("/static/waves.html")
-    assert page.status_code == 200
-    markup = page.text
-    for absent in ('type="date"', 'type="datetime-local"', 'id="w-when"',
-                   'id="w-duration"', 'id="w-note"', 'id="w-source"'):
-        assert absent not in markup, f"the waves screen offers {absent}"
-    # And the three it must have.
-    for present in ('id="w-asset"', 'id="w-mag"', 'id="w-up"', 'id="w-down"'):
-        assert present in markup
+    one the operator has already spent time filling in."""
+    markup = client.get("/static/market_sentiment.html").text
+    for present in ('id="w-up"', 'id="w-normal"', 'id="w-down"', 'id="w-mag"'):
+        assert present in markup, f"the screen is missing {present}"
+    for absent in ('type="date"', 'type="datetime-local"', 'id="w-asset"',
+                   'id="w-note"', 'id="w-when"'):
+        assert absent not in markup, f"the screen offers {absent}"
+
+
+# -- the index ---------------------------------------------------------------
 
 
 @pytest.mark.fast
-def test_deleting_a_wave_asks_first(client: TestClient) -> None:
-    """Delete is the one irreversible control on the screen. §20.3's confirmation
-    habit applies to it for the same reason it applies elsewhere: the cost of a
-    mis-click is not symmetric with the cost of a second click."""
-    markup = client.get("/static/waves.html").text
-    assert 'id="confirm"' in markup
-    assert 'id="confirm-yes"' in markup
-    assert "showModal" in markup
+def test_sentiment_is_kept_out_of_the_point_in_time_corpus() -> None:
+    """§11.4 argues against a bought index and is right about why: the method is
+    not auditable and it is composed partly of data already collected here. It
+    is stored so it can be looked at, in its own table — `macro_series` is what a
+    study reaches for, and this deliberately does not join it."""
+    from tradelab.registry.models import MacroSeries, SentimentReading
+
+    assert SentimentReading.__tablename__ == "sentiment_readings"
+    assert SentimentReading.__tablename__ != MacroSeries.__tablename__
+    # Every foreign key on the sentiment table, of which there are none: a join
+    # into the corpus is how a vendor number ends up inside a backtest.
+    assert not list(SentimentReading.__table__.foreign_keys)
 
 
-@pytest.mark.integration
-def test_a_wave_round_trips_and_the_database_holds_the_scale(monkeypatch) -> None:
-    """The API's validation and the database's CHECK are two copies of one rule,
-    and only the second survives a client that is not this screen. Tested by
-    going around the API entirely — which is the only way to find out whether the
-    guarantee is in the schema or merely in the form.
-    """
-    import sqlalchemy as sa_
+@pytest.mark.fast
+def test_a_reading_is_available_on_its_own_day_not_when_it_was_downloaded() -> None:
+    """The index publishes one value per UTC day at that day's midnight. Stamping
+    a backfilled 2018 reading with the moment it was downloaded would make eight
+    years of history look as though it arrived today, and every study filtering
+    on availability would then see none of it."""
+    from datetime import UTC, datetime
 
-    from tradelab.config import Settings
+    from tradelab.collectors.sentiment import Reading
 
-    monkeypatch.setenv("TRADELAB_ADMIN_SALT", SALT)
-    monkeypatch.setenv("TRADELAB_ADMIN_HASH", hash_password(PASSWORD, SALT))
-    monkeypatch.setenv("TRADELAB_SESSION_SECRET", new_secret())
-    engine = sa_.create_engine(Settings().database_url)
-    client = TestClient(create_app(engine=engine))
+    day = datetime(2018, 2, 1, tzinfo=UTC)
+    assert Reading(day=day, value=30, classification="Fear").available_at == day
 
-    with engine.begin() as conn:
-        conn.execute(sa_.text("DELETE FROM waves WHERE asset IN ('ZZPROBE','ZZOTHER')"))
 
-    email = engine.connect().execute(
-        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
-    if email is None:
-        pytest.skip("no operator row")
-    signed_in = client.post("/api/session", json={"email": email, "password": PASSWORD})
-    assert signed_in.status_code == 200, signed_in.text
+@pytest.mark.fast
+def test_an_unknown_classification_or_value_is_refused_at_the_boundary() -> None:
+    """Held in the collector as well as in a database CHECK, so a sixth band
+    appearing upstream fails while the payload is still there to look at rather
+    than as a constraint violation somewhere later."""
+    import httpx
 
-    created = client.post("/api/waves", json={
-        "asset": "zzprobe", "direction": "DOWN", "magnitude": 8})
-    assert created.status_code == 201, created.text
-    wave_id = created.json()["id"]
-    # Upper-cased on the way in, so BTC and btc cannot become two waves.
-    assert created.json()["asset"] == "ZZPROBE"
+    from tradelab.collectors.sentiment import CLASSIFICATIONS, fetch
 
-    listed = {w["asset"]: w for w in client.get("/api/waves").json()}
-    assert listed["ZZPROBE"]["direction"] == "DOWN"
-    assert listed["ZZPROBE"]["magnitude"] == 8
+    assert len(CLASSIFICATIONS) == 5
 
-    # One per asset: a repeat is an edit, not a second row.
-    again = client.post("/api/waves", json={
-        "asset": "ZZPROBE", "direction": "UP", "magnitude": 2})
-    assert again.status_code == 409, again.text
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [
+            {"value": "50", "value_classification": "Cautiously Optimistic",
+             "timestamp": "1517443200"}], "metadata": {"error": None}})
 
-    edited = client.patch(f"/api/waves/{wave_id}",
-                          json={"direction": "UP", "magnitude": 3})
-    assert edited.status_code == 200, edited.text
-    assert edited.json()["direction"] == "UP"
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http, \
+            pytest.raises(ValueError, match="unknown classification"):
+        fetch(client=http)
 
-    # Around the API: the scale has to hold against a client that is not this one.
-    for bad in ("11", "0", "-1", "70"):
-        with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
-            conn.execute(sa_.text(
-                "INSERT INTO waves (id, asset, direction, magnitude) "
-                f"VALUES (gen_random_uuid(), 'ZZOTHER', 'UP', {bad})"))
-    with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
-        conn.execute(sa_.text(
-            "INSERT INTO waves (id, asset, direction, magnitude) VALUES "
-            "(gen_random_uuid(), 'ZZOTHER', 'SIDEWAYS', 5)"))
-    with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
-        conn.execute(sa_.text(
-            "INSERT INTO waves (id, asset, direction, magnitude) VALUES "
-            "(gen_random_uuid(), 'zzother', 'UP', 5)"))
+    def out_of_scale(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [
+            {"value": "140", "value_classification": "Greed",
+             "timestamp": "1517443200"}], "metadata": {"error": None}})
 
-    assert client.delete(f"/api/waves/{wave_id}").status_code == 200
-    assert "ZZPROBE" not in {w["asset"] for w in client.get("/api/waves").json()}
-    assert client.delete(f"/api/waves/{wave_id}").status_code == 404
+    with httpx.Client(transport=httpx.MockTransport(out_of_scale)) as http, \
+            pytest.raises(ValueError, match="0-100"):
+        fetch(client=http)
 
-    # The row is gone and the record is not: which pressures were being simulated
-    # last month is a question the log has to answer after the row is deleted.
-    with engine.begin() as conn:
-        actions = conn.execute(sa_.text(
-            "SELECT action FROM audit_log WHERE subject_id = :i ORDER BY id"
-        ), {"i": wave_id}).scalars().all()
-    assert actions == ["wave.add", "wave.edit", "wave.delete"]
+
+# -- what was removed --------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_the_news_screen_and_its_logic_are_gone(client: TestClient) -> None:
+    """Removed rather than hidden. A page left served but unlinked is a page
+    that still answers, and an event write with no caller is a write that can
+    still be made."""
+    import importlib
+
+    paths = {route.path for route in client.app.routes}
+    assert "/news" not in paths
+    assert not any(p.startswith("/api/event") for p in paths), (
+        f"event routes survive: {sorted(p for p in paths if p.startswith('/api/event'))}"
+    )
+    assert client.get("/news").status_code == 404
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("tradelab.news")
+
+    # The measurement and the corpus did not go with the screen. §11.3's
+    # abnormal-return estimator is read by studies, not by a page, and deleting
+    # it with the markup would have taken a result-bearing module out with a
+    # view.
+    assert importlib.import_module("tradelab.events.reaction")
+
+
+@pytest.mark.fast
+def test_every_built_screen_appears_in_the_menu(client: TestClient) -> None:
+    """A route that serves a page and is not linked is a page nobody finds."""
+    import re
+
+    menu = client.get("/static/app.js").text
+    linked = set(re.findall(r'href: "(/[a-z_-]+)"', menu))
+
+    # /login is deliberately absent from the menu: it is where an unauthenticated
+    # visitor is sent, not somewhere to navigate to.
+    assert _screens(client) - linked == {"/login"}, (
+        f"served but not in the menu: {_screens(client) - linked - {'/login'}}"
+    )
+
+
+@pytest.mark.fast
+def test_the_menu_offers_no_screen_that_is_gone(client: TestClient) -> None:
+    """The other direction, which is how /news would have lingered: a menu entry
+    pointing at a deleted page 404s in the browser, where nothing watches."""
+    import re
+
+    menu = client.get("/static/app.js").text
+    assert "/news" not in menu
+    assert "/waves" not in menu
+    for href in set(re.findall(r'href: "(/[a-z_-]+)"', menu)):
+        assert client.get(href).status_code == 200, f"{href} is in the menu but 404s"

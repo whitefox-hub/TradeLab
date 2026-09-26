@@ -41,21 +41,25 @@ mount("/home", { onReady: load });
 async function load() {
   // Counts only, and each one read from a table. The home screen computes
   // nothing: a figure that appears only here is a figure nobody can reproduce.
-  const [events, series, quality] = await Promise.all([
-    api("/api/events?limit=500"),
+  const [wave, sentiment, series, quality] = await Promise.all([
+    api("/api/wave"),
+    api("/api/sentiment"),
     api("/api/macro/series"),
     api("/api/data-quality").catch(() => []),
   ]);
 
-  const unrated = events.filter((e) => !e.rated).length;
   const stale = series.filter((s) => s.days_old > 45).length;
   const unsafe = series.filter((s) => !s.point_in_time_safe).length;
+  const pressure = wave.direction === "NORMAL"
+    ? "NORMAL" : `${wave.direction} ${wave.magnitude}`;
 
   $("cards").innerHTML = [
-    { n: events.length, k: "events captured",
-      d: "Announcements promoted to annotatable occurrences." },
-    { n: unrated, k: "awaiting a rating",
-      d: "The useful work. Rate them on the News screen, in sigma." },
+    { n: pressure, k: "wave",
+      d: "The pressure a simulation runs inside. Set on Market Sentiment." },
+    { n: sentiment.available ? sentiment.value : "—", k: "fear and greed",
+      d: sentiment.available
+        ? `${sentiment.classification}, as of ${sentiment.day}.`
+        : "No readings stored yet." },
     { n: series.length, k: "macro series",
       d: `${stale} older than 45 days, ${unsafe} revised without vintages.` },
     { n: quality.length, k: "open data-quality issues",

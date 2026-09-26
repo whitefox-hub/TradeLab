@@ -28,7 +28,7 @@ import sqlalchemy as sa
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session, sessionmaker
 
 from tradelab.api.security import (
@@ -43,10 +43,6 @@ from tradelab.api.settings_rules import RULES
 from tradelab.api.settings_rules import Invalid as InvalidSetting
 from tradelab.api.settings_rules import validate as validate_setting
 from tradelab.config import Settings
-from tradelab.news.expiry import resolve as resolve_expiry
-from tradelab.news.routine import is_routine
-from tradelab.news.strength import SIGMA_BY_STRENGTH, describe, to_sigma
-from tradelab.news.templates import CATALOGUE as TEMPLATES
 
 #: Shared chrome and the screens live here. Mounted rather than served per file,
 #: so adding a stylesheet does not mean adding a route.
@@ -61,85 +57,6 @@ WRITABLE = frozenset({"approval", "transition_request"})
 class SignIn(BaseModel):
     email: str
     password: str
-
-
-class NewEventRequest(BaseModel):
-    """An event the operator adds by hand. Plan.md §20.5.
-
-    The extraction will misclassify, the taxonomy will miss things, and some
-    events carry judgement no classifier can supply — a hack, a regulation, a
-    war. So the screen can add one, and what it adds is marked as hand-entered
-    rather than blended into the collected corpus, because a study that cannot
-    separate them cannot tell a measurement from an opinion.
-    """
-
-    event_type: str = Field(min_length=3, max_length=48)
-    shape: str = Field(default="shock",
-                       pattern="^(shock|schedule|process|regime_shift)$")
-    assets: list[str] = Field(default_factory=list, max_length=40)
-    #: -1 bearish, 0 unclear, +1 bullish, for the named assets.
-    #:
-    #: Recorded because the expected-reaction model of §11.10 needs it as an
-    #: input. It is **not** the signal: what is tradeable is the residual,
-    #: observed minus expected. Positive news that should have moved two sigma
-    #: and moved a fifth of one is bearish information, and lukewarm news that
-    #: moved four is
-    #: bullish — so a system trading sign directly trades the part of the
-    #: reaction everyone else has already priced.
-    direction: int = Field(default=0, ge=-1, le=1)
-    #: When it became public, which is not when it is being typed. Backdating an
-    #: *event* is legitimate — it happened when it happened. Backdating a
-    #: *judgement* about it is not, and that is refused elsewhere (§20.5).
-    happened_at: datetime | None = None
-    scheduled_for: datetime | None = None
-    title: str = Field(min_length=3, max_length=400)
-    #: Which catalogue entry this came from, if any.
-    #:
-    #: Recorded so a later calibration can tell a rating the operator chose from
-    #: one left at a suggestion. §20.5 stores ratings in sigma so the
-    #: *annotator's* calibration becomes knowable, and a curve that cannot
-    #: separate those is measuring the template file.
-    template: str | None = None
-
-
-class AnnotationRequest(BaseModel):
-    """A human's reading of an event. Plan.md §20.5.
-
-    `rating` is in **sigma of the asset's pre-event volatility**, signed. Not
-    percent, not a 1-10 scale. §11.3 normalises every measured reaction to
-    sigma, so a rating in sigma can be scored against what actually happened —
-    which is what makes the annotator's calibration knowable, and an input
-    nobody can score is the one nobody ever corrects.
-
-    `available_at` is accepted only for corrections. A judgement is available
-    when it is made, and the database refuses a backdated one regardless of what
-    is sent here.
-    """
-
-    kind: str = Field(pattern="^(correction|judgement)$")
-    #: 1-10, with direction carrying the sign. The operator never types a
-    #: negative number; what is stored is still signed sigma, because §11.3
-    #: normalises measured reactions to sigma and a rating in any other unit
-    #: cannot be scored against one.
-    strength: int | None = Field(default=None, ge=1, le=10)
-    direction: int = Field(default=0, ge=-1, le=1)
-    #: True when the operator left the rating exactly where a template put it.
-    #: Not a lesser judgement, but a distinguishable one — a calibration built
-    #: from unmoved suggestions measures the catalogue.
-    from_template: str | None = None
-    #: Accepted for callers that already work in sigma. When `strength` is given
-    #: it wins, so the two cannot disagree in a stored row.
-    rating: float | None = Field(default=None, ge=-10.0, le=10.0)
-
-    @property
-    def signed_sigma(self) -> float | None:
-        if self.strength is not None:
-            return to_sigma(self.strength, self.direction)
-        return self.rating
-    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    payload: dict[str, Any] = Field(default_factory=dict)
-    available_at: datetime | None = None
-    note: str | None = None
 
 
 class ConsensusRequest(BaseModel):
@@ -168,42 +85,34 @@ class SettingRequest(BaseModel):
 
 
 class WaveRequest(BaseModel):
-    """A market pressure to test under. Plan.md §20.
+    """What the market wave may be set to. Plan.md §20.
 
-    Three fields and no fourth. No date, no duration, no source: a wave is not a
-    record of something that happened, it is a condition a simulation runs
-    inside. Everything that *did* happen belongs in `events`, which is dated and
-    point-in-time, and blending the two would put an assumption into the corpus
-    a study reads.
+    Two fields and no third. No asset, because there is one wave and it is the
+    market's; no date, because a wave is not a record of something that happened
+    but a condition a simulation runs inside. Everything that *did* happen is
+    dated and point-in-time and belongs elsewhere.
 
-    `extra="forbid"` so a client that sends a field this does not have gets an
+    `extra="forbid"` so a client sending a field this does not have gets an
     error instead of having it dropped. A silently ignored field is how an
     operator comes to believe a setting took effect.
     """
 
     model_config = {"extra": "forbid"}
 
-    #: Free text, upper-cased on the way in: BTC, ETH, SP500. Not validated
-    #: against the traded universe, because a wave on an asset this deployment
-    #: does not yet carry is a legitimate thing to want to simulate.
-    asset: str = Field(min_length=1, max_length=20, pattern="^[A-Za-z0-9]{1,20}$")
-    direction: str = Field(pattern="^(UP|DOWN)$")
-    #: 1 very weak, 5 medium, 10 extreme. Bounded here and again by a database
-    #: CHECK: a magnitude of 70 reaching the engine reads as seven times the
-    #: defined extreme, and nothing downstream would flag it as impossible.
-    magnitude: int = Field(ge=1, le=10)
+    direction: str = Field(pattern="^(UP|NORMAL|DOWN)$")
+    #: 0 when NORMAL, 1 to 10 otherwise. The pairing is checked below and again
+    #: by a database CHECK: a NORMAL wave of magnitude 7 would read downstream
+    #: as pressure with no direction, and a DOWN wave of 0 as direction with no
+    #: pressure. Both are states the engine would have to invent a meaning for.
+    magnitude: int = Field(ge=0, le=10)
 
-
-class WaveEdit(BaseModel):
-    """What an existing wave may be changed to. Asset is absent on purpose —
-    moving a wave to another asset is deleting one and creating another, and
-    doing it as an edit would slide a wave past the per-asset uniqueness the
-    database enforces."""
-
-    model_config = {"extra": "forbid"}
-
-    direction: str = Field(pattern="^(UP|DOWN)$")
-    magnitude: int = Field(ge=1, le=10)
+    @model_validator(mode="after")
+    def normal_means_zero(self) -> WaveRequest:
+        if (self.direction == "NORMAL") != (self.magnitude == 0):
+            raise ValueError(
+                "NORMAL is magnitude 0 and magnitude 0 is NORMAL; "
+                "UP and DOWN take 1 to 10")
+        return self
 
 
 class ApprovalRequest(BaseModel):
@@ -492,388 +401,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         session.commit()
         return {"id": str(approval_id), "recorded_at": datetime.now(UTC).isoformat()}
 
-    # -- events -------------------------------------------------------------
-
-    @app.get("/api/events")
-    def events(who: Operator = operator, session: Session = session_dep,
-               event_type: str | None = None, status: str | None = None,
-               limit: int = 300) -> list[dict]:
-        """Every event with whether it is still information, and why.
-
-        `status` filters to `active` or `expired`. The distinction is §11.8's and
-        it is not "recent": a delisting scheduled three months out is old news
-        and entirely live, while a listing from this morning can already be
-        spent. Sorting by age would put those the wrong way round.
-        """
-        clause = "WHERE e.event_type = :t" if event_type else ""
-        rows = session.execute(sa.text(
-            f"SELECT e.id, e.event_type, e.shape, e.first_seen_at, e.resolved_at, "
-            f"       e.headline, e.code_hash, e.cluster_method, "
-            f"       COALESCE(array_agg(DISTINCT a.asset) FILTER "
-            f"                (WHERE a.asset IS NOT NULL), '{{}}') AS assets, "
-            f"       max(a.expected_direction) AS direction, "
-            f"       count(DISTINCT n.id) FILTER (WHERE n.kind = 'judgement') "
-            f"         AS annotations, "
-            f"       min(sr.scheduled_for) FILTER (WHERE sr.scheduled_for > now()) "
-            f"         AS scheduled_for, "
-            f"       (SELECT pt.state FROM process_transitions pt "
-            f"         WHERE pt.event_id = e.id "
-            f"         ORDER BY pt.sequence DESC LIMIT 1) AS latest_state, "
-            f"       (SELECT (an.payload->>'reactivated_until')::timestamptz "
-            f"         FROM event_annotations an WHERE an.event_id = e.id "
-            f"          AND an.payload ? 'reactivated_until' "
-            f"         ORDER BY an.created_at DESC LIMIT 1) AS reactivated_until "
-            f"FROM events e "
-            f"LEFT JOIN event_assets a ON a.event_id = e.id "
-            f"LEFT JOIN event_annotations n ON n.event_id = e.id "
-            f"LEFT JOIN schedule_revisions sr ON sr.event_id = e.id "
-            f"{clause} "
-            f"GROUP BY e.id ORDER BY e.first_seen_at DESC LIMIT :l"
-        ), {"t": event_type, "l": min(limit, 1000)}).mappings().all()
-
-        out = []
-        for row in rows:
-            expiry = resolve_expiry(
-                event_type=row["event_type"], shape=row["shape"],
-                first_seen_at=row["first_seen_at"], resolved_at=row["resolved_at"],
-                scheduled_for=row["scheduled_for"], latest_state=row["latest_state"],
-                reactivated_until=row["reactivated_until"],
-            )
-            if status == "active" and not expiry.active:
-                continue
-            if status == "expired" and expiry.active:
-                continue
-            out.append(dict(row) | {
-                "rated": row["annotations"] > 0,
-                "active": expiry.active,
-                "ended_by": str(expiry.ended_by),
-                "expires_at": expiry.expires_at,
-                "expiry_reason": expiry.reason,
-                # Flagged, so the screen can say the horizon is assumed rather
-                # than measured. A default presented as a finding is worse than
-                # no default (§11.5).
-                "expiry_assumed": expiry.assumed,
-                "reopenable": expiry.reopenable,
-                "not_reopenable_because": expiry.not_reopenable_because,
-                "hand_entered": str(row["cluster_method"]).startswith("manual:"),
-                # Not "duplicate" and not "old": a venue lists perpetuals most
-                # weeks, and those rows are worth counting rather than reading.
-                # Folded away by default so the unusual ones are visible at all.
-                "routine": is_routine(row["event_type"]),
-            })
-        return out
-
-    @app.post("/api/events", status_code=status.HTTP_201_CREATED)
-    def add_event(body: NewEventRequest, who: Operator = operator,
-                  session: Session = session_dep) -> dict[str, Any]:
-        """Add an event by hand. Plan.md §20.5.
-
-        Marked `manual:` in `cluster_method` and stamped with the operator rather
-        than a taxonomy hash, so a later study can separate what was collected
-        from what was asserted. Blending them would make a corpus in which a
-        measurement and an opinion are indistinguishable.
-        """
-        user = session.execute(
-            sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}).first()
-        event_id = uuid.uuid4()
-        happened = body.happened_at or datetime.now(UTC)
-
-        session.execute(sa.text(
-            "INSERT INTO events (id, event_type, shape, first_seen_at, headline, "
-            "latest_revision, cluster_method, code_hash) "
-            "VALUES (:i, :t, :s, :f, :hl, 1, :c, :h)"
-        ), {"i": event_id, "t": body.event_type, "s": body.shape, "f": happened,
-            "hl": body.title,
-            "c": f"manual:{who.email}", "h": "hand-entered"})
-
-        for asset in dict.fromkeys(a.strip().upper() for a in body.assets if a.strip()):
-            session.execute(sa.text(
-                "INSERT INTO event_assets (event_id, revision, asset, "
-                "expected_direction) VALUES (:e, 1, :a, :d) ON CONFLICT DO NOTHING"
-            ), {"e": event_id, "a": asset, "d": body.direction})
-
-        if body.scheduled_for is not None:
-            session.execute(sa.text(
-                "INSERT INTO schedule_revisions (event_id, revision, available_at, "
-                "scheduled_for, confidence, source) "
-                "VALUES (:e, 1, now(), :s, 'estimated', :src)"
-            ), {"e": event_id, "s": body.scheduled_for, "src": f"manual:{who.email}"})
-
-        # The title is the payload of a correction-kind annotation rather than a
-        # column: `events` carries what the system knows, and the prose came
-        # from a person.
-        session.execute(sa.text(
-            "INSERT INTO event_annotations (id, event_id, kind, available_at, "
-            "payload, author) VALUES (:i, :e, 'correction', :a, CAST(:p AS jsonb), :u)"
-        ), {"i": uuid.uuid4(), "e": event_id, "a": happened,
-            "p": json.dumps({"title": body.title, "entered_by_hand": True,
-                             **({"template": body.template} if body.template else {})}),
-            "u": user.id})
-
-        audit(session, who.email, "event.add", "event", str(event_id),
-              {"event_type": body.event_type, "assets": body.assets})
-        session.commit()
-        return {"id": str(event_id), "first_seen_at": happened.isoformat()}
-
-    @app.post("/api/events/{event_id}/reopen")
-    def reopen_event(event_id: uuid.UUID, hours: int = 72,
-                     who: Operator = operator,
-                     session: Session = session_dep) -> dict[str, Any]:
-        """Put an item back among those that still influence. Plan.md §11.8.
-
-        Two endings can be taken back and two cannot, and the difference is
-        whether the system was asserting something or observing it.
-
-        A **decayed** item can be reopened because its horizon is assumed —
-        §11.5 has not measured one — so an operator saying it still matters is
-        the better of two estimates rather than an override of a finding. A
-        **manual resolution** can be reopened because a person made it.
-
-        A **passed schedule** cannot: the date arrived, and that is not a model
-        output to disagree with. Nor can a **terminal process state**, which
-        ended at a transition and would need another transition to reverse.
-
-        The reopening is stored as a correction annotation rather than by
-        rewinding a column, so the sequence — ended, reopened, by whom, when —
-        survives. Overwriting would leave a row that has never been anything
-        but active.
-        """
-        row = session.execute(sa.text(
-            "SELECT e.event_type, e.shape, e.first_seen_at, e.resolved_at, "
-            "       (SELECT min(sr.scheduled_for) FROM schedule_revisions sr "
-            "         WHERE sr.event_id = e.id) AS scheduled_for, "
-            "       (SELECT pt.state FROM process_transitions pt "
-            "         WHERE pt.event_id = e.id "
-            "         ORDER BY pt.sequence DESC LIMIT 1) AS latest_state "
-            "FROM events e WHERE e.id = :i"
-        ), {"i": event_id}).mappings().first()
-        if row is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such event")
-
-        expiry = resolve_expiry(
-            event_type=row["event_type"], shape=row["shape"],
-            first_seen_at=row["first_seen_at"], resolved_at=row["resolved_at"],
-            scheduled_for=row["scheduled_for"], latest_state=row["latest_state"],
-        )
-        if not expiry.reopenable:
-            raise HTTPException(status.HTTP_409_CONFLICT, expiry.not_reopenable_because)
-
-        user = session.execute(
-            sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}).first()
-        until = datetime.now(UTC) + timedelta(hours=max(1, min(hours, 720)))
-
-        session.execute(sa.text("UPDATE events SET resolved_at = NULL WHERE id = :i"),
-                        {"i": event_id})
-        session.execute(sa.text(
-            "INSERT INTO event_annotations (id, event_id, kind, available_at, "
-            "payload, author) VALUES (:i, :e, 'correction', now(), "
-            "CAST(:p AS jsonb), :u)"
-        ), {"i": uuid.uuid4(), "e": event_id,
-            "p": json.dumps({"reactivated_until": until.isoformat(),
-                             "over": expiry.reason}),
-            "u": user.id})
-
-        audit(session, who.email, "event.reopen", "event", str(event_id),
-              {"until": until.isoformat()})
-        session.commit()
-        return {"id": str(event_id), "active_until": until.isoformat()}
-
-    @app.post("/api/events/{event_id}/resolve")
-    def resolve_event(event_id: uuid.UUID, who: Operator = operator,
-                      session: Session = session_dep) -> dict[str, Any]:
-        """Mark an item as no longer information. Plan.md §11.8.
-
-        Supersession, in the operator's hands: a rumour that is denied does not
-        decay, it is cancelled, and nothing in a clock can know that. Recorded
-        as of now rather than backdated, for the same reason a judgement cannot
-        be backdated.
-        """
-        updated = session.execute(sa.text(
-            "UPDATE events SET resolved_at = now() "
-            "WHERE id = :i AND resolved_at IS NULL RETURNING event_type"
-        ), {"i": event_id}).first()
-        if updated is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                "no such event, or it is already resolved")
-        audit(session, who.email, "event.resolve", "event", str(event_id))
-        session.commit()
-        return {"id": str(event_id), "resolved": True}
-
-    #: Types worth suggesting that the corpus may not contain yet. Merged with
-    #: whatever is actually in the database rather than replacing it, because a
-    #: hand-written list drifts from the data the moment something new is
-    #: ingested or seeded — which is how `halving` came to exist in three rows
-    #: and in none of the suggestions.
-    SUGGESTED_TYPES = (
-        "hack", "regulation", "war", "unlock", "halving", "macro_release",
-        "partnership", "exchange_collapse", "ban", "fork", "mainnet",
-        "listing_rumour", "treasury_purchase",
-    )
-
-    @app.get("/api/event-templates")
-    def event_templates(who: Operator = operator) -> list[dict]:
-        """High-impact events with their shape and a suggested rating."""
-        return [
-            {"key": t.key, "label": t.label, "event_type": t.event_type,
-             "shape": t.shape, "strength": t.strength, "direction": t.direction,
-             "signed": t.signed, "market_wide": t.market_wide, "note": t.note}
-            for t in TEMPLATES
-        ]
-
-    @app.get("/api/rating-scale")
-    def rating_scale(who: Operator = operator) -> list[dict]:
-        """The 1-10 steps with the sigma each one means.
-
-        Served rather than written into the page, so the scale cannot drift from
-        what the endpoint stores — and so the dialog can show the unit instead of
-        hiding it. The operator should learn that seven means three and a half
-        sigma, not be shielded from the fact that sigma is what is kept.
-        """
-        return [
-            {"strength": n, "sigma": SIGMA_BY_STRENGTH[n], "label": describe(n)}
-            for n in sorted(SIGMA_BY_STRENGTH)
-        ]
-
-    @app.get("/api/events/types")
-    def event_types(who: Operator = operator,
-                    session: Session = session_dep) -> list[dict]:
-        """Every type in use, with its count, plus the ones worth suggesting.
-
-        Derived rather than declared. The screen offers what exists and what is
-        plausible, and cannot fall behind the data.
-        """
-        rows = session.execute(sa.text(
-            "SELECT event_type, count(*) AS n FROM events "
-            "GROUP BY event_type ORDER BY n DESC"
-        )).mappings().all()
-        in_use = {r["event_type"]: r["n"] for r in rows}
-        return [
-            {"event_type": name, "count": in_use.get(name, 0),
-             "in_use": name in in_use}
-            for name in sorted(set(in_use) | set(SUGGESTED_TYPES),
-                               key=lambda k: (-in_use.get(k, 0), k))
-        ]
-
-    @app.get("/api/events/{event_id}")
-    def event_detail(event_id: uuid.UUID, who: Operator = operator,
-                     session: Session = session_dep) -> dict:
-        row = session.execute(sa.text(
-            "SELECT id, event_type, shape, first_seen_at, resolved_at, code_hash "
-            "FROM events WHERE id = :i"), {"i": event_id}).mappings().first()
-        if row is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such event")
-        assets = session.execute(sa.text(
-            "SELECT asset, expected_direction, expected_magnitude, confidence "
-            "FROM event_assets WHERE event_id = :i ORDER BY asset"),
-            {"i": event_id}).mappings().all()
-        annotations = session.execute(sa.text(
-            "SELECT n.id, n.kind, n.rating, n.confidence, n.payload, n.available_at, "
-            "       n.created_at, u.email AS author "
-            "FROM event_annotations n JOIN users u ON u.id = n.author "
-            "WHERE n.event_id = :i ORDER BY n.created_at DESC"),
-            {"i": event_id}).mappings().all()
-        schedule = session.execute(sa.text(
-            "SELECT revision, available_at, scheduled_for, confidence, source "
-            "FROM schedule_revisions WHERE event_id = :i ORDER BY revision"),
-            {"i": event_id}).mappings().all()
-        return {
-            **dict(row),
-            "assets": [dict(a) for a in assets],
-            "annotations": [dict(a) for a in annotations],
-            # Every date the event was ever believed to have, not just the last.
-            # Showing only the current one is how a reader reconstructs a
-            # timeline the market never had (§11.6).
-            "schedule_revisions": [dict(s) for s in schedule],
-        }
-
-    @app.post("/api/events/{event_id}/annotations",
-              status_code=status.HTTP_201_CREATED)
-    def annotate(event_id: uuid.UUID, body: AnnotationRequest,
-                 who: Operator = operator,
-                 session: Session = session_dep) -> dict[str, Any]:
-        """Record a reading. Plan.md §20.5.
-
-        This writes to the registry and therefore belongs to the application
-        rather than to Grafana — a rating needs an actor and a time, which is
-        the whole reason this surface requires a session.
-
-        It does not break §20.1's rule that the application computes nothing: a
-        rating is not a computed metric, it is an **observation recorded with
-        the time it was made**. The system still calculates nothing here. It
-        records what someone asserted and when.
-        """
-        user = session.execute(
-            sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}
-        ).first()
-        if user is None:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "no such operator")
-
-        exists = session.execute(
-            sa.text("SELECT 1 FROM events WHERE id = :i"), {"i": event_id}).first()
-        if exists is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such event")
-
-        # A judgement is available when it is made. Accepting a client-supplied
-        # time here would let the caller choose; the database refuses a
-        # backdated judgement anyway, so this only decides whether the refusal
-        # is a 400 or a 500.
-        available_at = (
-            datetime.now(UTC) if body.kind == "judgement"
-            else (body.available_at or datetime.now(UTC))
-        )
-        annotation_id = uuid.uuid4()
-        payload = dict(body.payload)
-        if body.strength is not None:
-            # Kept alongside the sigma so a later reader can see what was
-            # actually chosen, not only what it was converted to.
-            payload["strength"] = body.strength
-        if body.from_template:
-            payload["from_template"] = body.from_template
-        if body.note:
-            payload["note"] = body.note
-
-        rating = body.signed_sigma
-
-        try:
-            session.execute(sa.text(
-                "INSERT INTO event_annotations (id, event_id, kind, available_at, "
-                "payload, rating, confidence, author) "
-                "VALUES (:i, :e, :k, :a, CAST(:p AS jsonb), :r, :c, :u)"
-            ), {"i": annotation_id, "e": event_id, "k": body.kind,
-                "a": available_at, "p": json.dumps(payload), "r": rating,
-                "c": body.confidence, "u": user.id})
-        except sa.exc.DBAPIError as error:
-            session.rollback()
-            message = str(getattr(error, "orig", error))
-            if "ck_judgement_is_not_backdated" in message:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "a judgement cannot be dated before it was written (§20.5)",
-                ) from error
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                message.split("\n")[0]) from error
-
-        # The rating already carries direction: it is signed sigma. Rather than
-        # ask for the same judgement twice through a second control that could
-        # disagree with it, the sign of the rating sets `expected_direction` for
-        # the event's assets. One input, one meaning.
-        #
-        # Only for judgements, and only when a rating was given: a correction
-        # repairs a parse failure and says nothing about which way the price
-        # should go.
-        if body.kind == "judgement" and rating is not None:
-            session.execute(sa.text(
-                "UPDATE event_assets SET expected_direction = :d "
-                "WHERE event_id = :e"
-            ), {"d": (rating > 0) - (rating < 0), "e": event_id})
-
-        audit(session, who.email, f"annotation.{body.kind}", "event", str(event_id),
-              {"rating": rating, "strength": body.strength,
-               "confidence": body.confidence})
-        session.commit()
-        return {"id": str(annotation_id), "available_at": available_at.isoformat(),
-                "rating": rating}
-
     # -- parameters ----------------------------------------------------------
 
     #: Settings the operator may change, and what each one does NOT reach.
@@ -1102,93 +629,106 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def macro_screen() -> FileResponse:
         return FileResponse(STATIC / "macro.html")
 
-    # -- waves --------------------------------------------------------------
+    # -- the wave, and the market's own reading of itself --------------------
 
-    @app.get("/api/waves")
-    def list_waves(who: Operator = operator,
-                   session: Session = session_dep) -> list[dict[str, Any]]:
-        """Every wave, strongest first.
-
-        Ordered by magnitude rather than by asset: the screen exists to show
-        what is under the most pressure, and an alphabetical list buries a 10 on
-        SOL behind a 2 on ADA.
-        """
-        rows = session.execute(sa.text(
-            "SELECT id, asset, direction, magnitude FROM waves "
-            "ORDER BY magnitude DESC, asset ASC"
-        )).mappings().all()
-        return [{"id": str(r["id"]), "asset": r["asset"],
-                 "direction": r["direction"], "magnitude": r["magnitude"]}
-                for r in rows]
-
-    @app.post("/api/waves", status_code=status.HTTP_201_CREATED)
-    def add_wave(body: WaveRequest, who: Operator = operator,
-                 session: Session = session_dep) -> dict[str, Any]:
-        """Create a wave. One per asset; a second is a conflict, not a second row.
-
-        The duplicate is caught by asking the database rather than by checking
-        first and then inserting — between those two statements another request
-        can insert the same asset, and the unique constraint is the only thing
-        that holds under concurrency.
-        """
-        asset = body.asset.upper()
-        wave_id = uuid.uuid4()
-        try:
-            session.execute(sa.text(
-                "INSERT INTO waves (id, asset, direction, magnitude) "
-                "VALUES (:i, :a, :d, :m)"
-            ), {"i": wave_id, "a": asset, "d": body.direction, "m": body.magnitude})
-        except sa.exc.IntegrityError:
-            session.rollback()
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                f"{asset} already has a wave; edit it instead") from None
-
-        audit(session, who.email, "wave.add", "wave", str(wave_id),
-              {"asset": asset, "direction": body.direction,
-               "magnitude": body.magnitude})
-        session.commit()
-        return {"id": str(wave_id), "asset": asset,
-                "direction": body.direction, "magnitude": body.magnitude}
-
-    @app.patch("/api/waves/{wave_id}")
-    def edit_wave(wave_id: uuid.UUID, body: WaveEdit, who: Operator = operator,
+    @app.get("/api/wave")
+    def read_wave(who: Operator = operator,
                   session: Session = session_dep) -> dict[str, Any]:
-        """Change a wave's direction or magnitude."""
-        row = session.execute(sa.text(
-            "UPDATE waves SET direction = :d, magnitude = :m "
-            "WHERE id = :i RETURNING asset"
-        ), {"i": wave_id, "d": body.direction, "m": body.magnitude}).first()
-        if row is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such wave")
+        """The one wave. Always present, NORMAL until someone says otherwise.
 
-        audit(session, who.email, "wave.edit", "wave", str(wave_id),
-              {"asset": row.asset, "direction": body.direction,
-               "magnitude": body.magnitude})
-        session.commit()
-        return {"id": str(wave_id), "asset": row.asset,
-                "direction": body.direction, "magnitude": body.magnitude}
-
-    @app.delete("/api/waves/{wave_id}")
-    def remove_wave(wave_id: uuid.UUID, who: Operator = operator,
-                    session: Session = session_dep) -> dict[str, Any]:
-        """Delete a wave.
-
-        The row goes; the audit entry stays. A wave is an input someone chose,
-        so which pressures were being simulated last month is a question the log
-        has to be able to answer after the row is gone.
+        Seeded by the migration rather than created on first write, so "no
+        pressure" and "nobody has set it" cannot come back as the same empty
+        result. They are different facts and only one of them is a reading.
         """
         row = session.execute(sa.text(
-            "DELETE FROM waves WHERE id = :i RETURNING asset, direction, magnitude"
-        ), {"i": wave_id}).first()
+            "SELECT direction, magnitude FROM market_wave WHERE id = 1"
+        )).mappings().first()
         if row is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such wave")
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                "the wave row is missing; migration 0013 seeds it")
+        return {"direction": row["direction"], "magnitude": row["magnitude"]}
 
-        audit(session, who.email, "wave.delete", "wave", str(wave_id),
-              {"asset": row.asset, "direction": row.direction,
-               "magnitude": row.magnitude})
+    @app.put("/api/wave")
+    def set_wave(body: WaveRequest, who: Operator = operator,
+                 session: Session = session_dep) -> dict[str, Any]:
+        """Set the wave. An update, never an insert — there is only one.
+
+        PUT and not POST for the same reason: this names a thing that already
+        exists and replaces its contents, and sending it twice leaves the same
+        state. A POST here would imply a second wave could be created.
+        """
+        row = session.execute(sa.text(
+            "UPDATE market_wave SET direction = :d, magnitude = :m "
+            "WHERE id = 1 RETURNING direction, magnitude"
+        ), {"d": body.direction, "m": body.magnitude}).mappings().first()
+        if row is None:
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                "the wave row is missing; migration 0013 seeds it")
+
+        # Audited because it is an input someone chose. Which pressure a
+        # simulation was run under last month is a question the log has to be
+        # able to answer after the value has been changed.
+        audit(session, who.email, "wave.set", "wave", "market",
+              {"direction": body.direction, "magnitude": body.magnitude})
         session.commit()
-        return {"id": str(wave_id), "deleted": True}
+        return {"direction": row["direction"], "magnitude": row["magnitude"]}
+
+    @app.get("/api/sentiment")
+    def read_sentiment(who: Operator = operator,
+                       session: Session = session_dep) -> dict[str, Any]:
+        """Fear and Greed: latest, three comparisons, and the year's extremes.
+
+        Read back, never computed. §20.1 puts the boundary at the application
+        deriving figures, and picking stored rows is not deriving one — but the
+        chart the vendor draws beside this is a time series, and §20.1 puts
+        those in Grafana rather than here.
+
+        The comparisons are "on or before" rather than exact, so a missing day
+        gives the most recent value before it instead of an empty cell. A gap in
+        a daily series is a collection failure, and a blank would read as calm.
+        """
+        latest = session.execute(sa.text(
+            "SELECT day, value, classification, source, available_at "
+            "FROM sentiment_readings ORDER BY day DESC LIMIT 1"
+        )).mappings().first()
+        if latest is None:
+            return {"available": False}
+
+        def at(offset: int) -> dict[str, Any] | None:
+            row = session.execute(sa.text(
+                "SELECT day, value, classification FROM sentiment_readings "
+                "WHERE day <= :d ORDER BY day DESC LIMIT 1"
+            ), {"d": latest["day"] - timedelta(days=offset)}).mappings().first()
+            return None if row is None else {
+                "day": row["day"].isoformat(), "value": row["value"],
+                "classification": row["classification"]}
+
+        extremes = session.execute(sa.text(
+            "SELECT "
+            " (SELECT json_build_object('day', day, 'value', value, "
+            "         'classification', classification) FROM sentiment_readings "
+            "   WHERE day > :from_day ORDER BY value DESC, day DESC LIMIT 1) AS high, "
+            " (SELECT json_build_object('day', day, 'value', value, "
+            "         'classification', classification) FROM sentiment_readings "
+            "   WHERE day > :from_day ORDER BY value ASC, day DESC LIMIT 1) AS low"
+        ), {"from_day": latest["day"] - timedelta(days=365)}).mappings().first()
+
+        stale = (datetime.now(UTC).date() - latest["day"]).days
+        return {
+            "available": True,
+            "day": latest["day"].isoformat(),
+            "value": latest["value"],
+            "classification": latest["classification"],
+            "source": latest["source"],
+            # Shown, because a stale feed fails silently: the number is simply
+            # old, and old numbers look exactly like current ones.
+            "days_old": stale,
+            "yesterday": at(1),
+            "last_week": at(7),
+            "last_month": at(30),
+            "year_high": extremes["high"],
+            "year_low": extremes["low"],
+        }
 
     # -- the screen ---------------------------------------------------------
 
@@ -1214,27 +754,19 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         reached by knowing their paths."""
         return FileResponse(STATIC / "index.html")
 
-    @app.get("/waves", include_in_schema=False)
-    def waves_screen() -> FileResponse:
-        """Create, edit and delete market pressures. Plan.md §20.
+    @app.get("/market-sentiment", include_in_schema=False)
+    def market_sentiment_screen() -> FileResponse:
+        """The wave the operator sets, and the index the market prints. §20.
 
-        Deliberately the plainest screen here. A wave has three fields and the
-        engine will read them as variables, so anything this page added — a
-        date, a note, a source — would be an input nothing consumes, and an
-        input nothing consumes is one an operator eventually believes in.
+        Both on one page because they answer the same question from opposite
+        sides — what the book is leaning into, and what everyone else is doing —
+        and reading either one alone is how a lean gets mistaken for a consensus.
+
+        Kept plain on purpose. The wave has two fields and the index has one, so
+        anything else this page offered would be an input nothing consumes, and
+        an input nothing consumes is one an operator eventually believes in.
         """
-        return FileResponse(STATIC / "waves.html")
-
-    @app.get("/news", include_in_schema=False)
-    def news_screen() -> FileResponse:
-        """Served by the API rather than built as a separate front end, for now.
-
-        §20 describes fifteen screens and a React application; this is the one
-        that writes data the research depends on, so it exists before the build
-        tooling does. The markup calls the same endpoints a React client would,
-        so replacing it later changes the view and not the contract.
-        """
-        return FileResponse(STATIC / "news.html")
+        return FileResponse(STATIC / "market_sentiment.html")
 
     @app.get("/strategies", include_in_schema=False)
     def strategies_screen() -> FileResponse:

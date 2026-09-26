@@ -13,7 +13,14 @@ it.
 **What is lost and what is not.** Events are derived: the announcement Parquet is
 the source of truth and re-running the ingestor with a longer retention rebuilds
 them exactly. Human annotations are not derived and cannot be rebuilt, so this
-refuses to delete an event carrying one unless told twice.
+refuses to delete an event carrying one unless told twice. That refusal is kept
+although the screen that produced annotations is gone: the ones already recorded
+are still the only rows here that no re-run can reconstruct.
+
+Age is now the whole test. This used to spare an event whose effect the news
+screen still considered live, on top of sparing anything inside the retention
+window — a second guard that only made sense while a page was displaying the
+first. With the screen removed, an event past the window goes.
 """
 
 from __future__ import annotations
@@ -23,8 +30,7 @@ import argparse
 import sqlalchemy as sa
 
 from tradelab.config import Settings
-from tradelab.news.expiry import resolve
-from tradelab.news.retention import retention_days
+from tradelab.events.retention import retention_days
 
 
 def main() -> int:
@@ -38,12 +44,7 @@ def main() -> int:
     with engine.begin() as connection:
         days = retention_days(connection)
         rows = connection.execute(sa.text("""
-            SELECT e.id, e.event_type, e.shape, e.first_seen_at, e.resolved_at,
-                   (SELECT min(sr.scheduled_for) FROM schedule_revisions sr
-                     WHERE sr.event_id = e.id) AS scheduled_for,
-                   (SELECT pt.state FROM process_transitions pt
-                     WHERE pt.event_id = e.id
-                     ORDER BY pt.sequence DESC LIMIT 1) AS latest_state,
+            SELECT e.id, e.event_type, e.first_seen_at,
                    (SELECT count(*) FROM event_annotations an
                      WHERE an.event_id = e.id
                        AND an.kind = 'judgement') AS judgements,
@@ -53,12 +54,7 @@ def main() -> int:
 
         doomed, kept_for_annotation = [], []
         for row in rows:
-            expiry = resolve(
-                event_type=row["event_type"], shape=row["shape"],
-                first_seen_at=row["first_seen_at"], resolved_at=row["resolved_at"],
-                scheduled_for=row["scheduled_for"], latest_state=row["latest_state"],
-            )
-            if expiry.active or not row["past_retention"]:
+            if not row["past_retention"]:
                 continue
             # A judgement is the one thing here that cannot be rebuilt from the
             # Parquet archive, so it is worth more than the row it hangs on.

@@ -21,8 +21,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
+from tradelab.events.context import EventContext
 from tradelab.execution.types import AccountState, Instrument, Order
-from tradelab.news.context import EventContext
 
 
 class Breach(StrEnum):

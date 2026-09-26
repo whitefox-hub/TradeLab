@@ -25,10 +25,10 @@ from pathlib import Path
 import httpx
 import numpy as np
 import sqlalchemy as sa
+from tradelab.news import reaction as reaction_module
 
 from tradelab.config import Settings
-from tradelab.news import reaction as reaction_module
-from tradelab.news.reaction import Window, leakage_flag, measure
+from tradelab.events.reaction import Window, leakage_flag, measure
 
 KLINES = "https://fapi.binance.com/fapi/v1/klines"
 MARKET = "BTCUSDT"

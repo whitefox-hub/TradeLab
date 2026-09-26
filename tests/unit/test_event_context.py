@@ -12,12 +12,12 @@ from decimal import Decimal
 
 import pytest
 
-from tradelab.execution.types import AccountState, Instrument, Order, Side
-from tradelab.news.context import (
+from tradelab.events.context import (
     ANTICIPATION_MULTIPLIER,
     REGIME_SIZE_MULTIPLIER,
     EventContext,
 )
+from tradelab.execution.types import AccountState, Instrument, Order, Side
 from tradelab.risk.limits import Breach, RiskEngine, RiskLimits
 
 NOW = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
@@ -133,7 +133,7 @@ def test_the_lookup_is_point_in_time() -> None:
     news, which looks entirely reasonable in the output."""
     from pathlib import Path
 
-    import tradelab.news.context as module
+    import tradelab.events.context as module
 
     source = Path(module.__file__).read_text()
     assert "e.first_seen_at <= :as_of" in source
