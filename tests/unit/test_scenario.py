@@ -1,4 +1,4 @@
-"""The wave's effect on a position, and the limits on it. Plan.md §20, §11.3.
+"""The market trend's effect on a position, and the limits on it. Plan.md §20, §11.3.
 
 This is the first thing in the repository where an operator's judgement reaches
 a position size, so most of what follows is about what it cannot do.
@@ -19,7 +19,7 @@ from tradelab.scenario.tilt import (
 
 
 @pytest.mark.fast
-def test_a_normal_wave_is_the_identity() -> None:
+def test_a_normal_trend_is_the_identity() -> None:
     """The default has to change nothing, or every run ever made carries an
     adjustment nobody chose."""
     position = np.array([1.0, -0.5, 0.0, 0.25])
@@ -30,7 +30,7 @@ def test_a_normal_wave_is_the_identity() -> None:
 
 
 @pytest.mark.fast
-def test_the_wave_never_changes_a_sign() -> None:
+def test_the_trend_never_changes_a_sign() -> None:
     """It conditions, it does not signal. §11.3 puts direction as an input to an
     expected-reaction model and never a signal in itself, so a view about the
     environment may scale a position and must never decide one."""
@@ -68,7 +68,7 @@ def test_the_tilt_is_bounded_at_half() -> None:
 @pytest.mark.fast
 def test_longs_and_shorts_move_in_opposite_directions() -> None:
     """Scaled separately, not by one factor. A single multiplier would push a
-    short *further* into the wave it disagrees with, which is the opposite of
+    short *further* into the market trend it disagrees with, which is the opposite of
     what was asked for and would be invisible in any aggregate."""
     for magnitude in (1, 5, 10):
         long_up, short_up = exposure_multipliers("UP", magnitude)

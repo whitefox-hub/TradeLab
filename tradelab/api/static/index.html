@@ -54,7 +54,7 @@ async function load() {
     ? "NORMAL" : `${scenario.direction} ${scenario.magnitude}`;
 
   $("cards").innerHTML = [
-    { n: pressure, k: "wave",
+    { n: pressure, k: "market trend",
       d: `Pressure a simulation runs under, with sentiment assumed at ${
         scenario.sentiment}. Set on Market Sentiment.` },
     { n: sentiment.available ? sentiment.value : "—", k: "fear and greed",

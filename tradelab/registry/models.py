@@ -759,7 +759,7 @@ class MarketConditions(Base):
     conditions collides rather than being created — the singleton is in the
     schema and not in the API remembering to update instead of insert.
 
-    Two dials. The **wave** is direction and intensity of pressure; `NORMAL` is
+    Two dials. The **market trend** is direction and intensity of pressure; `NORMAL` is
     a real state and the default, because conditions forced to be either UP or
     DOWN make the operator pick a lean they may not hold. The **sentiment** is
     where on the 1-100 fear-and-greed scale the simulation should assume the
@@ -780,9 +780,9 @@ class MarketConditions(Base):
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     #: 'UP' bullish pressure, 'DOWN' bearish, 'NORMAL' neither.
-    wave_direction: Mapped[str] = mapped_column(Text, nullable=False)
+    trend_direction: Mapped[str] = mapped_column(Text, nullable=False)
     #: 0 when NORMAL; otherwise 1 very weak, 5 medium, 10 extreme.
-    wave_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    trend_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     #: 1 extreme fear, 50 neutral, 100 extreme greed. Defaults to 50 rather than
     #: to today's printed value: seeding an assumption from a measurement would
     #: make "nobody set this" and "someone chose the market's own number" the
@@ -791,11 +791,11 @@ class MarketConditions(Base):
 
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_market_conditions_singleton"),
-        CheckConstraint("wave_direction IN ('UP','NORMAL','DOWN')",
-                        name="ck_market_conditions_wave_direction"),
-        CheckConstraint("wave_magnitude BETWEEN 0 AND 10",
-                        name="ck_market_conditions_wave_magnitude"),
-        CheckConstraint("(wave_direction = 'NORMAL') = (wave_magnitude = 0)",
+        CheckConstraint("trend_direction IN ('UP','NORMAL','DOWN')",
+                        name="ck_market_conditions_trend_direction"),
+        CheckConstraint("trend_magnitude BETWEEN 0 AND 10",
+                        name="ck_market_conditions_trend_magnitude"),
+        CheckConstraint("(trend_direction = 'NORMAL') = (trend_magnitude = 0)",
                         name="ck_market_conditions_normal_is_zero"),
         CheckConstraint("sentiment BETWEEN 1 AND 100",
                         name="ck_market_conditions_sentiment"),
@@ -824,11 +824,11 @@ class ScenarioRun(Base):
     ran_at: Mapped[datetime] = mapped_column(
         TS, nullable=False, server_default=func.now())
     actor: Mapped[str] = mapped_column(Text, nullable=False)
-    wave_direction: Mapped[str] = mapped_column(Text, nullable=False)
-    wave_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    trend_direction: Mapped[str] = mapped_column(Text, nullable=False)
+    trend_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment_bucket: Mapped[str] = mapped_column(Text, nullable=False)
-    #: What the wave did, stored so a result can be read without re-deriving the
+    #: What the market trend did, stored so a result can be read without re-deriving the
     #: transform that produced it — which may have changed since.
     long_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
     short_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
@@ -842,10 +842,10 @@ class ScenarioRun(Base):
     stopped_because: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (
-        CheckConstraint("wave_direction IN ('UP','NORMAL','DOWN')",
-                        name="ck_scenario_runs_direction"),
-        CheckConstraint("wave_magnitude BETWEEN 0 AND 10",
-                        name="ck_scenario_runs_magnitude"),
+        CheckConstraint("trend_direction IN ('UP','NORMAL','DOWN')",
+                        name="ck_scenario_runs_trend_direction"),
+        CheckConstraint("trend_magnitude BETWEEN 0 AND 10",
+                        name="ck_scenario_runs_trend_magnitude"),
         CheckConstraint("sentiment BETWEEN 1 AND 100",
                         name="ck_scenario_runs_sentiment"),
         CheckConstraint("bars > 0", name="ck_scenario_runs_bars"),

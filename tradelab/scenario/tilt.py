@@ -1,18 +1,18 @@
-"""What the wave does to a position, stated once and bounded. Plan.md §20, §11.3.
+"""What the market trend does to a position, stated once and bounded. Plan.md §20, §11.3.
 
-The wave is a view about the environment: a war ends, so the market should be
+The market trend is a view about the environment: a war ends, so the market should be
 bid. It is not a view about any particular asset being mispriced, so it does not
 belong in the signal — §11.3 is explicit that the tradeable quantity is the
 residual, observed minus expected, and that news everyone can read is priced
 before it can be acted on. What a view about the environment *can* legitimately
 do is change how much of a position is taken.
 
-So the wave is a **tilt on exposure**, and nothing else. It scales positions that
+So the market trend is a **tilt on exposure**, and nothing else. It scales positions that
 agree with it up and positions that disagree down. It never creates a position,
 never changes a sign, and never trades on its own: a tilt applied to a flat book
 is still flat.
 
-**The ceiling is the point.** At the extreme the tilt is ±50%, so a maximal wave
+**The ceiling is the point.** At the extreme the tilt is ±50%, so a maximal market trend
 moves a position by half and not by a multiple. An operator who could turn a
 systematic book into a directional bet with one slider does not have a
 systematic book, and the slider would be the strategy. Half is a number chosen
@@ -63,19 +63,19 @@ def sentiment_bucket(sentiment: int) -> str:
 
 
 def exposure_multipliers(direction: str, magnitude: int) -> tuple[float, float]:
-    """(long, short) multipliers for a wave. NORMAL is the identity."""
+    """(long, short) multipliers for a market trend. NORMAL is the identity."""
     if direction == "NORMAL" or magnitude == 0:
         return 1.0, 1.0
-    with_wave = 1.0 + (magnitude / 10.0) * TILT_CEILING
+    with_trend = 1.0 + (magnitude / 10.0) * TILT_CEILING
     against = 1.0 - (magnitude / 10.0) * TILT_CEILING
-    return (with_wave, against) if direction == "UP" else (against, with_wave)
+    return (with_trend, against) if direction == "UP" else (against, with_trend)
 
 
 def apply(position: np.ndarray, direction: str, magnitude: int) -> np.ndarray:
-    """Scale a position series by the wave, without changing any sign.
+    """Scale a position series by the market trend, without changing any sign.
 
     Longs and shorts are scaled separately rather than the whole series by one
-    factor: a single multiplier would move a short *further* into the wave it
+    factor: a single multiplier would move a short *further* into the market trend it
     disagrees with, which is the opposite of what the operator asked for and
     would be invisible in any aggregate.
     """

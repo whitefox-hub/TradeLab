@@ -102,8 +102,8 @@ class ScenarioRequest(BaseModel):
 
     direction: str = Field(pattern="^(UP|NORMAL|DOWN)$")
     #: 0 when NORMAL, 1 to 10 otherwise. The pairing is checked below and again
-    #: by a database CHECK: a NORMAL wave of magnitude 7 would read downstream
-    #: as pressure with no direction, and a DOWN wave of 0 as direction with no
+    #: by a database CHECK: a NORMAL market trend of magnitude 7 would read downstream
+    #: as pressure with no direction, and a DOWN market trend of 0 as direction with no
     #: pressure. Both are states the engine would have to invent a meaning for.
     magnitude: int = Field(ge=0, le=10)
     #: Where on the 1-100 scale to assume the rest of the market sits. An
@@ -183,8 +183,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     def _before_payload(before: Any) -> dict[str, Any] | None:
         return None if before is None else {
-            "direction": before["wave_direction"],
-            "magnitude": before["wave_magnitude"],
+            "direction": before["trend_direction"],
+            "magnitude": before["trend_magnitude"],
             "sentiment": before["sentiment"]}
 
     def _run_payload(run_id: uuid.UUID, outcome: Any,
@@ -668,14 +668,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         is a decision.
         """
         row = session.execute(sa.text(
-            "SELECT wave_direction, wave_magnitude, sentiment "
+            "SELECT trend_direction, trend_magnitude, sentiment "
             "FROM market_conditions WHERE id = 1"
         )).mappings().first()
         if row is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 "the conditions row is missing; migration 0013 seeds it")
-        return {"direction": row["wave_direction"],
-                "magnitude": row["wave_magnitude"],
+        return {"direction": row["trend_direction"],
+                "magnitude": row["trend_magnitude"],
                 "sentiment": row["sentiment"]}
 
     @app.put("/api/scenario")
@@ -690,7 +690,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # Read in the same transaction as the UPDATE below, so the "from" it
         # records is the value this write actually replaced.
         before = session.execute(sa.text(
-            "SELECT wave_direction, wave_magnitude, sentiment "
+            "SELECT trend_direction, trend_magnitude, sentiment "
             "FROM market_conditions WHERE id = 1 FOR UPDATE"
         )).mappings().first()
 
@@ -700,12 +700,12 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # another request can change the value, and the comparison would then be
         # against something that is no longer there.
         row = session.execute(sa.text(
-            "UPDATE market_conditions SET wave_direction = :d, wave_magnitude = :m, "
+            "UPDATE market_conditions SET trend_direction = :d, trend_magnitude = :m, "
             "sentiment = :s WHERE id = 1 AND ("
-            "  wave_direction IS DISTINCT FROM :d"
-            "  OR wave_magnitude IS DISTINCT FROM :m"
+            "  trend_direction IS DISTINCT FROM :d"
+            "  OR trend_magnitude IS DISTINCT FROM :m"
             "  OR sentiment IS DISTINCT FROM :s) "
-            "RETURNING wave_direction, wave_magnitude, sentiment"
+            "RETURNING trend_direction, trend_magnitude, sentiment"
         ), {"d": body.direction, "m": body.magnitude,
             "s": body.sentiment}).mappings().first()
 
@@ -714,7 +714,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # because returning "unchanged" for a missing row would hide the one
             # state that is actually broken.
             current = session.execute(sa.text(
-                "SELECT wave_direction, wave_magnitude, sentiment "
+                "SELECT trend_direction, trend_magnitude, sentiment "
                 "FROM market_conditions WHERE id = 1"
             )).mappings().first()
             if current is None:
@@ -725,8 +725,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # one entry in the log, not two. A change log that records
             # non-changes cannot answer when something was last changed, which
             # is the only question it exists for.
-            return {"direction": current["wave_direction"],
-                    "magnitude": current["wave_magnitude"],
+            return {"direction": current["trend_direction"],
+                    "magnitude": current["trend_magnitude"],
                     "sentiment": current["sentiment"], "changed": False}
 
         # Audited because these are inputs someone chose. Which conditions a
@@ -755,14 +755,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                   {"direction": body.direction, "magnitude": body.magnitude,
                    "sentiment": body.sentiment, "from": _before_payload(before)})
             session.commit()
-            return {"direction": row["wave_direction"],
-                    "magnitude": row["wave_magnitude"],
+            return {"direction": row["trend_direction"],
+                    "magnitude": row["trend_magnitude"],
                     "sentiment": row["sentiment"], "changed": True,
                     "run": None, "run_error": str(missing)}
 
         run_id = uuid.uuid4()
         session.execute(sa.text(
-            "INSERT INTO scenario_runs (id, actor, wave_direction, wave_magnitude, "
+            "INSERT INTO scenario_runs (id, actor, trend_direction, trend_magnitude, "
             "  sentiment, sentiment_bucket, long_multiplier, short_multiplier, "
             "  reference, bars, baseline, conditioned, reached_step, "
             "  stopped_because) "
@@ -781,8 +781,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                "sentiment": body.sentiment, "from": _before_payload(before),
                "run": str(run_id)})
         session.commit()
-        return {"direction": row["wave_direction"],
-                "magnitude": row["wave_magnitude"],
+        return {"direction": row["trend_direction"],
+                "magnitude": row["trend_magnitude"],
                 "sentiment": row["sentiment"], "changed": True,
                 "run": _run_payload(run_id, outcome,
                                     round(time.perf_counter() - started, 3))}
@@ -838,14 +838,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         error that makes a backtest look prescient.
         """
         rows = session.execute(sa.text(
-            "SELECT id, ran_at, actor, wave_direction, wave_magnitude, sentiment, "
+            "SELECT id, ran_at, actor, trend_direction, trend_magnitude, sentiment, "
             "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
             "  bars, baseline, conditioned, reached_step, stopped_because "
             "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT :n"
         ), {"n": max(1, min(limit, 100))}).mappings().all()
         return [{
             "id": str(r["id"]), "at": r["ran_at"].isoformat(), "actor": r["actor"],
-            "direction": r["wave_direction"], "magnitude": r["wave_magnitude"],
+            "direction": r["trend_direction"], "magnitude": r["trend_magnitude"],
             "sentiment": r["sentiment"], "sentiment_bucket": r["sentiment_bucket"],
             "long_multiplier": float(r["long_multiplier"]),
             "short_multiplier": float(r["short_multiplier"]),
@@ -943,13 +943,13 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/market-sentiment", include_in_schema=False)
     def market_sentiment_screen() -> FileResponse:
-        """The wave the operator sets, and the index the market prints. §20.
+        """The market trend the operator sets, and the index the market prints. §20.
 
         Both on one page because they answer the same question from opposite
         sides — what the book is leaning into, and what everyone else is doing —
         and reading either one alone is how a lean gets mistaken for a consensus.
 
-        Kept plain on purpose. The wave has two fields and the index has one, so
+        Kept plain on purpose. The market trend has two fields and the index has one, so
         anything else this page offered would be an input nothing consumes, and
         an input nothing consumes is one an operator eventually believes in.
         """
@@ -1055,13 +1055,13 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                  "rule": "Byte-identical across backtest, simulator, testnet and "
                          "live. Only the data feed and the venue adapter change."},
                 {"n": 10, "name": "The scenario conditions the size",
-                 "does": "Scale the intended position by the wave set on Market "
+                 "does": "Scale the intended position by the market trend set on Market "
                          "Sentiment: positions agreeing with it up, positions "
                          "disagreeing down, by up to half at magnitude 10. "
                          "Collected events still damp it separately — half under "
                          "a live regime shift, seven tenths inside the three-day "
                          "anticipation window of a scheduled one, compounding.",
-                 "rule": "The wave conditions, it does not signal. §11.3 puts "
+                 "rule": "The market trend conditions, it does not signal. §11.3 puts "
                          "direction as an input to an expected-reaction model "
                          "and never a signal in itself — what is tradeable is "
                          "the residual, observed minus expected, and trading a "

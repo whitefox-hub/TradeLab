@@ -1,7 +1,7 @@
 """Run the decision sequence under operator-set conditions. Plan.md §20, §15.
 
 This is what the Save button starts. It is a **simulation**: it reads bars,
-builds a reference position, applies the wave, evaluates both arms and puts the
+builds a reference position, applies the market trend, evaluates both arms and puts the
 result through the same gate a study goes through. Nothing it does can reach a
 venue — there is no mode here to set, and the row it writes is in
 `scenario_runs` rather than in `runs`.
@@ -136,7 +136,7 @@ def execute(direction: str, magnitude: int, sentiment: int,
                    else f"the gate returned {gate.verdict.upper()}")
 
     if direction == "NORMAL":
-        notes.append("the wave is NORMAL, so both arms are the same run and the "
+        notes.append("the market trend is NORMAL, so both arms are the same run and the "
                      "difference below is zero by construction.")
 
     return ScenarioRun(

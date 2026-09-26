@@ -1,6 +1,6 @@
 """The event corpus: what happened, when it was knowable, and what followed.
 
-Separate from the operator's wave, which is a condition to test under and has no
+Separate from the operator's market trend, which is a condition to test under and has no
 date. This package holds the dated, point-in-time side — the collected corpus a
 study reads, the retention that bounds it, the pre-event context the risk layer
 consults, and §11.3's measurement of what actually moved afterwards.

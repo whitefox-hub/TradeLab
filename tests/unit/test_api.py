@@ -608,9 +608,9 @@ def test_the_chrome_is_revalidated_rather_than_cached(client: TestClient) -> Non
 
 
 
-# -- waves -------------------------------------------------------------------
+# -- trends -------------------------------------------------------------------
 #
-# A wave is three fields: asset, direction, magnitude. The tests below are
+# A market trend is three fields: asset, direction, magnitude. The tests below are
 # mostly about what it is *not* allowed to become, because the pressure on a
 # screen like this is always to add one more field, and the fourth field is the
 # one nothing downstream reads.
@@ -651,7 +651,7 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     # is asserted. §20.1 permits approvals and lifecycle transitions; §20.6 adds
     # a macro consensus, an observation recorded with its time rather than a
     # computed figure. §12.4 adds operator settings, which reach only the column
-    # that does not define a strategy. §20 adds the scenario — the wave and the
+    # that does not define a strategy. §20 adds the scenario — the market trend and the
     # assumed sentiment — which changes what a simulation is asked to assume and
     # nothing that is running.
     #
@@ -725,7 +725,7 @@ def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
         assert f'mount("{path}"' in page, f"{path} does not mark itself active"
 
 
-# -- the wave ----------------------------------------------------------------
+# -- the market trend ----------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -743,7 +743,7 @@ def test_there_is_no_route_that_creates_a_second_scenario(client: TestClient) ->
     make."""
     paths = {route.path for route in client.app.routes}
     assert "/api/scenario" in paths
-    assert not any(p.startswith("/api/waves") for p in paths)
+    assert not any(p.startswith("/api/trends") for p in paths)
 
     methods = {
         method
@@ -799,8 +799,8 @@ def test_a_sentiment_outside_one_to_a_hundred_is_refused() -> None:
 
 @pytest.mark.fast
 def test_normal_and_magnitude_zero_are_the_same_fact() -> None:
-    """A NORMAL wave of magnitude 7 reads downstream as pressure with no
-    direction, and a DOWN wave of 0 as direction with no pressure. Both are
+    """A NORMAL market trend of magnitude 7 reads downstream as pressure with no
+    direction, and a DOWN market trend of 0 as direction with no pressure. Both are
     states the engine would have to invent a meaning for, so neither is
     representable — here, and again in a database CHECK."""
     import pydantic
@@ -823,7 +823,7 @@ def test_normal_and_magnitude_zero_are_the_same_fact() -> None:
 
 @pytest.mark.fast
 def test_a_magnitude_outside_the_scale_is_refused() -> None:
-    """The scale is defined as 1 to 10. A 70 is not a stronger wave, it is a
+    """The scale is defined as 1 to 10. A 70 is not a stronger market trend, it is a
     number the engine would read as seven times the defined extreme — and
     nothing downstream could tell it from a real one."""
     import pydantic
@@ -864,25 +864,25 @@ def test_the_screen_offers_the_three_states_and_nothing_dated(
     reject is still worth not offering, because an input that errors on save is
     one the operator has already spent time filling in."""
     markup = client.get("/static/market_sentiment.html").text
-    for present in ('id="w-up"', 'id="w-normal"', 'id="w-down"', 'id="w-mag"',
+    for present in ('id="t-up"', 'id="t-normal"', 'id="t-down"', 'id="t-mag"',
                     'id="s-range"', 'id="s-value"'):
         assert present in markup, f"the screen is missing {present}"
-    for absent in ('type="date"', 'type="datetime-local"', 'id="w-asset"',
-                   'id="w-note"', 'id="w-when"'):
+    for absent in ('type="date"', 'type="datetime-local"', 'id="t-asset"',
+                   'id="t-note"', 'id="t-when"'):
         assert absent not in markup, f"the screen offers {absent}"
 
     # DOWN, NORMAL, UP. The buttons run the same way as the sentiment scale
     # beneath them, which runs fear on the left; a row ordered UP first would
     # have the two disagreeing about which side is bearish on one screen.
-    order = [markup.index(f'id="w-{name}"') for name in ("down", "normal", "up")]
-    assert order == sorted(order), "the wave buttons do not run DOWN, NORMAL, UP"
+    order = [markup.index(f'id="t-{name}"') for name in ("down", "normal", "up")]
+    assert order == sorted(order), "the market trend buttons do not run DOWN, NORMAL, UP"
 
     # Both dials cover their whole scale. A slider that stops short silently
     # caps the scenario, and nothing downstream would report the ceiling.
     assert 'min="1" max="100"' in markup, "the sentiment slider is not 1 to 100"
     assert 'min="1" max="10"' in markup, "the magnitude slider is not 1 to 10"
 
-    # Magnitude 0 is not on the scale. Zero is not a weak wave, it is the
+    # Magnitude 0 is not on the scale. Zero is not a weak market trend, it is the
     # absence of one, and the NORMAL button already says that. A slider that
     # could also express it would let the two controls disagree about the same
     # fact, which is the disagreement the database CHECK exists to make
@@ -1002,7 +1002,7 @@ def test_the_menu_offers_no_screen_that_is_gone(client: TestClient) -> None:
 
     menu = client.get("/static/app.js").text
     assert "/news" not in menu
-    assert "/waves" not in menu
+    assert "/trends" not in menu
     for href in set(re.findall(r'href: "(/[a-z_-]+)"', menu)):
         assert client.get(href).status_code == 200, f"{href} is in the menu but 404s"
 
@@ -1029,11 +1029,11 @@ def test_the_scenario_screen_flags_unsaved_changes(client: TestClient) -> None:
 
 @pytest.mark.fast
 def test_each_pane_shows_the_history_of_its_own_dial(client: TestClient) -> None:
-    """A change to the sentiment listed under the wave would read as the wave
+    """A change to the sentiment listed under the market trend would read as the market trend
     having been set to the value it already held, which is the repetition the
     write path exists to avoid."""
     markup = client.get("/static/market_sentiment.html").text
-    assert 'id="w-history"' in markup
+    assert 'id="t-history"' in markup
     assert 'id="s-history"' in markup
     assert "/api/scenario/history" in markup
     # The previous value is derived from the adjacent entry only where it was
