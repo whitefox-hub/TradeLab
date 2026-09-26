@@ -1,9 +1,21 @@
 # Pre-registration 005 — Does the operator's read of the news predict anything?
 
-Registered 2026-09-26, **before any trend has been set in earnest**. The
-`market_conditions` table was created today and its change log holds only the
-settings made while building the screen. Nothing below can have been fitted to
-data that does not exist.
+Registered 2026-09-26. The `market_conditions` table was created today and its
+change log holds only the settings made while building the screen. Nothing below
+can have been fitted to data that does not exist.
+
+**The cutoff, so "before" is a timestamp and not a claim.** Only settings
+recorded strictly after
+
+```
+2026-09-26T14:49:00-03:00
+```
+
+count as observations. That is the commit timestamp of this registration
+(`3c3e29399d8d`). The entries already in `audit_log` were made while testing the
+endpoint and are excluded by that clause rather than deleted — an audit log that
+can be tidied is not one. The analysis script must filter on it, and a result
+computed without it is void.
 
 ## Why this one is registered now and run later
 
