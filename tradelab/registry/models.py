@@ -802,6 +802,57 @@ class MarketConditions(Base):
     )
 
 
+class ScenarioRun(Base):
+    """What the algorithm did under a set of operator-set conditions. §20, §15.
+
+    Deliberately **not** `runs`. That table carries a strategy, a risk limit
+    config, a cost model and a mode that includes `live`, and it exists for
+    something that trades. This records a simulation, and the two are kept apart
+    because the query that mistakes them is the one that reports a scenario as a
+    position. There is no mode column here and no foreign key out, so there is
+    nothing for a later change to point at the execution tables.
+
+    The conditions are copied onto the row rather than joined from
+    `market_conditions`, which holds one mutable row — a join would report every
+    past run as having used today's settings, which is the shape of error that
+    makes a backtest look prescient.
+    """
+
+    __tablename__ = "scenario_runs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    ran_at: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=func.now())
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    wave_direction: Mapped[str] = mapped_column(Text, nullable=False)
+    wave_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    sentiment_bucket: Mapped[str] = mapped_column(Text, nullable=False)
+    #: What the wave did, stored so a result can be read without re-deriving the
+    #: transform that produced it — which may have changed since.
+    long_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
+    short_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
+    reference: Mapped[str] = mapped_column(Text, nullable=False)
+    bars: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Both arms. The conditioned result alone would be a number with nothing to
+    #: read it against, and the difference is the only thing the operator changed.
+    baseline: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    conditioned: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    reached_step: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    stopped_because: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("wave_direction IN ('UP','NORMAL','DOWN')",
+                        name="ck_scenario_runs_direction"),
+        CheckConstraint("wave_magnitude BETWEEN 0 AND 10",
+                        name="ck_scenario_runs_magnitude"),
+        CheckConstraint("sentiment BETWEEN 1 AND 100",
+                        name="ck_scenario_runs_sentiment"),
+        CheckConstraint("bars > 0", name="ck_scenario_runs_bars"),
+        Index("ix_scenario_runs_ran_at", "ran_at"),
+    )
+
+
 class SentimentReading(Base):
     """A day's Fear and Greed value. Plan.md §11.4, §4.3.
 

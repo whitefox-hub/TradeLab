@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -43,6 +44,7 @@ from tradelab.api.settings_rules import RULES
 from tradelab.api.settings_rules import Invalid as InvalidSetting
 from tradelab.api.settings_rules import validate as validate_setting
 from tradelab.config import Settings
+from tradelab.scenario import run as scenario_run
 
 #: Shared chrome and the screens live here. Mounted rather than served per file,
 #: so adding a stylesheet does not mean adding a route.
@@ -178,6 +180,26 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "VALUES (:a, :ac, :k, :s, CAST(:p AS jsonb))"
         ), {"a": actor, "ac": action, "k": kind, "s": subject,
             "p": None if payload is None else json.dumps(payload)})
+
+    def _before_payload(before: Any) -> dict[str, Any] | None:
+        return None if before is None else {
+            "direction": before["wave_direction"],
+            "magnitude": before["wave_magnitude"],
+            "sentiment": before["sentiment"]}
+
+    def _run_payload(run_id: uuid.UUID, outcome: Any,
+                     seconds: float) -> dict[str, Any]:
+        return {
+            "id": str(run_id), "reference": outcome.reference,
+            "bars": outcome.bars,
+            "long_multiplier": outcome.long_multiplier,
+            "short_multiplier": outcome.short_multiplier,
+            "sentiment_bucket": outcome.sentiment_bucket,
+            "baseline": outcome.baseline, "conditioned": outcome.conditioned,
+            "reached_step": outcome.reached_step,
+            "stopped_because": outcome.stopped_because,
+            "notes": outcome.notes, "seconds": seconds,
+        }
 
     # -- session ------------------------------------------------------------
 
@@ -710,17 +732,60 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # Audited because these are inputs someone chose. Which conditions a
         # simulation was run under last month is a question the log has to be
         # able to answer after the values have been changed — so the entry says
-        # what they moved from as well as to.
+        # what they moved from as well as to, and which run it started.
+        #
+        # Save is what starts the algorithm. Only on a real change, for the
+        # same reason the log only records one: re-running an identical scenario
+        # produces an identical answer, and a second copy of it is noise in the
+        # list the operator reads.
+        #
+        # Synchronous because it is milliseconds on the archive this holds, and
+        # because a run the operator does not wait for is one they will not
+        # connect to the button they pressed. If the archive grows this has to
+        # move off the request, and the timing is reported so that is visible
+        # before it becomes a problem rather than after.
+        started = time.perf_counter()
+        try:
+            outcome = scenario_run.execute(
+                body.direction, body.magnitude, body.sentiment)
+        except FileNotFoundError as missing:
+            # The scenario is saved either way. A run that cannot start is not a
+            # reason to discard a setting the operator made.
+            audit(session, who.email, "scenario.set", "scenario", "market",
+                  {"direction": body.direction, "magnitude": body.magnitude,
+                   "sentiment": body.sentiment, "from": _before_payload(before)})
+            session.commit()
+            return {"direction": row["wave_direction"],
+                    "magnitude": row["wave_magnitude"],
+                    "sentiment": row["sentiment"], "changed": True,
+                    "run": None, "run_error": str(missing)}
+
+        run_id = uuid.uuid4()
+        session.execute(sa.text(
+            "INSERT INTO scenario_runs (id, actor, wave_direction, wave_magnitude, "
+            "  sentiment, sentiment_bucket, long_multiplier, short_multiplier, "
+            "  reference, bars, baseline, conditioned, reached_step, "
+            "  stopped_because) "
+            "VALUES (:i, :a, :d, :m, :s, :b, :lm, :sm, :r, :n, "
+            "  CAST(:base AS jsonb), CAST(:cond AS jsonb), :step, :why)"
+        ), {"i": run_id, "a": who.email, "d": body.direction,
+            "m": body.magnitude, "s": body.sentiment,
+            "b": outcome.sentiment_bucket, "lm": outcome.long_multiplier,
+            "sm": outcome.short_multiplier, "r": outcome.reference,
+            "n": outcome.bars, "base": json.dumps(outcome.baseline),
+            "cond": json.dumps(outcome.conditioned),
+            "step": outcome.reached_step, "why": outcome.stopped_because})
+
         audit(session, who.email, "scenario.set", "scenario", "market",
               {"direction": body.direction, "magnitude": body.magnitude,
-               "sentiment": body.sentiment,
-               "from": {"direction": before["wave_direction"],
-                        "magnitude": before["wave_magnitude"],
-                        "sentiment": before["sentiment"]} if before else None})
+               "sentiment": body.sentiment, "from": _before_payload(before),
+               "run": str(run_id)})
         session.commit()
         return {"direction": row["wave_direction"],
                 "magnitude": row["wave_magnitude"],
-                "sentiment": row["sentiment"], "changed": True}
+                "sentiment": row["sentiment"], "changed": True,
+                "run": _run_payload(run_id, outcome,
+                                    round(time.perf_counter() - started, 3))}
 
     @app.get("/api/scenario/history")
     def scenario_history(limit: int = 40, who: Operator = operator,
@@ -761,6 +826,34 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "from": payload.get("from"),
             })
         return out
+
+    @app.get("/api/scenario/runs")
+    def scenario_runs(limit: int = 10, who: Operator = operator,
+                      session: Session = session_dep) -> list[dict[str, Any]]:
+        """What the algorithm did under each set of conditions, newest first.
+
+        The conditions are columns on the row rather than a join to
+        `market_conditions`, which holds one mutable row — a join would report
+        every past run as having used today's settings, which is the shape of
+        error that makes a backtest look prescient.
+        """
+        rows = session.execute(sa.text(
+            "SELECT id, ran_at, actor, wave_direction, wave_magnitude, sentiment, "
+            "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
+            "  bars, baseline, conditioned, reached_step, stopped_because "
+            "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT :n"
+        ), {"n": max(1, min(limit, 100))}).mappings().all()
+        return [{
+            "id": str(r["id"]), "at": r["ran_at"].isoformat(), "actor": r["actor"],
+            "direction": r["wave_direction"], "magnitude": r["wave_magnitude"],
+            "sentiment": r["sentiment"], "sentiment_bucket": r["sentiment_bucket"],
+            "long_multiplier": float(r["long_multiplier"]),
+            "short_multiplier": float(r["short_multiplier"]),
+            "reference": r["reference"], "bars": r["bars"],
+            "baseline": r["baseline"], "conditioned": r["conditioned"],
+            "reached_step": r["reached_step"],
+            "stopped_because": r["stopped_because"],
+        } for r in rows]
 
     @app.get("/api/fear-greed")
     def read_fear_greed(who: Operator = operator,
@@ -961,24 +1054,27 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                          "not know which mode it is running in.",
                  "rule": "Byte-identical across backtest, simulator, testnet and "
                          "live. Only the data feed and the venue adapter change."},
-                {"n": 10, "name": "News conditions the size",
-                 "does": "Look up every event visible at this instant that "
-                         "touches the asset, and damp the intended position: "
-                         "half under a live regime shift, seven tenths inside "
-                         "the three-day anticipation window of a scheduled one, "
-                         "and both compounding.",
-                 "rule": "News conditions, it does not signal. §11.7 puts sign "
-                         "as an input to an expected-reaction model and never a "
-                         "signal in itself — what is tradeable is the residual, "
-                         "observed minus expected, and trading the sign directly "
-                         "trades the half everyone has already priced. So an "
-                         "event earns a worse prior, not a direction. Visible "
-                         "means available_at has passed, not that it happened.",
-                 "cost": "Not damping at all was the state until now: events "
-                         "were recorded, rated and measured, and no decision "
-                         "read them. The residual itself still waits on §11.5 "
-                         "fitting an expected-reaction model, without which "
-                         "there is nothing to subtract from."},
+                {"n": 10, "name": "The scenario conditions the size",
+                 "does": "Scale the intended position by the wave set on Market "
+                         "Sentiment: positions agreeing with it up, positions "
+                         "disagreeing down, by up to half at magnitude 10. "
+                         "Collected events still damp it separately — half under "
+                         "a live regime shift, seven tenths inside the three-day "
+                         "anticipation window of a scheduled one, compounding.",
+                 "rule": "The wave conditions, it does not signal. §11.3 puts "
+                         "direction as an input to an expected-reaction model "
+                         "and never a signal in itself — what is tradeable is "
+                         "the residual, observed minus expected, and trading a "
+                         "view everyone can read trades the half already priced. "
+                         "So it scales a position and never creates one: applied "
+                         "to a flat book it is still flat, and it cannot change "
+                         "a sign.",
+                 "cost": "The ceiling of half is chosen to bound the damage, not "
+                         "because anything measured it. An operator who could "
+                         "turn a systematic book into a directional bet with one "
+                         "slider would have the slider as the strategy. Whether "
+                         "the tilt helps at all is untested, which is why a run "
+                         "reports it against the same run without it."},
                 {"n": 11, "name": "Risk engine vetoes",
                  "does": "Sixteen limits, evaluated by a component independent "
                          "of the strategy.",

@@ -1202,3 +1202,54 @@ def test_the_index_and_the_assumption_share_one_bar_but_not_one_mark(
 
     # The slider sits above the bar it reads against, not below it.
     assert pane.index('id="s-range"') < pane.index('class="scale"')
+
+
+@pytest.mark.fast
+def test_saving_the_scenario_is_what_starts_a_run(client: TestClient) -> None:
+    """The Save button activates the algorithm, so the run hangs off the write
+    rather than off a second route the screen has to remember to call. There is
+    still no new write route: a run is recorded by the save that caused it.
+    """
+    import inspect
+
+    from tradelab.api.app import create_app as factory
+
+    source = inspect.getsource(factory)
+    put = source[source.index('@app.put("/api/scenario")'):]
+    put = put[:put.index('@app.get("/api/scenario/runs")')]
+    assert "scenario_run.execute" in put, "saving does not start a run"
+    # And only on a change, for the same reason the log records only one:
+    # re-running an identical scenario produces an identical answer.
+    assert put.index('"changed": False') < put.index("scenario_run.execute")
+
+    paths = {route.path for route in client.app.routes}
+    assert "/api/scenario/runs" in paths
+    # Reading runs is a read. Nothing about a scenario run is a second write.
+    methods = {
+        method
+        for route in client.app.routes
+        if getattr(route, "path", None) == "/api/scenario/runs"
+        for method in getattr(route, "methods", set())
+    }
+    assert methods == {"GET"}
+
+
+@pytest.mark.fast
+def test_the_algorithm_screen_no_longer_credits_news_for_the_sizing(
+    client: TestClient,
+) -> None:
+    """Step 10 named a screen that has been deleted. A sequence describing a
+    step by a mechanism that no longer exists is worse than one that omits it,
+    because it reads as current."""
+    # Read from the constant rather than through the endpoint: the endpoint
+    # needs a session, and what is being checked is the text itself.
+    import inspect
+
+    from tradelab.api.app import create_app as factory
+
+    source = inspect.getsource(factory)
+    assert "News conditions the size" not in source
+    assert "The scenario conditions the size" in source
+    # And it says what the tilt cannot do, since that is the part an operator
+    # has to be able to read without opening the code.
+    assert "it does not signal" in source

@@ -81,6 +81,19 @@
   .history .empty-note { color:var(--muted); font-size:13.5px; line-height:1.5;
     margin:0; }
 
+  /* -- what Save started -- */
+  .run-pane { margin:18px 0 8px; }
+  .run-table { margin-top:14px; }
+  .run-table td, .run-table th { padding:9px 10px; }
+  .run-table tr.diff td { color:var(--muted); border-bottom:none; }
+  .run-table tr.diff td.up { color:var(--up); } .run-table tr.diff td.down { color:var(--down); }
+  .stopped { margin:16px 0 0; padding:12px 14px; border-radius:10px;
+    background:color-mix(in srgb, var(--warn) 12%, transparent);
+    border:1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+    font-size:13.5px; line-height:1.5; }
+  .run-notes { margin:14px 0 0; padding-left:18px; color:var(--muted);
+    font-size:13px; line-height:1.55; }
+
   /* -- the index the market prints -- */
   .gauge { display:flex; align-items:baseline; gap:12px; margin:2px 0 4px; }
   .gauge .v { font-size:54px; font-weight:660; letter-spacing:-.03em;
@@ -225,6 +238,22 @@
 
 
 
+    <!-- What Save started. Below both panes because the run reads both dials,
+         and putting it under either would read as belonging to that one. -->
+    <section class="pane run-pane" id="run-pane" style="display:none">
+      <h2>Last run</h2>
+      <p class="lead" id="run-lead"></p>
+      <table class="run-table">
+        <thead><tr>
+          <th></th><th class="num">Return</th><th class="num">Max drawdown</th>
+          <th class="num">Sharpe</th><th class="num">Cost</th>
+        </tr></thead>
+        <tbody id="run-rows"></tbody>
+      </table>
+      <p class="stopped" id="run-stopped"></p>
+      <ul class="run-notes" id="run-notes"></ul>
+    </section>
+
     <p class="hint">The index is a vendor number and is stored where it can be looked
       at, not where a study reaches for it. Its method is not auditable and it is
       composed partly of data already collected here, so §11.4 builds the market state
@@ -291,12 +320,16 @@ function paintDirty() {
 }
 
 // The vendor's own band boundaries, so the label under the slider says the same
-// word the index would for that number. Written once here rather than inferred
-// from whichever reading happens to be on screen.
+// word the index would for that number. Read off 3156 published days rather
+// than guessed: the vendor names the five bands and does not document the cut
+// points, and the guessed version put 50 in "Greed" and had no "Neutral" at all
+// although the series carries 401 days of one. Kept in step with
+// tradelab/scenario/tilt.py, which a test checks.
 function band(value) {
-  if (value <= 24) return "Extreme Fear";
-  if (value <= 49) return "Fear";
-  if (value <= 74) return "Greed";
+  if (value <= 25) return "Extreme Fear";
+  if (value <= 46) return "Fear";
+  if (value <= 54) return "Neutral";
+  if (value <= 75) return "Greed";
   return "Extreme Greed";
 }
 
@@ -448,6 +481,61 @@ async function load() {
   paintApplied();
   paintDirty();
   await loadHistory();
+  // The last run, whether or not this session started it: the conditions in
+  // force were produced by some run, and not showing it would make a reload
+  // look like nothing had ever been run.
+  const runs = await api("/api/scenario/runs?limit=1");
+  renderRun(runs[0] ? {...runs[0], notes: []} : null);
+}
+
+const pct = (v) => `${(Number(v) * 100).toFixed(2)}%`;
+
+function renderRun(run) {
+  if (!run) { $("run-pane").style.display = "none"; return; }
+  $("run-pane").style.display = "";
+
+  const tilted = run.long_multiplier !== 1 || run.short_multiplier !== 1;
+  $("run-lead").textContent = tilted
+    ? `${run.reference}, ${run.bars.toLocaleString()} bars. The wave scaled longs `
+      + `to ${run.long_multiplier}× and shorts to ${run.short_multiplier}×. `
+      + `Sentiment recorded as ${run.sentiment_bucket}; it groups the run and does `
+      + `not move a position.`
+    : `${run.reference}, ${run.bars.toLocaleString()} bars. The wave is NORMAL, so `
+      + "both arms are the same run.";
+
+  const row = (label, r) => `<tr>
+      <td>${label}</td>
+      <td class="num">${pct(r.total_return)}</td>
+      <td class="num">${pct(r.max_drawdown)}</td>
+      <td class="num">${r.sharpe.toFixed(2)}</td>
+      <td class="num">${pct(r.cost_drag)}</td>
+    </tr>`;
+
+  // The difference is the only line the operator actually caused. Shown as its
+  // own row rather than left to be subtracted by eye.
+  const d = (a, b) => b - a;
+  const sign = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
+  const dr = d(run.baseline.total_return, run.conditioned.total_return);
+  const dd = d(run.baseline.max_drawdown, run.conditioned.max_drawdown);
+  const ds = d(run.baseline.sharpe, run.conditioned.sharpe);
+
+  $("run-rows").innerHTML = row("Without the wave", run.baseline)
+    + row("With the wave", run.conditioned)
+    + `<tr class="diff">
+        <td>Difference</td>
+        <td class="num ${sign(dr)}">${dr >= 0 ? "+" : ""}${pct(dr)}</td>
+        <td class="num ${sign(dd)}">${dd >= 0 ? "+" : ""}${pct(dd)}</td>
+        <td class="num ${sign(ds)}">${ds >= 0 ? "+" : ""}${ds.toFixed(2)}</td>
+        <td class="num"></td>
+      </tr>`;
+
+  $("run-stopped").innerHTML = `Stopped at step ${run.reached_step} of 13 — `
+    + `${escape(run.stopped_because)}. Steps 8 to 13 are execution and need a `
+    + `strategy promoted through §15; none has been. `
+    + `<a href="/algorithm">See the sequence</a>.`;
+
+  $("run-notes").innerHTML = (run.notes || [])
+    .map((n) => `<li>${escape(n)}</li>`).join("");
 }
 
 async function loadHistory() {
@@ -519,7 +607,16 @@ $("save").onclick = async () => {
     $("saved").className = "saved";
     setTimeout(paintDirty, 2500);
     // Only a real change adds a line, so there is nothing to re-read otherwise.
-    if (saved.changed) await loadHistory();
+    if (saved.changed) {
+      await loadHistory();
+      // The notes come with the fresh run only. They qualify the numbers, so
+      // they are shown while the numbers are new rather than reconstructed
+      // later from a row that does not carry them.
+      renderRun(saved.run);
+      if (saved.run_error) {
+        $("err").textContent = `Saved, but the run could not start: ${saved.run_error}`;
+      }
+    }
   } catch (e) { $("err").textContent = e.message; }
 };
 </script>
