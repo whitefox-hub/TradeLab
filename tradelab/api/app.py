@@ -665,26 +665,102 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         exists and replaces its contents, and sending it twice leaves the same
         state. A POST would imply a second set of conditions could be created.
         """
+        # Read in the same transaction as the UPDATE below, so the "from" it
+        # records is the value this write actually replaced.
+        before = session.execute(sa.text(
+            "SELECT wave_direction, wave_magnitude, sentiment "
+            "FROM market_conditions WHERE id = 1 FOR UPDATE"
+        )).mappings().first()
+
+        # The UPDATE carries its own no-op test, so a save that changes nothing
+        # touches no row and writes no log line. Done in the WHERE rather than
+        # by reading first and comparing in Python: between those two statements
+        # another request can change the value, and the comparison would then be
+        # against something that is no longer there.
         row = session.execute(sa.text(
             "UPDATE market_conditions SET wave_direction = :d, wave_magnitude = :m, "
-            "sentiment = :s WHERE id = 1 "
+            "sentiment = :s WHERE id = 1 AND ("
+            "  wave_direction IS DISTINCT FROM :d"
+            "  OR wave_magnitude IS DISTINCT FROM :m"
+            "  OR sentiment IS DISTINCT FROM :s) "
             "RETURNING wave_direction, wave_magnitude, sentiment"
         ), {"d": body.direction, "m": body.magnitude,
             "s": body.sentiment}).mappings().first()
+
         if row is None:
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                "the conditions row is missing; migration 0013 seeds it")
+            # Either nothing moved, or the row is missing. Told apart by asking,
+            # because returning "unchanged" for a missing row would hide the one
+            # state that is actually broken.
+            current = session.execute(sa.text(
+                "SELECT wave_direction, wave_magnitude, sentiment "
+                "FROM market_conditions WHERE id = 1"
+            )).mappings().first()
+            if current is None:
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "the conditions row is missing; migration 0013 seeds it")
+            # Idempotent, and honest about it: the same values sent twice leave
+            # one entry in the log, not two. A change log that records
+            # non-changes cannot answer when something was last changed, which
+            # is the only question it exists for.
+            return {"direction": current["wave_direction"],
+                    "magnitude": current["wave_magnitude"],
+                    "sentiment": current["sentiment"], "changed": False}
 
         # Audited because these are inputs someone chose. Which conditions a
         # simulation was run under last month is a question the log has to be
-        # able to answer after the values have been changed.
+        # able to answer after the values have been changed — so the entry says
+        # what they moved from as well as to.
         audit(session, who.email, "scenario.set", "scenario", "market",
               {"direction": body.direction, "magnitude": body.magnitude,
-               "sentiment": body.sentiment})
+               "sentiment": body.sentiment,
+               "from": {"direction": before["wave_direction"],
+                        "magnitude": before["wave_magnitude"],
+                        "sentiment": before["sentiment"]} if before else None})
         session.commit()
         return {"direction": row["wave_direction"],
                 "magnitude": row["wave_magnitude"],
-                "sentiment": row["sentiment"]}
+                "sentiment": row["sentiment"], "changed": True}
+
+    @app.get("/api/scenario/history")
+    def scenario_history(limit: int = 40, who: Operator = operator,
+                         session: Session = session_dep) -> list[dict[str, Any]]:
+        """Every change to the conditions, newest first.
+
+        Read out of `audit_log` rather than from a second table written
+        alongside it. A history kept in its own table is a second writer, and
+        two records of the same fact drift — the one nobody reads is the one
+        that goes wrong. This is the same rows the Audit screen shows, asked a
+        narrower question.
+
+        Every entry here is a change, because `set_scenario` does not write when
+        nothing moved. That is what makes the list readable: a log that records
+        non-changes cannot answer when something was last changed, which is the
+        only question it exists for.
+
+        Entries carry what they changed *from*, so the screen can say which of
+        the two dials moved. Rows written before that was recorded come back
+        with `from` null and are shown as changes to both, which is the honest
+        reading of an entry that does not say.
+        """
+        rows = session.execute(sa.text(
+            "SELECT actor, occurred_at, payload FROM audit_log "
+            "WHERE subject_kind = 'scenario' AND action = 'scenario.set' "
+            "ORDER BY occurred_at DESC, id DESC LIMIT :n"
+        ), {"n": max(1, min(limit, 200))}).mappings().all()
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            payload = row["payload"] or {}
+            out.append({
+                "at": row["occurred_at"].isoformat(),
+                "actor": row["actor"],
+                "direction": payload.get("direction"),
+                "magnitude": payload.get("magnitude"),
+                "sentiment": payload.get("sentiment"),
+                "from": payload.get("from"),
+            })
+        return out
 
     @app.get("/api/fear-greed")
     def read_fear_greed(who: Operator = operator,

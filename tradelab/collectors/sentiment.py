@@ -80,25 +80,44 @@ def fetch(limit: int = 0, client: httpx.Client | None = None) -> list[Reading]:
 
 
 def store(engine: sa.Engine, readings: list[Reading]) -> int:
-    """Upsert by day. Returns the number of rows written.
+    """Upsert by day. Returns the number of rows that actually changed.
 
-    The index does not revise, so a day already stored should arrive identical;
-    the upsert is here for the overlap between runs rather than for corrections.
-    A value that *did* change would be a revision, and §4.3 says a revised series
-    with no vintages cannot be read as it was known at the time — so this writes
-    the new one and the change is visible in the audit of what moved, not hidden.
+    A day whose value is already stored and identical is left alone — not
+    rewritten with a fresh `ingest_time`. The daily run fetches an overlap on
+    purpose, so without that test almost every write would be a no-op recorded
+    as a write, and `ingest_time` would end up meaning "when the cron last ran"
+    rather than "when this value last changed". The second is the only question
+    the column can answer.
+
+    A value that genuinely differs *is* written. The index is not supposed to
+    revise, so that is a revision, and §4.3 says a revised series with no
+    vintages cannot be read as it was known at the time. Writing it makes the
+    change visible in the returned count instead of hiding it behind an
+    unconditional upsert that would have looked identical either way.
     """
     if not readings:
         return 0
     with engine.begin() as conn:
-        conn.execute(sa.text(
+        written = conn.execute(sa.text(
             "INSERT INTO sentiment_readings "
             "  (day, value, classification, source, available_at) "
-            "VALUES (:d, :v, :c, :s, :a) "
+            "SELECT * FROM unnest("
+            "  CAST(:days AS date[]), CAST(:values AS smallint[]), "
+            "  CAST(:classes AS text[]), CAST(:sources AS text[]), "
+            "  CAST(:avail AS timestamptz[])) "
             "ON CONFLICT (day) DO UPDATE SET "
             "  value = EXCLUDED.value, "
             "  classification = EXCLUDED.classification, "
-            "  ingest_time = now()"
-        ), [{"d": r.day.date(), "v": r.value, "c": r.classification,
-             "s": SOURCE, "a": r.available_at} for r in readings])
-    return len(readings)
+            "  ingest_time = now() "
+            "WHERE sentiment_readings.value IS DISTINCT FROM EXCLUDED.value "
+            "   OR sentiment_readings.classification "
+            "      IS DISTINCT FROM EXCLUDED.classification "
+            "RETURNING day"
+        ), {
+            "days": [r.day.date() for r in readings],
+            "values": [r.value for r in readings],
+            "classes": [r.classification for r in readings],
+            "sources": [SOURCE] * len(readings),
+            "avail": [r.available_at for r in readings],
+        }).rowcount
+    return max(written, 0)

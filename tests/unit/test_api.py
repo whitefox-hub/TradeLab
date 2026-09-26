@@ -1022,3 +1022,132 @@ def test_the_scenario_screen_flags_unsaved_changes(client: TestClient) -> None:
     # The baseline is what the server confirmed, never what the form holds. Read
     # back off the controls it would call a failed save clean.
     assert "stored = {direction: saved.direction" in markup
+
+
+# -- nothing is written twice ------------------------------------------------
+
+
+@pytest.mark.fast
+def test_each_pane_shows_the_history_of_its_own_dial(client: TestClient) -> None:
+    """A change to the sentiment listed under the wave would read as the wave
+    having been set to the value it already held, which is the repetition the
+    write path exists to avoid."""
+    markup = client.get("/static/market_sentiment.html").text
+    assert 'id="w-history"' in markup
+    assert 'id="s-history"' in markup
+    assert "/api/scenario/history" in markup
+    # The previous value is derived from the adjacent entry only where it was
+    # not recorded, so a real one is never overwritten by a guess.
+    assert "e.from ?? (raw[i + 1]" in markup
+
+
+@pytest.mark.integration
+def test_saving_the_same_scenario_twice_records_it_once(monkeypatch) -> None:
+    """A log that records non-changes cannot answer when something was last
+    changed, which is the only question it exists for.
+
+    The no-op test lives in the UPDATE's WHERE rather than in a read-then-
+    compare, because between those two statements another request can change the
+    value and the comparison would be against something no longer there. Tested
+    through the API, since that is the path an operator takes.
+    """
+    import sqlalchemy as sa_
+
+    from tradelab.config import Settings
+
+    monkeypatch.setenv("TRADELAB_ADMIN_SALT", SALT)
+    monkeypatch.setenv("TRADELAB_ADMIN_HASH", hash_password(PASSWORD, SALT))
+    monkeypatch.setenv("TRADELAB_SESSION_SECRET", new_secret())
+    engine = sa_.create_engine(Settings().database_url)
+    client = TestClient(create_app(engine=engine))
+
+    email = engine.connect().execute(
+        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
+    if email is None:
+        pytest.skip("no operator row")
+    assert client.post(
+        "/api/session", json={"email": email, "password": PASSWORD}).status_code == 200
+
+    def entries() -> int:
+        with engine.connect() as conn:
+            return conn.execute(sa_.text(
+                "SELECT count(*) FROM audit_log WHERE action = 'scenario.set'"
+            )).scalar_one()
+
+    before = entries()
+    body = {"direction": "DOWN", "magnitude": 4, "sentiment": 33}
+
+    first = client.put("/api/scenario", json=body)
+    assert first.status_code == 200, first.text
+    assert first.json()["changed"] is True
+    assert entries() == before + 1
+
+    for _ in range(3):
+        repeat = client.put("/api/scenario", json=body)
+        assert repeat.status_code == 200, repeat.text
+        # Idempotent and honest about it, rather than returning 200 and writing.
+        assert repeat.json()["changed"] is False
+        # The state is still reported, so a client that missed the first reply
+        # does not have to guess what the value is now.
+        assert repeat.json()["magnitude"] == 4
+    assert entries() == before + 1, "a repeated save added a log entry"
+
+    moved = client.put("/api/scenario", json={**body, "sentiment": 34})
+    assert moved.json()["changed"] is True
+    assert entries() == before + 2
+
+    # The entry says what it replaced, so a reader can tell which dial moved
+    # without holding the whole log in their head.
+    with engine.connect() as conn:
+        payload = conn.execute(sa_.text(
+            "SELECT payload FROM audit_log WHERE action = 'scenario.set' "
+            "ORDER BY id DESC LIMIT 1")).scalar_one()
+    assert payload["from"] == {"direction": "DOWN", "magnitude": 4, "sentiment": 33}
+
+    history = client.get("/api/scenario/history?limit=5").json()
+    assert history[0]["sentiment"] == 34
+    assert history[0]["from"]["sentiment"] == 33
+
+
+@pytest.mark.integration
+def test_an_unchanged_reading_is_not_rewritten(monkeypatch) -> None:
+    """The daily run fetches an overlap on purpose. Without the distinctness
+    test almost every write would be a no-op recorded as a write, and
+    `ingest_time` would mean "when the cron last ran" rather than "when this
+    value last changed" — and only the second is a question the column can
+    answer."""
+    from datetime import UTC, datetime
+
+    import sqlalchemy as sa_
+
+    from tradelab.collectors.sentiment import Reading, store
+    from tradelab.config import Settings
+
+    engine = sa_.create_engine(Settings().database_url)
+    day = datetime(1990, 1, 1, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(sa_.text("DELETE FROM sentiment_readings WHERE day = :d"),
+                     {"d": day.date()})
+
+    reading = Reading(day=day, value=42, classification="Fear")
+    assert store(engine, [reading]) == 1
+    with engine.connect() as conn:
+        first_ingest = conn.execute(sa_.text(
+            "SELECT ingest_time FROM sentiment_readings WHERE day = :d"),
+            {"d": day.date()}).scalar_one()
+
+    assert store(engine, [reading]) == 0, "an identical reading was rewritten"
+    with engine.connect() as conn:
+        assert conn.execute(sa_.text(
+            "SELECT ingest_time FROM sentiment_readings WHERE day = :d"),
+            {"d": day.date()}).scalar_one() == first_ingest
+
+    # A value that genuinely differs is a revision, and is written rather than
+    # swallowed: §4.3 says a revised series with no vintages cannot be read as
+    # it was known at the time, and hiding the revision would make that
+    # undetectable.
+    assert store(engine, [Reading(day=day, value=43, classification="Fear")]) == 1
+
+    with engine.begin() as conn:
+        conn.execute(sa_.text("DELETE FROM sentiment_readings WHERE day = :d"),
+                     {"d": day.date()})

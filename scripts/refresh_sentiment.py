@@ -30,7 +30,7 @@ def main() -> int:
     engine = sa.create_engine(Settings().database_url)
     written = store(engine, readings)
     newest = max(readings, key=lambda r: r.day)
-    print(f"stored {written} readings, newest "
+    print(f"{written} readings changed, newest "
           f"{newest.day.date()} = {newest.value} ({newest.classification})")
     return 0
 

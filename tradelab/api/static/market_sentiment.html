@@ -64,6 +64,24 @@
   .scale.small .pin { top:-3px; height:13px; }
   .assume-band { margin:10px 0 0; font-size:13.5px; font-weight:560; }
 
+  /* -- what this dial has been set to before -- */
+  .history { margin-top:20px; padding-top:16px; border-top:1px solid var(--line); }
+  .history-head { font-size:13px; color:var(--muted); font-weight:620;
+    letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+  .history ul, .history li { list-style:none; margin:0; padding:0; }
+  .history li { display:flex; align-items:baseline; gap:10px; padding:7px 0;
+    font-size:13.5px;
+    border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent); }
+  .history li:last-child { border-bottom:none; }
+  .history .h-val { font-weight:620; font-variant-numeric:tabular-nums;
+    white-space:nowrap; }
+  .history .h-was { color:var(--muted); font-variant-numeric:tabular-nums;
+    white-space:nowrap; }
+  .history .h-when { color:var(--muted); margin-left:auto; white-space:nowrap;
+    font-size:12.5px; }
+  .history .empty-note { color:var(--muted); font-size:13.5px; line-height:1.5;
+    margin:0; }
+
   /* -- the index the market prints -- */
   .gauge { display:flex; align-items:baseline; gap:12px; margin:2px 0 4px; }
   .gauge .v { font-size:54px; font-weight:660; letter-spacing:-.03em;
@@ -141,6 +159,10 @@
           <p class="assume-band" id="w-band"></p>
         </div>
 
+        <div class="history">
+          <div class="history-head">Changes</div>
+          <ul id="w-history"></ul>
+        </div>
       </section>
 
       <section class="pane">
@@ -175,6 +197,11 @@
           <div class="scale small"><span class="pin" id="s-pin" style="left:50%"></span></div>
           <div class="ends"><span>1 · EXTREME FEAR</span><span>EXTREME GREED · 100</span></div>
           <p class="assume-band" id="s-band"></p>
+
+        <div class="history">
+          <div class="history-head">Changes</div>
+          <ul id="s-history"></ul>
+        </div>
         </div>
       </section>
 
@@ -296,6 +323,43 @@ function paintSentiment(value) {
   paintDirty();
 }
 
+// Local time, and the day only where it is not today: a log whose every line
+// repeats the same date is a log you have to read twice to find the one that
+// matters.
+function when(iso) {
+  const at = new Date(iso);
+  const clock = at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return at.toDateString() === new Date().toDateString()
+    ? clock : `${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${clock}`;
+}
+
+function waveText(entry) {
+  return entry.direction === "NORMAL"
+    ? "NORMAL" : `${entry.direction} ${entry.magnitude}`;
+}
+
+function renderHistory(id, entries, label, moved) {
+  // Only the entries where *this* dial moved. A change to the sentiment alone
+  // listed under the wave would read as the wave having been set to the value
+  // it already held, which is the repetition the write path exists to avoid.
+  const mine = entries.filter(moved);
+  if (!mine.length) {
+    $(id).innerHTML = `<li><p class="empty-note">Nothing changed yet. Only changes
+      are recorded — saving the same value again writes nothing.</p></li>`;
+    return;
+  }
+  $(id).innerHTML = mine.map((e) => {
+    // An entry written before the log recorded what it replaced cannot say what
+    // it came from, and says so rather than guessing.
+    const was = e.from === null || e.from === undefined
+      ? "" : `<span class="h-was">from ${escape(label(e.from))}</span>`;
+    return `<li>
+      <span class="h-val">${escape(label(e))}</span>${was}
+      <span class="h-when">${escape(when(e.at))}</span>
+    </li>`;
+  }).join("");
+}
+
 function row(label, entry) {
   if (!entry) return `<tr><td>${label}</td><td class="when">no reading</td></tr>`;
   return `<tr>
@@ -351,6 +415,33 @@ async function load() {
   stored = {direction: scenario.direction, magnitude: scenario.magnitude,
             sentiment: scenario.sentiment};
   paintDirty();
+  await loadHistory();
+}
+
+async function loadHistory() {
+  const raw = await api("/api/scenario/history?limit=40");
+
+  // Entries written before the log recorded what it replaced have no `from`.
+  // It is not lost, though: the list is newest-first, so the state an entry
+  // replaced is the entry after it. Derived rather than guessed — and only
+  // where it was not recorded, so a real one is never overwritten.
+  //
+  // Exact except at the oldest row on the page, which has nothing after it to
+  // compare against and is therefore shown as a change to both dials. That is
+  // the honest reading of an entry whose predecessor is off the end.
+  const entries = raw.map((e, i) => ({
+    ...e,
+    from: e.from ?? (raw[i + 1] ? {
+      direction: raw[i + 1].direction,
+      magnitude: raw[i + 1].magnitude,
+      sentiment: raw[i + 1].sentiment,
+    } : null),
+  }));
+
+  renderHistory("w-history", entries, waveText, (e) => e.from === null
+    || e.direction !== e.from.direction || e.magnitude !== e.from.magnitude);
+  renderHistory("s-history", entries, (e) => String(e.sentiment), (e) =>
+    e.from === null || e.sentiment !== e.from.sentiment);
 }
 
 $("w-mag").oninput = () => paintMagnitude($("w-mag").value);
@@ -391,9 +482,11 @@ $("save").onclick = async () => {
       body: JSON.stringify({ direction, magnitude, sentiment }) });
     stored = {direction: saved.direction, magnitude: saved.magnitude,
               sentiment: saved.sentiment};
-    $("saved").textContent = "Saved.";
+    $("saved").textContent = saved.changed ? "Saved." : "No change.";
     $("saved").className = "saved";
     setTimeout(paintDirty, 2500);
+    // Only a real change adds a line, so there is nothing to re-read otherwise.
+    if (saved.changed) await loadHistory();
   } catch (e) { $("err").textContent = e.message; }
 };
 </script>
