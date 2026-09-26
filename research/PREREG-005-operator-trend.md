@@ -50,7 +50,7 @@ is nothing for any sizing rule to exploit.
 |---|---|
 | Observation | One per **change** to the trend direction, taken from `audit_log` at `scenario.set` |
 | Included | Changes to `UP` or `DOWN` **with `source = 'manual'`**. A change to `NORMAL` is the absence of a call, not a call |
-| Market | BTCUSDT perpetual, Binance, close to close from the archive |
+| Market | **CMC100**, close to close, `market_index_readings` where `source = 'cmc100'`. BTCUSDT is the declared robustness check |
 | Entry | The first bar whose `available_at` is strictly after the setting's timestamp |
 | Horizon | **7 days**, or until the trend changes again, whichever is shorter |
 | Outcome | `sign(return) == +1 for UP, -1 for DOWN` |
@@ -96,6 +96,36 @@ settings that will accumulate fastest — so this study will run slower the more
 useful the computed one is. Measuring whether the derived trend predicts
 anything is a separate question with a separate sample, and it needs its own
 registration rather than a share of this one.
+
+### Amendment, 2026-09-26, before any observation exists
+
+The market was registered as BTCUSDT, and this document's own confounds called
+it "a poor proxy in an alt-led move". It was used because it was the series
+already collected. The claim being tested is about **the market**, so the
+yardstick should be one.
+
+CMC100 — a hundred constituents, capitalisation-weighted, based at 100 on
+2024-01-01 — is now collected daily, 1000 days back with no gaps. It becomes the
+registered market. **BTCUSDT stays as a declared robustness check**, reported in
+full alongside, and the decision rests on CMC100 whatever it says.
+
+Both rather than one, because FINDING-006 measured what a single vendor series
+is worth: two fear-and-greed indices with the same name and the same five bands
+name a different band on 41.4% of days. Swapping one construct for another and
+trusting it would be the same mistake with a different number. BTC is 65.8% of
+CMC100 anyway, so a large disagreement between the two is itself a finding about
+the measurement.
+
+The amendment changes the yardstick and nothing else: not the rule, not the
+horizon, not the stopping count. Nothing has been measured — the log holds only
+settings made while building the screen, all of them before the cutoff above.
+
+One thing it does **not** fix. CMC100's daily point is a 00:00Z snapshot, so a
+trend set at 14:00 is measured from the following midnight and the first
+fourteen hours of its horizon are unobserved. Registered as a known blind spot
+rather than patched with an intraday source, because the intraday endpoint
+refreshes every five minutes and mixing the two definitions in one column would
+mean the day's row meant midnight on every day but the current one.
 
 ## How long this takes, stated before anyone waits for it
 
@@ -150,8 +180,11 @@ trade is visible rather than discovered when the study fails to conclude.
 * **Frequency is a free variable.** The operator decides when to call, and a
   hit rate over self-selected moments is not the same as one over a calendar.
   The count and spacing of calls are reported and not adjusted for.
-* **BTCUSDT is a proxy for "the market"** and a poor one in an alt-led move. It
-  is used because it is the series already collected at the resolution needed.
+* **CMC100 is a vendor construct.** It rebalances, so its return includes
+  rebalancing and is not a return anyone earned. That is acceptable for a
+  yardstick and would not be for an instrument, and nothing trades it. Its
+  constituents are published, which is more than can be said for either
+  sentiment index — FINDING-006 measured what one vendor's word is worth.
 
 ## What counts as an answer
 

@@ -30,9 +30,18 @@ HORIZON_DAYS = 7
 #: between them afterwards would be.
 SENSITIVITY_HORIZONS = (1, 3)
 
-#: The market the trend is a view about. A poor proxy in an alt-led move, and
-#: used because it is the series already collected at this resolution.
-MARKET = "BTCUSDT"
+#: The market the trend is a view about. CMC100: a hundred constituents,
+#: capitalisation-weighted, based at 100 on 2024-01-01.
+#:
+#: BTCUSDT was registered first and this document's own confounds called it a
+#: poor proxy in an alt-led move; it was used because it was already collected.
+MARKET = "cmc100"
+
+#: Reported in full alongside, once. The decision rests on MARKET whatever this
+#: says — both are carried because FINDING-006 measured what one vendor series
+#: is worth, and swapping one construct for another and trusting it would be
+#: the same mistake with a different number.
+MARKET_ROBUSTNESS = "BTCUSDT"
 
 #: The first look happens here and not before.
 #:

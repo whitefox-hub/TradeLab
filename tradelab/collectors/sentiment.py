@@ -16,9 +16,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import sqlalchemy as sa
+
+from tradelab.collectors.cmc import call
+from tradelab.collectors.cmc import client as cmc_client
 
 ENDPOINT = "https://api.alternative.me/fng/"
 SOURCE = "alternative.me/fng"
@@ -36,19 +40,9 @@ SOURCE = "alternative.me/fng"
 #: start. A study filtering on availability therefore sees today's value only
 #: after it was published, and does not see the earlier intraday values at all —
 #: less information than existed, which is the safe direction for that error.
-CMC_ENDPOINT = "https://pro-api.coinmarketcap.com/public-api/v3/fear-and-greed/latest"
-CMC_HISTORY = "https://pro-api.coinmarketcap.com/public-api/v3/fear-and-greed/historical"
-CMC_SOURCE = "coinmarketcap"
-
-#: The history endpoint returns nothing above roughly 500 and pages with
-#: `start`. Both are undocumented and found by asking: 1000 came back empty
-#: rather than clamped, so a caller that assumed a larger page would have
-#: silently collected nothing and reported success.
-CMC_PAGE = 500
-
-#: The five bands the index reports. Held here as well as in a database CHECK so
-#: a sixth one appearing upstream fails on the way in, where the payload is
-#: still available to look at, rather than as a constraint violation later.
+#: The five bands both indices report. Held here as well as in a database
+#: CHECK so a sixth appearing upstream fails on the way in, where the payload
+#: is still available to look at, rather than as a constraint violation later.
 CLASSIFICATIONS = (
     "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed",
 )
@@ -64,14 +58,33 @@ _CANONICAL = {name.casefold(): name for name in CLASSIFICATIONS}
 def normalise(classification: str) -> str:
     """The canonical band name, or an error naming what arrived.
 
-    Case is forgiven; anything else is not. A sixth band appearing upstream
-    fails here, where the payload is still available to look at, rather than as
-    a constraint violation somewhere later.
+    Case is forgiven; anything else is not. The first CMC backfill failed here
+    with `unknown classification 'Extreme greed'` rather than writing 1185 rows
+    nobody would have re-read.
     """
     canonical = _CANONICAL.get(classification.strip().casefold())
     if canonical is None:
         raise ValueError(f"unknown classification {classification!r}")
     return canonical
+
+
+CMC_SOURCE = "coinmarketcap"
+
+#: The history endpoint returns nothing above roughly 500 and pages with
+#: `start`. Both undocumented and found by asking: 1000 came back empty rather
+#: than clamped, so a caller that assumed a larger page would have silently
+#: collected nothing and reported success.
+CMC_PAGE = 500
+
+#: CoinMarketCap **revises during the day**. alternative.me publishes once at
+#: midnight UTC and leaves it; CMC's latest endpoint carried 72 at 17:53 and 73
+#: at 18:08 on the day it was added. So a row from `latest` is that moment's
+#: reading and `available_at` is its update_time, while a row from `historical`
+#: is the day's close and becomes knowable the following midnight.
+#:
+#: A study filtering on availability therefore sees today's value only after it
+#: was published, and does not see the earlier intraday values at all — less
+#: information than existed, which is the safe direction for that error.
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,37 +106,24 @@ class Reading:
         return self.published_at or self.day
 
 
-def fetch_cmc(client: httpx.Client | None = None) -> list[Reading]:
-    """CoinMarketCap's index, latest only. No key: this is the path its own
-    charts page calls, and it answers unauthenticated.
+def fetch_cmc(sdk: Any | None = None) -> list[Reading]:
+    """CoinMarketCap's index, latest only.
 
-    That is also why it is checked rather than trusted. An undocumented endpoint
-    can start demanding a key or change shape without notice, and a collector
-    that quietly returns nothing leaves a series that simply stops — which looks
-    exactly like a flat market. Anything unexpected raises here instead.
+    Keyless: this is the path its own charts page calls. Checked rather than
+    trusted all the same — an undocumented endpoint can change shape without
+    notice, and a collector that quietly returns nothing leaves a series that
+    simply stops, which looks exactly like a flat market.
     """
-    owned = client is None
-    client = client or httpx.Client(timeout=20.0)
-    try:
-        payload = client.get(CMC_ENDPOINT).json()
-    finally:
-        if owned:
-            client.close()
+    sdk = sdk or cmc_client()
+    data = call(sdk.global_metrics.fearandgreed_latest).data
 
-    error = (payload.get("status") or {}).get("error_message")
-    if error:
-        raise RuntimeError(f"coinmarketcap returned an error: {error}")
-    data = payload.get("data") or {}
-    if not data:
-        raise RuntimeError("coinmarketcap returned no data")
-
-    classification = normalise(data["value_classification"])
-    value = int(data["value"])
+    classification = normalise(data.value_classification)
+    value = int(data.value)
     if not 0 <= value <= 100:
         raise ValueError(f"value {value} is outside the published 0-100 scale")
 
     published = datetime.fromisoformat(
-        data["update_time"].replace("Z", "+00:00")).astimezone(UTC)
+        data.update_time.replace("Z", "+00:00")).astimezone(UTC)
     return [Reading(
         day=datetime(published.year, published.month, published.day, tzinfo=UTC),
         value=value, classification=classification,
@@ -131,50 +131,41 @@ def fetch_cmc(client: httpx.Client | None = None) -> list[Reading]:
     )]
 
 
-def fetch_cmc_history(client: httpx.Client | None = None,
+def fetch_cmc_history(sdk: Any | None = None,
                       max_pages: int = 20) -> list[Reading]:
     """CoinMarketCap's whole published history, paged.
 
-    One value per UTC day, and these are **closes**: the latest endpoint carries
-    an intraday update_time and this one does not, so a day here is the value
-    that day ended on. `available_at` is therefore the following midnight — the
-    first moment that day's close was knowable — and not the day's own start,
-    which would make it readable before it existed.
+    One value per UTC day, and these are **closes**: the latest endpoint
+    carries an intraday update_time and this one does not, so a day here is the
+    value that day ended on. `available_at` is therefore the following midnight
+    — the first moment that day's close was knowable — and not the day's own
+    start, which would make it readable before it existed.
 
     Paging stops on an empty page or on one that adds nothing new, so a server
     that clamps `start` instead of honouring it ends the loop rather than
     spinning on the same rows.
     """
-    owned = client is None
-    client = client or httpx.Client(timeout=30.0)
+    sdk = sdk or cmc_client()
     out: list[Reading] = []
     seen: set[str] = set()
-    try:
-        start = 1
-        for _ in range(max_pages):
-            payload = client.get(
-                CMC_HISTORY, params={"start": start, "limit": CMC_PAGE}).json()
-            error = (payload.get("status") or {}).get("error_message")
-            if error:
-                raise RuntimeError(f"coinmarketcap returned an error: {error}")
-            rows = payload.get("data") or []
-            fresh = [r for r in rows if r["timestamp"] not in seen]
-            if not fresh:
-                break
-            seen.update(r["timestamp"] for r in rows)
-            for row in fresh:
-                classification = normalise(row["value_classification"])
-                value = int(row["value"])
-                if not 0 <= value <= 100:
-                    raise ValueError(f"value {value} is outside the 0-100 scale")
-                day = datetime.fromtimestamp(int(row["timestamp"]), UTC)
-                out.append(Reading(
-                    day=day, value=value, classification=classification,
-                    source=CMC_SOURCE, published_at=day + timedelta(days=1)))
-            start += CMC_PAGE
-    finally:
-        if owned:
-            client.close()
+    start = 1
+    for _ in range(max_pages):
+        rows = call(sdk.global_metrics.fearandgreed_historical, collected=out,
+                    start=start, limit=CMC_PAGE).data
+        fresh = [r for r in rows if r.timestamp not in seen]
+        if not fresh:
+            break
+        seen.update(r.timestamp for r in rows)
+        for row in fresh:
+            classification = normalise(row.value_classification)
+            value = int(row.value)
+            if not 0 <= value <= 100:
+                raise ValueError(f"value {value} is outside the 0-100 scale")
+            day = datetime.fromtimestamp(int(row.timestamp), UTC)
+            out.append(Reading(
+                day=day, value=value, classification=classification,
+                source=CMC_SOURCE, published_at=day + timedelta(days=1)))
+        start += CMC_PAGE
     return out
 
 

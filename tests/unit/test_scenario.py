@@ -271,6 +271,8 @@ def test_the_study_terms_match_the_registration() -> None:
         f"**{study.FIRST_LOOK_CALLS} directional calls**" in text), (
         "the stopping point in code is not the registered one")
     assert study.MARKET in text
+    assert study.MARKET_ROBUSTNESS in text, (
+        "the robustness market in code is not named in the registration")
     assert study.DIRECTIONAL == ("UP", "DOWN")
     # The sensitivity horizons are declared, and declared as not deciding.
     for horizon in study.SENSITIVITY_HORIZONS:
@@ -303,3 +305,49 @@ def test_the_study_counts_only_what_a_person_set() -> None:
     text = (Path(__file__).resolve().parents[2]
             / "research/PREREG-005-operator-trend.md").read_text()
     assert "`source = 'manual'`" in text
+
+
+@pytest.mark.fast
+def test_the_index_series_holds_one_definition() -> None:
+    """Every stored point is a 00:00Z snapshot.
+
+    CMC100's latest endpoint refreshes every five minutes, and the SDK types
+    its timestamp as a *date*, dropping the time. A value published at 18:00
+    would therefore be stored as knowable at midnight — a look-ahead introduced
+    by a type, invisible afterwards because the column would hold a perfectly
+    ordinary timestamp. So the series is built from the historical endpoint
+    alone, which already includes the current day.
+    """
+    import inspect
+
+    from tradelab.collectors import market_index
+
+    source = inspect.getsource(market_index)
+    assert "index_cmc100_historical" in source
+    assert "index_cmc100_latest" not in source, (
+        "the intraday endpoint is back in the series; its points mean "
+        "something different from their neighbours while looking identical")
+    assert market_index.LATEST_IS_INTRADAY is True
+
+
+@pytest.mark.fast
+def test_every_coinmarketcap_call_goes_through_one_door() -> None:
+    """Two throttles arrive as a 200 with the message in the payload: a quota a
+    key lifts, and a rate limit to wait out. The hand-rolled version matched
+    their English text, and put the backoff inside the history loop — so the
+    latest endpoint, one request and running first, failed outright on a limit
+    the history fetch would have retried through.
+
+    Throttling handled per caller is throttling handled by whichever caller was
+    written second.
+    """
+    import inspect
+
+    from tradelab.collectors import market_index, sentiment
+
+    for module in (market_index, sentiment):
+        source = inspect.getsource(module)
+        assert "pro-api.coinmarketcap.com" not in source, (
+            f"{module.__name__} calls CoinMarketCap directly")
+        if "coinmarketcap" in source:
+            assert "from tradelab.collectors.cmc import" in source

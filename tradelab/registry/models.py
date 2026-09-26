@@ -811,6 +811,40 @@ class MarketConditions(Base):
     )
 
 
+class MarketIndexReading(Base):
+    """A daily point of a broad market index. Plan.md §20, PREREG-005, §4.3.
+
+    A **yardstick, not an instrument**. CMC100 rebalances, so its return
+    includes rebalancing and is not a return anyone earned; nothing may trade
+    it, and it is here to say which way the market went.
+
+    Kept out of `macro_series` for the same reason the sentiment readings are:
+    that table is the point-in-time corpus a study reads, and this is a vendor
+    construct. Keyed on (day, source) from the start — `sentiment_readings` was
+    keyed on the day alone and had to be migrated the moment a second vendor
+    arrived.
+
+    One definition per column: every row is a 00:00Z snapshot. The intraday
+    endpoint refreshes every five minutes, and a row from it would mean
+    something different from its neighbours while looking identical.
+    """
+
+    __tablename__ = "market_index_readings"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    #: The snapshot's own timestamp, which is when it was knowable.
+    available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    ingest_time: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("value > 0", name="ck_market_index_value"),
+        Index("ix_market_index_source_day", "source", "day"),
+    )
+
+
 class ScenarioRun(Base):
     """What the algorithm did under a set of operator-set conditions. §20, §15.
 

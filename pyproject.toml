@@ -21,7 +21,17 @@ dependencies = [
 
 [project.optional-dependencies]
 # Phase 1 — collectors
-collectors = ["httpx>=0.27", "websockets>=12.0", "tenacity>=8.3"]
+collectors = [
+    "httpx>=0.27", "websockets>=12.0", "tenacity>=8.3",
+    # CoinMarketCap's official SDK, used in its keyless `public` mode. Pinned
+    # to a minor range rather than floated: it is eight days old at three
+    # releases, and a collector whose transport changes shape is one whose past
+    # collection cannot be reproduced. It is here for its typed errors —
+    # ForbiddenError and RateLimitError instead of matching English error
+    # strings, which is what the hand-rolled version had to do and what would
+    # break silently the day CMC rewords one.
+    "coinmarketcap-sdk>=4.0.3,<5",
+]
 # Phase 2-3 — features, labels, validation
 research = ["numpy>=1.26", "scipy>=1.13", "statsmodels>=0.14", "scikit-learn>=1.5", "arch>=7.0", "numba>=0.60"]
 # Phase 1+ — orchestration
