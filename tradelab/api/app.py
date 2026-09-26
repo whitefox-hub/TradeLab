@@ -1136,6 +1136,80 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         },
     ]
 
+    @app.get("/api/positions")
+    def open_positions(who: Operator = operator,
+                       session: Session = session_dep) -> dict[str, Any]:
+        """Every position currently held, with its own profit and loss.
+
+        **Read, never computed.** `positions` stores `unrealised_pnl`,
+        `realised_pnl` and `funding_paid` as the execution engine folded them
+        from fills, and §20.1 puts the boundary exactly here: a figure this
+        screen derived would be one nobody else can reproduce, and it would
+        disagree with the engine's the moment either changed.
+
+        `positions` is a snapshot series keyed on (run, asset, as_of), so the
+        current position is the newest row per run and asset. Taking the newest
+        row overall would report one asset's position as the whole book, and
+        taking every row would count a position once per snapshot ever written.
+
+        A flat position is not an open one, so rows at zero quantity are left
+        out — they are the record of a position that closed, and their realised
+        P&L is still counted in the totals below.
+        """
+        rows = session.execute(sa.text(
+            "SELECT DISTINCT ON (p.run_id, p.asset) "
+            "  p.run_id, p.asset, p.as_of, p.qty, p.avg_entry, "
+            "  p.unrealised_pnl, p.realised_pnl, p.funding_paid, "
+            "  r.mode, r.venue, r.status, r.base_currency "
+            "FROM positions p JOIN runs r ON r.id = p.run_id "
+            "ORDER BY p.run_id, p.asset, p.as_of DESC"
+        )).mappings().all()
+
+        def number(value: Any) -> float | None:
+            return None if value is None else float(value)
+
+        open_rows = [{
+            "run_id": str(r["run_id"]), "asset": r["asset"],
+            "as_of": r["as_of"].isoformat(), "qty": number(r["qty"]),
+            "side": "LONG" if (r["qty"] or 0) > 0 else "SHORT",
+            "avg_entry": number(r["avg_entry"]),
+            "unrealised_pnl": number(r["unrealised_pnl"]),
+            "realised_pnl": number(r["realised_pnl"]),
+            "funding_paid": number(r["funding_paid"]),
+            # Shown, never editable. §20.2 is the most important thing in that
+            # section, and a book whose mode is not on screen is one where
+            # nobody can see which money it is.
+            "mode": r["mode"], "venue": r["venue"], "status": r["status"],
+            "currency": r["base_currency"],
+        } for r in rows if (r["qty"] or 0) != 0]
+
+        totals = session.execute(sa.text(
+            "SELECT coalesce(sum(unrealised_pnl), 0) AS unrealised, "
+            "       coalesce(sum(realised_pnl), 0) AS realised, "
+            "       coalesce(sum(funding_paid), 0) AS funding "
+            "FROM (SELECT DISTINCT ON (run_id, asset) unrealised_pnl, "
+            "        realised_pnl, funding_paid FROM positions "
+            "      ORDER BY run_id, asset, as_of DESC) AS latest"
+        )).mappings().first()
+
+        return {
+            "positions": open_rows,
+            "open_count": len(open_rows),
+            # Across the latest snapshot of every position, closed ones
+            # included: realised P&L does not stop counting when a position does.
+            "unrealised_pnl": float(totals["unrealised"]),
+            "realised_pnl": float(totals["realised"]),
+            "funding_paid": float(totals["funding"]),
+            "runs_total": int(session.execute(
+                sa.text("SELECT count(*) FROM runs")).scalar() or 0),
+            "runs_live": int(session.execute(sa.text(
+                "SELECT count(*) FROM runs WHERE ended_at IS NULL")).scalar() or 0),
+            "risk_events": int(session.execute(
+                sa.text("SELECT count(*) FROM risk_events")).scalar() or 0),
+            "fills": int(session.execute(
+                sa.text("SELECT count(*) FROM fills")).scalar() or 0),
+        }
+
     @app.get("/api/algorithm")
     def algorithm(who: Operator = operator,
                   session: Session = session_dep) -> dict:

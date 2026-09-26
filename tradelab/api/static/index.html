@@ -14,6 +14,30 @@
     letter-spacing:-.02em; }
   .card .k { color:var(--muted); font-size:14.5px; margin-top:2px; }
   .card .d { color:var(--muted); font-size:13.5px; margin-top:10px; line-height:1.55; }
+  .card .n.up { color:var(--up); } .card .n.down { color:var(--down); }
+
+  /* Indicators first: the book, then the market it sits in. Two rows rather
+     than one, because a position and a sentiment reading are not comparable
+     numbers and a single grid invites reading them as if they were. */
+  h2.section { margin:34px 0 0; font-size:17px; font-weight:640; }
+  h2.section .note { font-weight:450; color:var(--muted); font-size:14px;
+    margin-left:10px; }
+  .cards.context .n { font-size:21px; }
+
+  table.book { margin-top:16px; }
+  table.book td.num, table.book th.num { font-variant-numeric:tabular-nums; }
+  .side { font-weight:650; font-size:12.5px; letter-spacing:.04em; }
+  .side.LONG { color:var(--up); } .side.SHORT { color:var(--down); }
+  .money.up { color:var(--up); } .money.down { color:var(--down); }
+  /* Mode is shown and never editable (§20.2). A book whose mode is not on
+     screen is one where nobody can see which money it is. */
+  .mode { display:inline-block; padding:2px 9px; border-radius:99px;
+    font-size:12px; font-weight:650; letter-spacing:.04em; text-transform:uppercase;
+    border:1px solid currentColor; color:var(--muted); }
+  .mode.live { color:var(--down); } .mode.testnet { color:var(--warn); }
+  .mode.simulator, .mode.backtest { color:var(--accent); }
+  .empty-why { color:var(--muted); font-size:14.5px; line-height:1.6;
+    max-width:74ch; }
   footer { margin-top:44px; padding-top:20px; border-top:1px solid var(--line);
     color:var(--muted); font-size:14px; max-width:66ch; line-height:1.6; }
 </style>
@@ -24,7 +48,21 @@
     <h1>Home</h1>
     <p class="sub">Quantitative research laboratory · single operator</p>
 
-    <div class="cards" id="cards"></div>
+    <div class="cards" id="book-cards"></div>
+
+    <h2 class="section">Open positions<span class="note" id="book-note"></span></h2>
+    <table class="book">
+      <thead><tr>
+        <th>Asset</th><th>Side</th><th class="num">Quantity</th>
+        <th class="num">Avg entry</th><th class="num">Unrealised</th>
+        <th class="num">Realised</th><th class="num">Funding</th>
+        <th>Mode</th><th class="num">As of</th>
+      </tr></thead>
+      <tbody id="book"></tbody>
+    </table>
+
+    <h2 class="section">Market<span class="note">Read back, never computed.</span></h2>
+    <div class="cards context" id="cards"></div>
 
     <footer>
       This surface records decisions. It computes no figure and holds no venue
@@ -38,29 +76,92 @@
 <script>
 mount("/home", { onReady: load });
 
+const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Figures arrive already computed by whatever folded them from fills. Formatted
+// here and nowhere derived: §20.1 puts the boundary at this screen producing a
+// number, and one it produced would disagree with the engine's the moment
+// either changed.
+const money = (v, ccy) => v === null || v === undefined
+  ? "—"
+  : `${v >= 0 ? "+" : "−"}${Math.abs(v).toLocaleString(undefined,
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${ccy ? " " + ccy : ""}`;
+const sign = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
+const qty = (v) => v === null || v === undefined ? "—"
+  : Number(v).toLocaleString(undefined, { maximumFractionDigits: 8 });
+
+function renderBook(book) {
+  const ccy = book.positions[0]?.currency || "";
+  $("book-cards").innerHTML = [
+    { n: book.open_count, k: "open positions", cls: "" },
+    { n: money(book.unrealised_pnl, ccy), k: "unrealised P&L",
+      cls: sign(book.unrealised_pnl) },
+    { n: money(book.realised_pnl, ccy), k: "realised P&L",
+      cls: sign(book.realised_pnl) },
+    { n: money(-book.funding_paid, ccy), k: "funding",
+      cls: sign(-book.funding_paid) },
+    { n: `${book.runs_live} / ${book.runs_total}`, k: "runs open" },
+    { n: book.risk_events, k: "risk limits fired" },
+  ].map((c) => `
+    <div class="card">
+      <div class="n ${c.cls || ""}">${c.n}</div>
+      <div class="k">${c.k}</div>
+    </div>`).join("");
+
+  $("book-note").textContent = book.fills === 0
+    ? "Nothing has executed."
+    : `${book.fills.toLocaleString()} fills folded.`;
+
+  if (!book.positions.length) {
+    // The empty state says why. A blank table reads as a quiet day, and this
+    // is not one — no strategy has been promoted, so nothing can have traded.
+    $("book").innerHTML = `<tr><td colspan="9"><p class="empty-why">No position is
+      open, and none has ever been: the runs table is empty. Steps 8 to 13 of the
+      <a href="/algorithm">sequence</a> are execution and need a strategy promoted
+      through §15 — 001 and 002 were refuted, 003 and 004 did not reach the
+      resolvable threshold. Until one does, this table stays empty by construction
+      rather than by chance.</p></td></tr>`;
+    return;
+  }
+
+  $("book").innerHTML = book.positions.map((p) => `
+    <tr>
+      <td><strong>${escape(p.asset)}</strong></td>
+      <td><span class="side ${escape(p.side)}">${escape(p.side)}</span></td>
+      <td class="num">${qty(p.qty)}</td>
+      <td class="num">${qty(p.avg_entry)}</td>
+      <td class="num money ${sign(p.unrealised_pnl)}">${money(p.unrealised_pnl)}</td>
+      <td class="num money ${sign(p.realised_pnl)}">${money(p.realised_pnl)}</td>
+      <td class="num money ${sign(-p.funding_paid)}">${money(-p.funding_paid)}</td>
+      <td><span class="mode ${escape(p.mode)}">${escape(p.mode)}</span></td>
+      <td class="num">${escape(p.as_of.slice(0, 16).replace("T", " "))}</td>
+    </tr>`).join("");
+}
+
 async function load() {
-  // Counts only, and each one read from a table. The home screen computes
-  // nothing: a figure that appears only here is a figure nobody can reproduce.
-  const [scenario, sentiment, series, quality] = await Promise.all([
+  const [book, scenario, sentiment, series, quality] = await Promise.all([
+    api("/api/positions"),
     api("/api/scenario"),
     api("/api/fear-greed"),
     api("/api/macro/series"),
     api("/api/data-quality").catch(() => []),
   ]);
 
+  renderBook(book);
+
   const stale = series.filter((s) => s.days_old > 45).length;
   const unsafe = series.filter((s) => !s.point_in_time_safe).length;
   const pressure = scenario.direction === "NORMAL"
     ? "NORMAL" : `${scenario.direction} ${scenario.magnitude}`;
+  const fg = sentiment.available ? sentiment.primary : null;
 
   $("cards").innerHTML = [
     { n: pressure, k: "market trend",
-      d: `Pressure a simulation runs under, with sentiment assumed at ${
-        scenario.sentiment}. Set on Market Sentiment.` },
-    { n: sentiment.available ? sentiment.value : "—", k: "fear and greed",
-      d: sentiment.available
-        ? `${sentiment.classification}, as of ${sentiment.day}.`
-        : "No readings stored yet." },
+      d: `Sentiment assumed at ${scenario.sentiment}. Set on Market Sentiment.` },
+    { n: fg ? fg.value : "—", k: "fear and greed",
+      d: fg ? `${fg.classification}, ${fg.source}, as of ${fg.day}.`
+            : "No readings stored yet." },
     { n: series.length, k: "macro series",
       d: `${stale} older than 45 days, ${unsafe} revised without vintages.` },
     { n: quality.length, k: "open data-quality issues",

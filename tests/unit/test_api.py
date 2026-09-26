@@ -1304,3 +1304,113 @@ def test_the_runner_declares_which_steps_it_skips(client: TestClient) -> None:
         "a step is both executed and substituted")
     # Every research step is accounted for, so none is silently unclassified.
     assert set(EXECUTED_STEPS) | set(SUBSTITUTED_STEPS) == set(range(1, GATE_STEP + 1))
+
+
+@pytest.mark.integration
+def test_the_book_shows_the_latest_snapshot_of_each_open_position(monkeypatch) -> None:
+    """`positions` is a snapshot series keyed on (run, asset, as_of), and three
+    things about reading it are easy to get wrong in ways that look fine.
+
+    Taking every row counts a position once per snapshot ever written. Taking
+    the newest row overall reports one asset as the whole book. And a flat
+    position is not an open one — but its realised P&L does not stop counting
+    when the position closed.
+    """
+    import uuid as uuid_
+
+    import sqlalchemy as sa_
+
+    from tradelab.config import Settings
+
+    monkeypatch.setenv("TRADELAB_ADMIN_SALT", SALT)
+    monkeypatch.setenv("TRADELAB_ADMIN_HASH", hash_password(PASSWORD, SALT))
+    monkeypatch.setenv("TRADELAB_SESSION_SECRET", new_secret())
+    engine = sa_.create_engine(Settings().database_url)
+    client = TestClient(create_app(engine=engine))
+
+    email = engine.connect().execute(
+        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
+    strategy = engine.connect().execute(
+        sa_.text("SELECT id FROM strategies LIMIT 1")).scalar()
+    cost = engine.connect().execute(
+        sa_.text("SELECT id FROM cost_models LIMIT 1")).scalar()
+    venue = engine.connect().execute(
+        sa_.text("SELECT code FROM venues LIMIT 1")).scalar()
+    if None in (email, strategy, cost, venue):
+        pytest.skip("no seed rows to hang a probe run from")
+    assert client.post(
+        "/api/session", json={"email": email, "password": PASSWORD}).status_code == 200
+
+    before = client.get("/api/positions").json()
+    run_id, limit_id = uuid_.uuid4(), uuid_.uuid4()
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa_.text(
+                "INSERT INTO risk_limit_configs VALUES (:i,'ZZPROBE',5,2,10,10,"
+                "10000,0.001,0.1,60,2.0,1.0,3.0,0.05,0.2,10,3,50,now())"),
+                {"i": limit_id})
+            conn.execute(sa_.text(
+                "INSERT INTO runs (id, strategy_id, mode, venue, params, "
+                "  initial_capital, base_currency, risk_limit_config_id, "
+                "  cost_model_id, code_version, image_digest, config_hash, "
+                "  status, started_at) "
+                "VALUES (:i,:s,'simulator',:v,CAST('{}' AS jsonb),10000,'USDT',"
+                "  :l,:c,'zzprobe','zzprobe','zzprobe','running',now())"),
+                {"i": run_id, "s": strategy, "v": venue, "l": limit_id, "c": cost})
+            for asset, quantity, realised in (
+                ("ZZLONG", 2, 0), ("ZZSHORT", -3, 10), ("ZZFLAT", 0, 40),
+            ):
+                for offset in ("2 hours", "0 hours"):
+                    conn.execute(sa_.text(
+                        "INSERT INTO positions (run_id, asset, as_of, qty, "
+                        "  avg_entry, unrealised_pnl, realised_pnl, funding_paid) "
+                        f"VALUES (:r,:a,now() - interval '{offset}',:q,100,5,:p,1)"),
+                        {"r": run_id, "a": asset, "q": quantity, "p": realised})
+
+        book = client.get("/api/positions").json()
+        mine = {p["asset"]: p for p in book["positions"]
+                if p["asset"].startswith("ZZ")}
+
+        # One row per open position, not one per snapshot.
+        assert set(mine) == {"ZZLONG", "ZZSHORT"}, (
+            "a flat position is open, or a snapshot was counted twice")
+        assert mine["ZZLONG"]["side"] == "LONG"
+        assert mine["ZZSHORT"]["side"] == "SHORT"
+        # Mode travels with the position. §20.2: shown, never editable.
+        assert mine["ZZLONG"]["mode"] == "simulator"
+
+        # The closed one still contributes its realised P&L: 0 + 10 + 40.
+        assert book["realised_pnl"] - before["realised_pnl"] == pytest.approx(50)
+        # And the two live ones contribute unrealised once each, not twice.
+        assert book["unrealised_pnl"] - before["unrealised_pnl"] == pytest.approx(15)
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa_.text("DELETE FROM positions WHERE run_id = :r"),
+                         {"r": run_id})
+            conn.execute(sa_.text("DELETE FROM runs WHERE id = :r"), {"r": run_id})
+            conn.execute(sa_.text("DELETE FROM risk_limit_configs WHERE id = :i"),
+                         {"i": limit_id})
+
+
+@pytest.mark.fast
+def test_the_book_says_why_it_is_empty(client: TestClient) -> None:
+    """A blank table reads as a quiet day, and this is not one: no strategy has
+    been promoted, so nothing can have traded. The empty state says so and
+    points at the sequence."""
+    markup = client.get("/static/index.html").text
+    assert "empty-why" in markup
+    assert "runs table is empty" in markup
+    assert "/algorithm" in markup
+
+
+@pytest.mark.fast
+def test_the_home_screen_computes_no_figure(client: TestClient) -> None:
+    """§20.1 puts the boundary at this surface deriving a number. Profit and
+    loss is stored by whatever folded it from fills; a figure this page derived
+    would disagree with the engine's the moment either changed."""
+    markup = client.get("/static/index.html").text
+    for derived in ("* price", "mark_price", "qty *", "- avg_entry", "avg_entry -"):
+        assert derived not in markup, f"the home screen computes: {derived}"
+    # Negated for display only, which is presentation and not derivation:
+    # funding paid is a cost, and showing it as a positive gain would invert it.
+    assert "money(-book.funding_paid" in markup
