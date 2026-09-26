@@ -836,10 +836,14 @@ def test_a_magnitude_outside_the_scale_is_refused() -> None:
 
 
 @pytest.mark.fast
-def test_the_scenario_carries_no_field_beyond_the_three() -> None:
-    """Three fields and no fourth: no asset, because there is one set of
-    conditions and they are the market's; no date, because none of this
-    happened.
+def test_the_scenario_carries_no_field_beyond_what_it_needs() -> None:
+    """No asset, because there is one set of conditions and they are the
+    market's; no date, because none of this happened.
+
+    `source` is the fourth, and it earns its place: it says who decided, which
+    PREREG-005 filters on. Without it a value computed from a trade count and a
+    value a person read in the news are the same row, and a study measuring the
+    person would count both.
 
     `extra="forbid"` matters as much as the field list. Without it a client
     sending `asset` gets a 200 and the value is dropped, which is how an
@@ -849,7 +853,8 @@ def test_the_scenario_carries_no_field_beyond_the_three() -> None:
 
     from tradelab.api.app import ScenarioRequest
 
-    assert set(ScenarioRequest.model_fields) == {"direction", "magnitude", "sentiment"}
+    assert set(ScenarioRequest.model_fields) == {
+        "direction", "magnitude", "sentiment", "source"}
     for smuggled in ("asset", "happened_at", "duration_hours", "note", "mode"):
         with pytest.raises(pydantic.ValidationError):
             ScenarioRequest(direction="UP", magnitude=5, sentiment=50,

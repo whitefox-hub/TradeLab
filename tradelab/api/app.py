@@ -43,6 +43,8 @@ from tradelab.api.security import (
 from tradelab.api.settings_rules import RULES
 from tradelab.api.settings_rules import Invalid as InvalidSetting
 from tradelab.api.settings_rules import validate as validate_setting
+from tradelab.collectors.sentiment import CMC_SOURCE
+from tradelab.collectors.sentiment import SOURCE as FNG_SOURCE
 from tradelab.config import Settings
 from tradelab.scenario import run as scenario_run
 
@@ -111,6 +113,14 @@ class ScenarioRequest(BaseModel):
     #: in `sentiment_readings` — holding both in one number would make an
     #: opinion indistinguishable from a measurement.
     sentiment: int = Field(ge=1, le=100)
+    #: Who decided this. 'manual' is a person's own reading, 'adopted' is a
+    #: computed value a person accepted, 'derived' is written without a person.
+    #:
+    #: PREREG-005 measures whether the *operator's* reading of the news predicts
+    #: anything, and filters on this. A hit credited to a person that was
+    #: computed from a trade count would confirm the wrong hypothesis, and after
+    #: the fact the log could not tell them apart.
+    source: str = Field(default="manual", pattern="^(manual|derived|adopted)$")
 
     @model_validator(mode="after")
     def normal_means_zero(self) -> ScenarioRequest:
@@ -668,7 +678,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         is a decision.
         """
         row = session.execute(sa.text(
-            "SELECT trend_direction, trend_magnitude, sentiment "
+            "SELECT trend_direction, trend_magnitude, sentiment, source "
             "FROM market_conditions WHERE id = 1"
         )).mappings().first()
         if row is None:
@@ -676,7 +686,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                                 "the conditions row is missing; migration 0013 seeds it")
         return {"direction": row["trend_direction"],
                 "magnitude": row["trend_magnitude"],
-                "sentiment": row["sentiment"]}
+                "sentiment": row["sentiment"], "source": row["source"]}
 
     @app.put("/api/scenario")
     def set_scenario(body: ScenarioRequest, who: Operator = operator,
@@ -701,20 +711,20 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         # against something that is no longer there.
         row = session.execute(sa.text(
             "UPDATE market_conditions SET trend_direction = :d, trend_magnitude = :m, "
-            "sentiment = :s WHERE id = 1 AND ("
+            "sentiment = :s, source = :src WHERE id = 1 AND ("
             "  trend_direction IS DISTINCT FROM :d"
             "  OR trend_magnitude IS DISTINCT FROM :m"
             "  OR sentiment IS DISTINCT FROM :s) "
-            "RETURNING trend_direction, trend_magnitude, sentiment"
+            "RETURNING trend_direction, trend_magnitude, sentiment, source"
         ), {"d": body.direction, "m": body.magnitude,
-            "s": body.sentiment}).mappings().first()
+            "s": body.sentiment, "src": body.source}).mappings().first()
 
         if row is None:
             # Either nothing moved, or the row is missing. Told apart by asking,
             # because returning "unchanged" for a missing row would hide the one
             # state that is actually broken.
             current = session.execute(sa.text(
-                "SELECT trend_direction, trend_magnitude, sentiment "
+                "SELECT trend_direction, trend_magnitude, sentiment, source "
                 "FROM market_conditions WHERE id = 1"
             )).mappings().first()
             if current is None:
@@ -727,7 +737,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # is the only question it exists for.
             return {"direction": current["trend_direction"],
                     "magnitude": current["trend_magnitude"],
-                    "sentiment": current["sentiment"], "changed": False}
+                    "sentiment": current["sentiment"],
+                    "source": current["source"], "changed": False}
 
         # Audited because these are inputs someone chose. Which conditions a
         # simulation was run under last month is a question the log has to be
@@ -753,7 +764,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # reason to discard a setting the operator made.
             audit(session, who.email, "scenario.set", "scenario", "market",
                   {"direction": body.direction, "magnitude": body.magnitude,
-                   "sentiment": body.sentiment, "from": _before_payload(before)})
+                   "sentiment": body.sentiment, "source": body.source,
+                   "from": _before_payload(before)})
             session.commit()
             return {"direction": row["trend_direction"],
                     "magnitude": row["trend_magnitude"],
@@ -765,25 +777,27 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "INSERT INTO scenario_runs (id, actor, trend_direction, trend_magnitude, "
             "  sentiment, sentiment_bucket, long_multiplier, short_multiplier, "
             "  reference, bars, baseline, conditioned, reached_step, "
-            "  stopped_because) "
+            "  stopped_because, source) "
             "VALUES (:i, :a, :d, :m, :s, :b, :lm, :sm, :r, :n, "
-            "  CAST(:base AS jsonb), CAST(:cond AS jsonb), :step, :why)"
+            "  CAST(:base AS jsonb), CAST(:cond AS jsonb), :step, :why, :src)"
         ), {"i": run_id, "a": who.email, "d": body.direction,
             "m": body.magnitude, "s": body.sentiment,
             "b": outcome.sentiment_bucket, "lm": outcome.long_multiplier,
             "sm": outcome.short_multiplier, "r": outcome.reference,
             "n": outcome.bars, "base": json.dumps(outcome.baseline),
             "cond": json.dumps(outcome.conditioned),
-            "step": outcome.reached_step, "why": outcome.stopped_because})
+            "step": outcome.reached_step, "why": outcome.stopped_because,
+            "src": body.source})
 
         audit(session, who.email, "scenario.set", "scenario", "market",
               {"direction": body.direction, "magnitude": body.magnitude,
-               "sentiment": body.sentiment, "from": _before_payload(before),
-               "run": str(run_id)})
+               "sentiment": body.sentiment, "source": body.source,
+               "from": _before_payload(before), "run": str(run_id)})
         session.commit()
         return {"direction": row["trend_direction"],
                 "magnitude": row["trend_magnitude"],
-                "sentiment": row["sentiment"], "changed": True,
+                "sentiment": row["sentiment"], "source": row["source"],
+                "changed": True,
                 "run": _run_payload(run_id, outcome,
                                     round(time.perf_counter() - started, 3))}
 
@@ -858,64 +872,80 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/fear-greed")
     def read_fear_greed(who: Operator = operator,
                         session: Session = session_dep) -> dict[str, Any]:
-        """The measured index: latest, three comparisons, and the year's extremes.
+        """Both indices, and the comparisons from whichever has the history.
 
-        Named for the index rather than for "sentiment", because the scenario
-        now carries a field by that name and the two must not be confused at the
-        call site either. This one is measured and dated; that one is assumed
-        and is not.
+        They are different indices, not two opinions about one: different
+        methods and different numbers — 72 against 74 on the day CMC was added.
+        Reported side by side rather than averaged, because an average of two
+        methods is a third method nobody can decompose.
 
         Read back, never computed. §20.1 puts the boundary at the application
         deriving figures, and picking stored rows is not deriving one — but the
-        chart the vendor draws beside this is a time series, and §20.1 puts
-        those in Grafana rather than here.
-
-        The comparisons are "on or before" rather than exact, so a missing day
-        gives the most recent value before it instead of an empty cell. A gap in
-        a daily series is a collection failure, and a blank would read as calm.
+        chart the vendors draw is a time series, and §20.1 puts those in Grafana.
         """
-        latest = session.execute(sa.text(
-            "SELECT day, value, classification, source, available_at "
-            "FROM sentiment_readings ORDER BY day DESC LIMIT 1"
-        )).mappings().first()
-        if latest is None:
+        def latest(source: str) -> dict[str, Any] | None:
+            row = session.execute(sa.text(
+                "SELECT day, value, classification, source, available_at "
+                "FROM sentiment_readings WHERE source = :s "
+                "ORDER BY day DESC LIMIT 1"
+            ), {"s": source}).mappings().first()
+            if row is None:
+                return None
+            return {
+                "source": row["source"], "day": row["day"].isoformat(),
+                "value": row["value"], "classification": row["classification"],
+                "available_at": row["available_at"].isoformat(),
+                # Said plainly, because a stale feed fails silently: the number
+                # is simply old, and old numbers look exactly like current ones.
+                "days_old": (datetime.now(UTC).date() - row["day"]).days,
+            }
+
+        primary = latest(CMC_SOURCE) or latest(FNG_SOURCE)
+        if primary is None:
             return {"available": False}
+        other = latest(FNG_SOURCE if primary["source"] == CMC_SOURCE else CMC_SOURCE)
+
+        # The comparisons come from the series that has depth. CMC serves only
+        # its latest value, so its history starts the day it was first collected
+        # — naming the series the dates come from stops them reading as the
+        # headline's own past.
+        deep = session.execute(sa.text(
+            "SELECT source, count(*) AS n, max(day) AS newest "
+            "FROM sentiment_readings GROUP BY source ORDER BY n DESC LIMIT 1"
+        )).mappings().first()
+        history: dict[str, Any] = {"source": deep["source"], "entries": deep["n"]}
 
         def at(offset: int) -> dict[str, Any] | None:
             row = session.execute(sa.text(
                 "SELECT day, value, classification FROM sentiment_readings "
-                "WHERE day <= :d ORDER BY day DESC LIMIT 1"
-            ), {"d": latest["day"] - timedelta(days=offset)}).mappings().first()
+                "WHERE source = :s AND day <= :d ORDER BY day DESC LIMIT 1"
+            ), {"s": deep["source"],
+                "d": deep["newest"] - timedelta(days=offset)}).mappings().first()
             return None if row is None else {
                 "day": row["day"].isoformat(), "value": row["value"],
                 "classification": row["classification"]}
+
+        # "On or before" rather than exact, so a missing day gives the most
+        # recent value before it instead of an empty cell. A gap in a daily
+        # series is a collection failure, and a blank would read as calm.
+        history |= {"yesterday": at(1), "last_week": at(7), "last_month": at(30)}
 
         extremes = session.execute(sa.text(
             "SELECT "
             " (SELECT json_build_object('day', day, 'value', value, "
             "         'classification', classification) FROM sentiment_readings "
-            "   WHERE day > :from_day ORDER BY value DESC, day DESC LIMIT 1) AS high, "
+            "   WHERE source = :s AND day > :from_day "
+            "   ORDER BY value DESC, day DESC LIMIT 1) AS high, "
             " (SELECT json_build_object('day', day, 'value', value, "
             "         'classification', classification) FROM sentiment_readings "
-            "   WHERE day > :from_day ORDER BY value ASC, day DESC LIMIT 1) AS low"
-        ), {"from_day": latest["day"] - timedelta(days=365)}).mappings().first()
+            "   WHERE source = :s AND day > :from_day "
+            "   ORDER BY value ASC, day DESC LIMIT 1) AS low"
+        ), {"s": deep["source"],
+            "from_day": deep["newest"] - timedelta(days=365)}).mappings().first()
+        history |= {"year_high": extremes["high"], "year_low": extremes["low"]}
 
-        stale = (datetime.now(UTC).date() - latest["day"]).days
-        return {
-            "available": True,
-            "day": latest["day"].isoformat(),
-            "value": latest["value"],
-            "classification": latest["classification"],
-            "source": latest["source"],
-            # Shown, because a stale feed fails silently: the number is simply
-            # old, and old numbers look exactly like current ones.
-            "days_old": stale,
-            "yesterday": at(1),
-            "last_week": at(7),
-            "last_month": at(30),
-            "year_high": extremes["high"],
-            "year_low": extremes["low"],
-        }
+        return {"available": True, "primary": primary, "other": other,
+                "history": history}
 
     # -- the screen ---------------------------------------------------------
 

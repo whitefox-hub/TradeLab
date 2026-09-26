@@ -275,3 +275,31 @@ def test_the_study_terms_match_the_registration() -> None:
     # The sensitivity horizons are declared, and declared as not deciding.
     for horizon in study.SENSITIVITY_HORIZONS:
         assert f"{horizon}-day" in text
+
+
+@pytest.mark.fast
+def test_the_study_counts_only_what_a_person_set() -> None:
+    """The trend is becoming settable by something other than a person. A log
+    that cannot say which is one PREREG-005 cannot read: a hit credited to the
+    operator that was computed from a trade count would confirm the wrong
+    hypothesis, and nothing afterwards could separate them."""
+    from pathlib import Path
+
+    from tradelab.api.app import ScenarioRequest
+    from tradelab.registry.models import MarketConditions, ScenarioRun
+    from tradelab.scenario import study
+
+    assert study.SOURCE == "manual"
+    # Recorded in every place a setting lands, so none of them can be the one
+    # that forgets.
+    assert "source" in ScenarioRequest.model_fields
+    assert "source" in MarketConditions.__table__.columns
+    assert "source" in ScenarioRun.__table__.columns
+
+    # And defaulted to manual, which is true of every row that existed before
+    # anything else could write one.
+    assert ScenarioRequest(direction="UP", magnitude=5, sentiment=50).source == "manual"
+
+    text = (Path(__file__).resolve().parents[2]
+            / "research/PREREG-005-operator-trend.md").read_text()
+    assert "`source = 'manual'`" in text

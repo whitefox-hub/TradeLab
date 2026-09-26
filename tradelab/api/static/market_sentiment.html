@@ -119,6 +119,9 @@
     color:var(--muted); letter-spacing:.04em; }
 
   .b-fear { color:#ff6b63; } .b-greed { color:#4ac26b; } .b-neutral { color:var(--muted); }
+  .cross { margin:2px 0 0; font-size:13px; color:var(--muted); }
+  .cross .who { font-weight:600; color:var(--text); }
+  .hist-source { font-size:12.5px; color:var(--muted); margin:14px 0 -6px; }
 
   table.compare { margin-top:18px; }
   table.compare td, table.compare th { padding:8px 0; }
@@ -197,6 +200,11 @@
           <span class="v" id="fg-value">—</span>
           <span class="band" id="fg-band"></span>
         </div>
+        <!-- Two indices, side by side rather than averaged: an average of two
+             methods is a third method nobody can decompose. Where they disagree
+             is information about the measurement, and hiding it would make one
+             of them look authoritative. -->
+        <p class="cross" id="fg-cross"></p>
 
         <!-- The slider sits directly above the scale and shares its width, so
              the thumb reads against the gradient underneath: where it stands is
@@ -224,6 +232,7 @@
           class="key-pin"></span>applied</p>
         <p class="assume-band" id="s-band"></p>
 
+        <p class="hist-source" id="fg-hist-source"></p>
         <table class="compare">
           <tbody id="fg-history"></tbody>
         </table>
@@ -452,34 +461,45 @@ async function load() {
   const fg = await api("/api/fear-greed");
   if (!fg.available) {
     $("fg-lead").textContent = "No readings stored yet. scripts/refresh_sentiment.py "
-      + "--limit 0 loads the published history.";
+      + "loads both series.";
     $("fg-match").disabled = true;
   } else {
-    measured = fg.value;
+    const head = fg.primary;
+    measured = head.value;
     $("fg-lead").textContent = "How the rest of the market is positioned, on the "
       + "vendor's 0-100 scale.";
-    $("fg-value").textContent = fg.value;
-    $("fg-band").textContent = fg.classification;
-    $("fg-band").className = `band ${bandClass(fg.classification)}`;
-    $("fg-pin").style.left = `${fg.value}%`;
-    $("fg-match").textContent = `Match today (${fg.value})`;
+    $("fg-value").textContent = head.value;
+    $("fg-band").textContent = head.classification;
+    $("fg-band").className = `band ${bandClass(head.classification)}`;
+    $("fg-pin").style.left = `${head.value}%`;
+    $("fg-match").textContent = `Match today (${head.value})`;
 
+    // The second index is shown whether or not it agrees. When it does, that
+    // agreement is worth seeing; when it does not, the gap is information about
+    // the measurement and not a number to reconcile away.
+    $("fg-cross").innerHTML = fg.other
+      ? `<span class="who">${escape(head.source)}</span> ${head.value} · `
+        + `<span class="who">${escape(fg.other.source)}</span> ${fg.other.value}`
+        + (fg.other.value === head.value ? " — agreeing."
+           : ` — apart by ${Math.abs(head.value - fg.other.value)}.`)
+      : `<span class="who">${escape(head.source)}</span> only; the other series `
+        + "has no reading stored.";
+
+    $("fg-hist-source").textContent =
+      `Below: ${fg.history.source}, ${fg.history.entries.toLocaleString()} days.`;
     $("fg-history").innerHTML = [
-      row("Yesterday", fg.yesterday),
-      row("Last week", fg.last_week),
-      row("Last month", fg.last_month),
-      row("Year high", fg.year_high),
-      row("Year low", fg.year_low),
+      row("Yesterday", fg.history.yesterday),
+      row("Last week", fg.history.last_week),
+      row("Last month", fg.history.last_month),
+      row("Year high", fg.history.year_high),
+      row("Year low", fg.history.year_low),
     ].join("");
 
-    // Said plainly rather than left to be inferred from a date: a stale feed
-    // fails silently, because the number is simply old and old numbers look
-    // exactly like current ones.
-    $("fg-source").textContent = fg.days_old > 1
-      ? `${fg.day} — ${fg.days_old} days old, so the feed has stopped. `
-        + `Source: ${fg.source}.`
-      : `As of ${fg.day}. Source: ${fg.source}.`;
-    $("fg-source").className = fg.days_old > 1 ? "hint stale" : "hint";
+    $("fg-source").textContent = head.days_old > 1
+      ? `${head.day} — ${head.days_old} days old, so the feed has stopped. `
+        + `Source: ${head.source}.`
+      : `As of ${head.day}. Source: ${head.source}.`;
+    $("fg-source").className = head.days_old > 1 ? "hint stale" : "hint";
   }
 
   // Painted last, because the comparison it prints needs the measured value.

@@ -788,6 +788,11 @@ class MarketConditions(Base):
     #: make "nobody set this" and "someone chose the market's own number" the
     #: same row, and only one of them is a decision.
     sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=50)
+    #: 'manual' set by a person, 'derived' computed, 'adopted' a computed value
+    #: a person accepted. PREREG-005 measures the operator and filters on this;
+    #: a hit credited to a person that was computed would confirm the wrong
+    #: hypothesis.
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_market_conditions_singleton"),
@@ -799,6 +804,10 @@ class MarketConditions(Base):
                         name="ck_market_conditions_normal_is_zero"),
         CheckConstraint("sentiment BETWEEN 1 AND 100",
                         name="ck_market_conditions_sentiment"),
+        CheckConstraint("source IN ('manual','derived','adopted')",
+                        name="ck_market_conditions_source"),
+        CheckConstraint("source IN ('manual','derived','adopted')",
+                        name="ck_market_conditions_source"),
     )
 
 
@@ -840,6 +849,11 @@ class ScenarioRun(Base):
     conditioned: Mapped[dict] = mapped_column(JSONB, nullable=False)
     reached_step: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     stopped_because: Mapped[str] = mapped_column(Text, nullable=False)
+    #: 'manual' set by a person, 'derived' computed, 'adopted' a computed value
+    #: a person accepted. PREREG-005 measures the operator and filters on this;
+    #: a hit credited to a person that was computed would confirm the wrong
+    #: hypothesis.
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
     __table_args__ = (
         CheckConstraint("trend_direction IN ('UP','NORMAL','DOWN')",
@@ -849,6 +863,10 @@ class ScenarioRun(Base):
         CheckConstraint("sentiment BETWEEN 1 AND 100",
                         name="ck_scenario_runs_sentiment"),
         CheckConstraint("bars > 0", name="ck_scenario_runs_bars"),
+        CheckConstraint("source IN ('manual','derived','adopted')",
+                        name="ck_scenario_runs_source"),
+        CheckConstraint("source IN ('manual','derived','adopted')",
+                        name="ck_scenario_runs_source"),
         Index("ix_scenario_runs_ran_at", "ran_at"),
     )
 
@@ -872,7 +890,11 @@ class SentimentReading(Base):
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     value: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     classification: Mapped[str] = mapped_column(Text, nullable=False)
-    source: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Part of the key. CoinMarketCap and alternative.me are different indices
+    #: with different methods — they printed 72 and 74 for the same day — so
+    #: they are two series and not two opinions about one. With the day alone as
+    #: the key the second written would silently replace the first.
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
     available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     ingest_time: Mapped[datetime] = mapped_column(
         TS, nullable=False, server_default=func.now())
@@ -883,6 +905,7 @@ class SentimentReading(Base):
             "classification IN ('Extreme Fear','Fear','Neutral','Greed','Extreme Greed')",
             name="ck_sentiment_classification"),
         Index("ix_sentiment_available", "available_at"),
+        Index("ix_sentiment_source_day", "source", "day"),
     )
 
 

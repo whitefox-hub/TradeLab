@@ -49,7 +49,7 @@ is nothing for any sizing rule to exploit.
 | | |
 |---|---|
 | Observation | One per **change** to the trend direction, taken from `audit_log` at `scenario.set` |
-| Included | Changes to `UP` or `DOWN`. A change to `NORMAL` is the absence of a call, not a call |
+| Included | Changes to `UP` or `DOWN` **with `source = 'manual'`**. A change to `NORMAL` is the absence of a call, not a call |
 | Market | BTCUSDT perpetual, Binance, close to close from the archive |
 | Entry | The first bar whose `available_at` is strictly after the setting's timestamp |
 | Horizon | **7 days**, or until the trend changes again, whichever is shorter |
@@ -65,6 +65,37 @@ Truncating at the next change makes the observations **non-overlapping by
 construction**, which is what lets them be counted as independent. It also
 measures the call the operator actually made: a view replaced after two days was
 a two-day view, whatever was intended.
+
+### Amendment, 2026-09-26, before any observation exists
+
+The trend is to become settable by something other than a person: §11.4's
+participation dimension — trade count and average trade size — read out of the
+bars. That is a good idea and it is the Plan's own, but it would void this study
+as registered, because a log that cannot say who set a value cannot attribute a
+hit. A trend computed from a trade count, credited to the operator, would
+confirm the wrong hypothesis and nothing afterwards could separate them.
+
+So every setting now records a `source`:
+
+| | |
+|---|---|
+| `manual` | a person's own reading. **The only kind this study counts.** |
+| `adopted` | a computed value a person accepted. Excluded: the judgement exercised was whether to accept, not what to set. |
+| `derived` | written without a person. Excluded. |
+
+Added before anything could write it, which is the only time it is free, and
+defaulted to `manual` because until now nothing else could set a trend.
+
+The amendment narrows the sample and does not touch the rule, the horizon or the
+stopping count. Nothing has been measured, and the 22 settings already in the
+log fall before the cutoff above and are excluded twice over.
+
+**`adopted` is excluded deliberately, and it costs something.** If the derived
+trend turns out to be good, the operator will accept it often, and those are the
+settings that will accumulate fastest — so this study will run slower the more
+useful the computed one is. Measuring whether the derived trend predicts
+anything is a separate question with a separate sample, and it needs its own
+registration rather than a share of this one.
 
 ## How long this takes, stated before anyone waits for it
 

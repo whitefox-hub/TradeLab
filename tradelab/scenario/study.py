@@ -44,3 +44,13 @@ FIRST_LOOK_CALLS = 150
 
 #: A change to NORMAL is the absence of a call, not a call.
 DIRECTIONAL = ("UP", "DOWN")
+
+#: The only source this study counts.
+#:
+#: `adopted` — a computed value a person accepted — is excluded, because the
+#: judgement exercised there was whether to accept and not what to set. That
+#: exclusion costs something: if the derived trend is good the operator will
+#: accept it often, so this study runs slower the more useful the computed one
+#: turns out to be. Measuring the derived trend is a separate question with a
+#: separate sample and needs its own registration.
+SOURCE = "manual"
