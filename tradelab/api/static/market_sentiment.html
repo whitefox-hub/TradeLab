@@ -32,9 +32,25 @@
      ignored — it is visibly unavailable. A control that accepts input the
      system discards teaches the operator it did something. */
   .magnitude.muted { opacity:.4; pointer-events:none; }
-  .save-row { display:flex; align-items:center; gap:12px; margin-top:20px; }
-  .save-row .spacer { flex:1; }
+  .save-bar { display:flex; align-items:center; gap:14px; margin:6px 0 4px; }
+  .save-bar .spacer { flex:1; }
   .saved { color:var(--up); font-size:13.5px; font-weight:560; }
+
+  /* -- the assumption, below the measurement and fenced off from it -- */
+  .assume { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
+  .assume-head { display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:12px; }
+  .assume-label { font-size:13px; color:var(--muted); font-weight:620;
+    letter-spacing:.06em; text-transform:uppercase; }
+  button.tiny { font-size:12.5px; padding:4px 10px; }
+  .slider-row { display:flex; align-items:center; gap:14px; }
+  .slider-row input[type=range] { flex:1; accent-color:var(--accent); padding:0;
+    background:transparent; border:none; }
+  .slider-row input[type=number] { width:74px; text-align:right;
+    font-variant-numeric:tabular-nums; font-weight:620; }
+  .scale.small { height:7px; margin:12px 0 6px; }
+  .scale.small .pin { top:-3px; height:13px; }
+  .assume-band { margin:10px 0 0; font-size:13.5px; font-weight:560; }
 
   /* -- the index the market prints -- */
   .gauge { display:flex; align-items:baseline; gap:12px; margin:2px 0 4px; }
@@ -76,10 +92,13 @@
           something that happened. The engine reads it as a variable when testing
           indicators, strategies and parameter combinations.</p>
 
+        <!-- DOWN, NORMAL, UP: the scale runs left to right the way every other
+             scale on this page does, so the buttons and the sentiment slider
+             below them cannot disagree about which way is bearish. -->
         <div class="choice">
-          <button type="button" class="up" id="w-up" aria-pressed="false">UP</button>
-          <button type="button" class="normal" id="w-normal" aria-pressed="false">NORMAL</button>
           <button type="button" class="down" id="w-down" aria-pressed="false">DOWN</button>
+          <button type="button" class="normal" id="w-normal" aria-pressed="false">NORMAL</button>
+          <button type="button" class="up" id="w-up" aria-pressed="false">UP</button>
         </div>
 
         <div class="magnitude" id="mag-wrap">
@@ -87,12 +106,6 @@
           <select id="w-mag"></select>
         </div>
 
-        <div class="save-row">
-          <span class="saved" id="saved"></span>
-          <span class="spacer"></span>
-          <button class="primary" id="save">Save</button>
-        </div>
-        <div class="err" id="err"></div>
       </section>
 
       <section class="pane">
@@ -110,8 +123,33 @@
           <tbody id="fg-history"></tbody>
         </table>
         <p class="hint" id="fg-source"></p>
+
+        <!-- Below the line: what the simulation is told to assume, which is a
+             different thing from what the index printed and is kept visibly
+             apart from it. Sharing one number would make an opinion and a
+             measurement indistinguishable. -->
+        <div class="assume">
+          <div class="assume-head">
+            <span class="assume-label">Test under</span>
+            <button class="ghost tiny" id="fg-match">Match today</button>
+          </div>
+          <div class="slider-row">
+            <input type="range" id="s-range" min="1" max="100" step="1" value="50">
+            <input type="number" id="s-value" min="1" max="100" step="1" value="50">
+          </div>
+          <div class="scale small"><span class="pin" id="s-pin" style="left:50%"></span></div>
+          <div class="ends"><span>1 · EXTREME FEAR</span><span>EXTREME GREED · 100</span></div>
+          <p class="assume-band" id="s-band"></p>
+        </div>
       </section>
 
+    </div>
+
+    <div class="save-bar">
+      <span class="saved" id="saved"></span>
+      <span class="err" id="err"></span>
+      <span class="spacer"></span>
+      <button class="primary" id="save">Save scenario</button>
     </div>
 
     <p class="hint">The index is a vendor number and is stored where it can be looked
@@ -135,6 +173,17 @@ const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 let direction = "NORMAL";
+let measured = null;      // the printed reading, kept apart from the assumed one
+
+// The vendor's own band boundaries, so the label under the slider says the same
+// word the index would for that number. Written once here rather than inferred
+// from whichever reading happens to be on screen.
+function band(value) {
+  if (value <= 24) return "Extreme Fear";
+  if (value <= 49) return "Fear";
+  if (value <= 74) return "Greed";
+  return "Extreme Greed";
+}
 
 function bandClass(c) {
   if (!c) return "b-neutral";
@@ -155,6 +204,22 @@ function paintWave() {
   else if ($("w-mag").value === "0") $("w-mag").value = "5";
 }
 
+function paintSentiment(value) {
+  const n = Math.min(100, Math.max(1, Number(value) || 1));
+  // Both controls carry the same number. They are two views of one field, so
+  // neither is allowed to hold a value the other does not.
+  $("s-range").value = String(n);
+  $("s-value").value = String(n);
+  $("s-pin").style.left = `${n}%`;
+  const word = band(n);
+  $("s-band").textContent = measured === null
+    ? `${word} · ${n}`
+    : `${word} · ${n} — the index printed ${measured}, so this is `
+      + (n === measured ? "the same." : `${n > measured ? "greedier" : "more fearful"} `
+        + `by ${Math.abs(n - measured)}.`);
+  $("s-band").className = `assume-band ${bandClass(word)}`;
+}
+
 function row(label, entry) {
   if (!entry) return `<tr><td>${label}</td><td class="when">no reading</td></tr>`;
   return `<tr>
@@ -165,38 +230,46 @@ function row(label, entry) {
 }
 
 async function load() {
-  const wave = await api("/api/wave");
-  direction = wave.direction;
-  $("w-mag").value = String(wave.magnitude);
+  const scenario = await api("/api/scenario");
+  direction = scenario.direction;
+  $("w-mag").value = String(scenario.magnitude);
   paintWave();
 
-  const fg = await api("/api/sentiment");
+  const fg = await api("/api/fear-greed");
   if (!fg.available) {
     $("fg-lead").textContent = "No readings stored yet. scripts/refresh_sentiment.py "
       + "--limit 0 loads the published history.";
-    return;
+    $("fg-match").disabled = true;
+  } else {
+    measured = fg.value;
+    $("fg-lead").textContent = "How the rest of the market is positioned, on the "
+      + "vendor's 0-100 scale.";
+    $("fg-value").textContent = fg.value;
+    $("fg-band").textContent = fg.classification;
+    $("fg-band").className = `band ${bandClass(fg.classification)}`;
+    $("fg-pin").style.left = `${fg.value}%`;
+    $("fg-match").textContent = `Match today (${fg.value})`;
+
+    $("fg-history").innerHTML = [
+      row("Yesterday", fg.yesterday),
+      row("Last week", fg.last_week),
+      row("Last month", fg.last_month),
+      row("Year high", fg.year_high),
+      row("Year low", fg.year_low),
+    ].join("");
+
+    // Said plainly rather than left to be inferred from a date: a stale feed
+    // fails silently, because the number is simply old and old numbers look
+    // exactly like current ones.
+    $("fg-source").textContent = fg.days_old > 1
+      ? `${fg.day} — ${fg.days_old} days old, so the feed has stopped. `
+        + `Source: ${fg.source}.`
+      : `As of ${fg.day}. Source: ${fg.source}.`;
+    $("fg-source").className = fg.days_old > 1 ? "hint stale" : "hint";
   }
-  $("fg-lead").textContent = "How the rest of the market is positioned, on the "
-    + "vendor's 0-100 scale.";
-  $("fg-value").textContent = fg.value;
-  $("fg-band").textContent = fg.classification;
-  $("fg-band").className = `band ${bandClass(fg.classification)}`;
-  $("fg-pin").style.left = `${fg.value}%`;
 
-  $("fg-history").innerHTML = [
-    row("Yesterday", fg.yesterday),
-    row("Last week", fg.last_week),
-    row("Last month", fg.last_month),
-    row("Year high", fg.year_high),
-    row("Year low", fg.year_low),
-  ].join("");
-
-  // Said plainly rather than left to be inferred from a date: a stale feed fails
-  // silently, because the number is simply old and old numbers look current.
-  $("fg-source").textContent = fg.days_old > 1
-    ? `${fg.day} — ${fg.days_old} days old, so the feed has stopped. Source: ${fg.source}.`
-    : `As of ${fg.day}. Source: ${fg.source}.`;
-  $("fg-source").className = fg.days_old > 1 ? "hint stale" : "hint";
+  // Painted last, because the comparison it prints needs the measured value.
+  paintSentiment(scenario.sentiment);
 }
 
 $("w-mag").innerHTML = Array.from({ length: 11 }, (_, n) => n).map((n) =>
@@ -206,19 +279,31 @@ $("w-up").onclick = () => { direction = "UP"; paintWave(); };
 $("w-normal").onclick = () => { direction = "NORMAL"; paintWave(); };
 $("w-down").onclick = () => { direction = "DOWN"; paintWave(); };
 
+$("s-range").oninput = () => paintSentiment($("s-range").value);
+$("s-value").oninput = () => paintSentiment($("s-value").value);
+// Copying the market's number is an act, not a default. The scenario starts at
+// 50 so that "nobody set this" and "someone chose the market's own value" are
+// different rows, and this button is how the second one gets made.
+$("fg-match").onclick = () => { if (measured !== null) paintSentiment(measured); };
+
 $("save").onclick = async () => {
   $("err").textContent = ""; $("saved").textContent = "";
   const magnitude = Number($("w-mag").value);
-  // Checked here so the operator is told which field disagrees, and again by the
-  // request model and a database CHECK. This is the friendliest of the three and
-  // the only one that can be bypassed.
+  const sentiment = Number($("s-value").value);
+  // Checked here so the operator is told which field disagrees, and again by
+  // the request model and a database CHECK. This is the friendliest of the
+  // three and the only one that can be bypassed.
   if ((direction === "NORMAL") !== (magnitude === 0)) {
     $("err").textContent = "NORMAL is magnitude 0; UP and DOWN take 1 to 10.";
     return;
   }
+  if (!Number.isInteger(sentiment) || sentiment < 1 || sentiment > 100) {
+    $("err").textContent = "Sentiment is a whole number from 1 to 100.";
+    return;
+  }
   try {
-    await api("/api/wave", { method: "PUT",
-      body: JSON.stringify({ direction, magnitude }) });
+    await api("/api/scenario", { method: "PUT",
+      body: JSON.stringify({ direction, magnitude, sentiment }) });
     $("saved").textContent = "Saved.";
     setTimeout(() => { $("saved").textContent = ""; }, 2500);
   } catch (e) { $("err").textContent = e.message; }

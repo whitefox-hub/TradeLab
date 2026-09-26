@@ -41,21 +41,22 @@ mount("/home", { onReady: load });
 async function load() {
   // Counts only, and each one read from a table. The home screen computes
   // nothing: a figure that appears only here is a figure nobody can reproduce.
-  const [wave, sentiment, series, quality] = await Promise.all([
-    api("/api/wave"),
-    api("/api/sentiment"),
+  const [scenario, sentiment, series, quality] = await Promise.all([
+    api("/api/scenario"),
+    api("/api/fear-greed"),
     api("/api/macro/series"),
     api("/api/data-quality").catch(() => []),
   ]);
 
   const stale = series.filter((s) => s.days_old > 45).length;
   const unsafe = series.filter((s) => !s.point_in_time_safe).length;
-  const pressure = wave.direction === "NORMAL"
-    ? "NORMAL" : `${wave.direction} ${wave.magnitude}`;
+  const pressure = scenario.direction === "NORMAL"
+    ? "NORMAL" : `${scenario.direction} ${scenario.magnitude}`;
 
   $("cards").innerHTML = [
     { n: pressure, k: "wave",
-      d: "The pressure a simulation runs inside. Set on Market Sentiment." },
+      d: `Pressure a simulation runs under, with sentiment assumed at ${
+        scenario.sentiment}. Set on Market Sentiment.` },
     { n: sentiment.available ? sentiment.value : "—", k: "fear and greed",
       d: sentiment.available
         ? `${sentiment.classification}, as of ${sentiment.day}.`

@@ -752,38 +752,53 @@ class Event(Base):
     )
 
 
-class MarketWave(Base):
-    """The market's standing pressure, used as a variable in simulation. §20.
+class MarketConditions(Base):
+    """What a simulation is told the market is doing. Plan.md §20.
 
-    One row, always. The primary key is fixed at 1, so a second wave collides
-    rather than being created — the singleton is in the schema and not in the
-    API remembering to update instead of insert.
+    One row, always. The primary key is fixed at 1, so a second set of
+    conditions collides rather than being created — the singleton is in the
+    schema and not in the API remembering to update instead of insert.
 
-    Deliberately not an event. An event is individual, dated and point-in-time,
-    and `events` is the corpus a study reads; a wave has no date because it is
-    not a record of something that happened but a condition to test under.
+    Two dials. The **wave** is direction and intensity of pressure; `NORMAL` is
+    a real state and the default, because conditions forced to be either UP or
+    DOWN make the operator pick a lean they may not hold. The **sentiment** is
+    where on the 1-100 fear-and-greed scale the simulation should assume the
+    rest of the market sits.
 
-    `NORMAL` is a real state and the default. A wave forced to be either UP or
-    DOWN makes the operator pick a lean they may not hold, and magnitude 0 is
-    the same fact as NORMAL — so the table refuses to hold the two apart.
+    `sentiment` here is **not** the reading in `sentiment_readings`. That one is
+    a measurement: dated, published once a day, never revised, and legible as of
+    a moment. This is an assumption with no date at all. One column for both
+    would make a measurement and an opinion indistinguishable, which is the
+    failure the hand-entered event corpus was kept apart from the collected one
+    to avoid.
+
+    None of it is dated, because none of it happened. Everything that did is in
+    `events`, which is point-in-time and is the corpus a study reads.
     """
 
-    __tablename__ = "market_wave"
+    __tablename__ = "market_conditions"
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     #: 'UP' bullish pressure, 'DOWN' bearish, 'NORMAL' neither.
-    direction: Mapped[str] = mapped_column(Text, nullable=False)
+    wave_direction: Mapped[str] = mapped_column(Text, nullable=False)
     #: 0 when NORMAL; otherwise 1 very weak, 5 medium, 10 extreme.
-    magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    wave_magnitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    #: 1 extreme fear, 50 neutral, 100 extreme greed. Defaults to 50 rather than
+    #: to today's printed value: seeding an assumption from a measurement would
+    #: make "nobody set this" and "someone chose the market's own number" the
+    #: same row, and only one of them is a decision.
+    sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=50)
 
     __table_args__ = (
-        CheckConstraint("id = 1", name="ck_market_wave_singleton"),
-        CheckConstraint("direction IN ('UP','NORMAL','DOWN')",
-                        name="ck_market_wave_direction"),
-        CheckConstraint("magnitude BETWEEN 0 AND 10",
-                        name="ck_market_wave_magnitude"),
-        CheckConstraint("(direction = 'NORMAL') = (magnitude = 0)",
-                        name="ck_market_wave_normal_is_zero"),
+        CheckConstraint("id = 1", name="ck_market_conditions_singleton"),
+        CheckConstraint("wave_direction IN ('UP','NORMAL','DOWN')",
+                        name="ck_market_conditions_wave_direction"),
+        CheckConstraint("wave_magnitude BETWEEN 0 AND 10",
+                        name="ck_market_conditions_wave_magnitude"),
+        CheckConstraint("(wave_direction = 'NORMAL') = (wave_magnitude = 0)",
+                        name="ck_market_conditions_normal_is_zero"),
+        CheckConstraint("sentiment BETWEEN 1 AND 100",
+                        name="ck_market_conditions_sentiment"),
     )
 
 

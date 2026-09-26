@@ -651,8 +651,9 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     # is asserted. §20.1 permits approvals and lifecycle transitions; §20.6 adds
     # a macro consensus, an observation recorded with its time rather than a
     # computed figure. §12.4 adds operator settings, which reach only the column
-    # that does not define a strategy. §20 adds the wave, which changes what a
-    # simulation is asked to assume and nothing that is running.
+    # that does not define a strategy. §20 adds the scenario — the wave and the
+    # assumed sentiment — which changes what a simulation is asked to assume and
+    # nothing that is running.
     #
     # The event writes are gone with the news screen. They were the largest
     # group here, and their removal is the reason this list is worth keeping as
@@ -664,10 +665,10 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
         ("/api/macro/releases/{release_id}/consensus", "POST"),
+        ("/api/scenario", "PUT"),
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
         ("/api/settings/{key}", "POST"),
-        ("/api/wave", "PUT"),
     ], f"a new write route appeared: {writable}"
 
 
@@ -728,28 +729,72 @@ def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
 
 
 @pytest.mark.fast
-def test_reading_or_setting_the_wave_requires_a_session(client: TestClient) -> None:
-    assert client.get("/api/wave").status_code == 401
-    assert client.put("/api/wave", json={
-        "direction": "DOWN", "magnitude": 8}).status_code == 401
-    assert client.get("/api/sentiment").status_code == 401
+def test_reading_or_setting_the_scenario_requires_a_session(client: TestClient) -> None:
+    assert client.get("/api/scenario").status_code == 401
+    assert client.put("/api/scenario", json={
+        "direction": "DOWN", "magnitude": 8, "sentiment": 20}).status_code == 401
+    assert client.get("/api/fear-greed").status_code == 401
 
 
 @pytest.mark.fast
-def test_there_is_no_route_that_creates_a_second_wave(client: TestClient) -> None:
-    """One wave. A POST or a DELETE on it would imply otherwise, and an API that
-    implies a second wave is one a client will eventually try to make."""
+def test_there_is_no_route_that_creates_a_second_scenario(client: TestClient) -> None:
+    """One set of conditions. A POST or a DELETE would imply otherwise, and an
+    API that implies a second scenario is one a client will eventually try to
+    make."""
     paths = {route.path for route in client.app.routes}
-    assert "/api/wave" in paths
+    assert "/api/scenario" in paths
     assert not any(p.startswith("/api/waves") for p in paths)
 
     methods = {
         method
         for route in client.app.routes
-        if getattr(route, "path", None) == "/api/wave"
+        if getattr(route, "path", None) == "/api/scenario"
         for method in getattr(route, "methods", set())
     }
-    assert methods == {"GET", "PUT"}, f"the wave answers to {methods}"
+    assert methods == {"GET", "PUT"}, f"the scenario answers to {methods}"
+
+
+@pytest.mark.fast
+def test_the_assumed_sentiment_is_not_the_measured_one(client: TestClient) -> None:
+    """The index printed today is a measurement: dated, published once, never
+    revised. The scenario's sentiment is an assumption with no date. Separate
+    fields, separate tables, and separate routes — holding both in one number
+    would make an opinion indistinguishable from a measurement, which is the
+    failure the hand-entered event corpus was kept apart from the collected one
+    to avoid.
+    """
+    from tradelab.registry.models import MarketConditions, SentimentReading
+
+    assert MarketConditions.__tablename__ != SentimentReading.__tablename__
+    # The assumption carries no date. Every column on it, checked rather than
+    # asserted in prose, because the way a date arrives is one migration at a
+    # time.
+    dated = [c.name for c in MarketConditions.__table__.columns
+             if str(c.type).upper().startswith(("DATE", "TIMESTAMP"))]
+    assert not dated, f"the scenario grew a date column: {dated}"
+
+    paths = {route.path for route in client.app.routes}
+    assert "/api/fear-greed" in paths
+    # Named for the index, not for "sentiment", so the two cannot be confused at
+    # the call site either.
+    assert "/api/sentiment" not in paths
+
+
+@pytest.mark.fast
+def test_a_sentiment_outside_one_to_a_hundred_is_refused() -> None:
+    """The scale is 1 to 100. A number outside it would be read downstream as a
+    position on a scale that does not exist, and nothing further along could
+    tell it from a real one."""
+    import pydantic
+
+    from tradelab.api.app import ScenarioRequest
+
+    for bad in (0, -1, 101, 1000):
+        with pytest.raises(pydantic.ValidationError):
+            ScenarioRequest(direction="NORMAL", magnitude=0, sentiment=bad)
+    for good in (1, 50, 100):
+        assert ScenarioRequest(direction="NORMAL", magnitude=0,
+                               sentiment=good).sentiment == good
 
 
 @pytest.mark.fast
@@ -760,17 +805,20 @@ def test_normal_and_magnitude_zero_are_the_same_fact() -> None:
     representable — here, and again in a database CHECK."""
     import pydantic
 
-    from tradelab.api.app import WaveRequest
+    from tradelab.api.app import ScenarioRequest
 
-    assert WaveRequest(direction="NORMAL", magnitude=0).magnitude == 0
+    def make(direction: str, magnitude: int) -> ScenarioRequest:
+        return ScenarioRequest(direction=direction, magnitude=magnitude, sentiment=50)
+
+    assert make("NORMAL", 0).magnitude == 0
     for good in (1, 5, 10):
-        assert WaveRequest(direction="UP", magnitude=good).magnitude == good
-        assert WaveRequest(direction="DOWN", magnitude=good).magnitude == good
+        assert make("UP", good).magnitude == good
+        assert make("DOWN", good).magnitude == good
 
     for direction, magnitude in (("NORMAL", 7), ("NORMAL", 1),
                                  ("UP", 0), ("DOWN", 0)):
         with pytest.raises(pydantic.ValidationError):
-            WaveRequest(direction=direction, magnitude=magnitude)
+            make(direction, magnitude)
 
 
 @pytest.mark.fast
@@ -780,18 +828,18 @@ def test_a_magnitude_outside_the_scale_is_refused() -> None:
     nothing downstream could tell it from a real one."""
     import pydantic
 
-    from tradelab.api.app import WaveRequest
+    from tradelab.api.app import ScenarioRequest
 
     for bad in (-1, 11, 70, 1000):
         with pytest.raises(pydantic.ValidationError):
-            WaveRequest(direction="UP", magnitude=bad)
+            ScenarioRequest(direction="UP", magnitude=bad, sentiment=50)
 
 
 @pytest.mark.fast
-def test_the_wave_carries_no_field_beyond_the_two() -> None:
-    """Two fields and no third: no asset, because there is one wave and it is
-    the market's; no date, because a wave is a condition to test under and not a
-    record of something that happened.
+def test_the_scenario_carries_no_field_beyond_the_three() -> None:
+    """Three fields and no fourth: no asset, because there is one set of
+    conditions and they are the market's; no date, because none of this
+    happened.
 
     `extra="forbid"` matters as much as the field list. Without it a client
     sending `asset` gets a 200 and the value is dropped, which is how an
@@ -799,12 +847,13 @@ def test_the_wave_carries_no_field_beyond_the_two() -> None:
     """
     import pydantic
 
-    from tradelab.api.app import WaveRequest
+    from tradelab.api.app import ScenarioRequest
 
-    assert set(WaveRequest.model_fields) == {"direction", "magnitude"}
+    assert set(ScenarioRequest.model_fields) == {"direction", "magnitude", "sentiment"}
     for smuggled in ("asset", "happened_at", "duration_hours", "note", "mode"):
         with pytest.raises(pydantic.ValidationError):
-            WaveRequest(direction="UP", magnitude=5, **{smuggled: 1})
+            ScenarioRequest(direction="UP", magnitude=5, sentiment=50,
+                            **{smuggled: 1})
 
 
 @pytest.mark.fast
@@ -815,11 +864,22 @@ def test_the_screen_offers_the_three_states_and_nothing_dated(
     reject is still worth not offering, because an input that errors on save is
     one the operator has already spent time filling in."""
     markup = client.get("/static/market_sentiment.html").text
-    for present in ('id="w-up"', 'id="w-normal"', 'id="w-down"', 'id="w-mag"'):
+    for present in ('id="w-up"', 'id="w-normal"', 'id="w-down"', 'id="w-mag"',
+                    'id="s-range"', 'id="s-value"'):
         assert present in markup, f"the screen is missing {present}"
     for absent in ('type="date"', 'type="datetime-local"', 'id="w-asset"',
                    'id="w-note"', 'id="w-when"'):
         assert absent not in markup, f"the screen offers {absent}"
+
+    # DOWN, NORMAL, UP. The buttons run the same way as the sentiment scale
+    # beneath them, which runs fear on the left; a row ordered UP first would
+    # have the two disagreeing about which side is bearish on one screen.
+    order = [markup.index(f'id="w-{name}"') for name in ("down", "normal", "up")]
+    assert order == sorted(order), "the wave buttons do not run DOWN, NORMAL, UP"
+
+    # The sentiment input covers the whole scale. A slider that stops at 90
+    # silently caps the scenario.
+    assert 'min="1" max="100"' in markup
 
 
 # -- the index ---------------------------------------------------------------

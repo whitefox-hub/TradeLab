@@ -84,13 +84,12 @@ class SettingRequest(BaseModel):
     rationale: str = Field(min_length=8)
 
 
-class WaveRequest(BaseModel):
-    """What the market wave may be set to. Plan.md §20.
+class ScenarioRequest(BaseModel):
+    """The conditions a simulation is told to run under. Plan.md §20.
 
-    Two fields and no third. No asset, because there is one wave and it is the
-    market's; no date, because a wave is not a record of something that happened
-    but a condition a simulation runs inside. Everything that *did* happen is
-    dated and point-in-time and belongs elsewhere.
+    Three fields and no fourth. No asset, because there is one set of conditions
+    and they are the market's; no date, because none of this happened —
+    everything that did is dated and point-in-time and lives in `events`.
 
     `extra="forbid"` so a client sending a field this does not have gets an
     error instead of having it dropped. A silently ignored field is how an
@@ -105,9 +104,14 @@ class WaveRequest(BaseModel):
     #: as pressure with no direction, and a DOWN wave of 0 as direction with no
     #: pressure. Both are states the engine would have to invent a meaning for.
     magnitude: int = Field(ge=0, le=10)
+    #: Where on the 1-100 scale to assume the rest of the market sits. An
+    #: assumption, and deliberately a different field from the measured reading
+    #: in `sentiment_readings` — holding both in one number would make an
+    #: opinion indistinguishable from a measurement.
+    sentiment: int = Field(ge=1, le=100)
 
     @model_validator(mode="after")
-    def normal_means_zero(self) -> WaveRequest:
+    def normal_means_zero(self) -> ScenarioRequest:
         if (self.direction == "NORMAL") != (self.magnitude == 0):
             raise ValueError(
                 "NORMAL is magnitude 0 and magnitude 0 is NORMAL; "
@@ -629,54 +633,68 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def macro_screen() -> FileResponse:
         return FileResponse(STATIC / "macro.html")
 
-    # -- the wave, and the market's own reading of itself --------------------
+    # -- the scenario, and the market's own reading of itself ---------------
 
-    @app.get("/api/wave")
-    def read_wave(who: Operator = operator,
-                  session: Session = session_dep) -> dict[str, Any]:
-        """The one wave. Always present, NORMAL until someone says otherwise.
+    @app.get("/api/scenario")
+    def read_scenario(who: Operator = operator,
+                      session: Session = session_dep) -> dict[str, Any]:
+        """The conditions a simulation runs under. Always present.
 
         Seeded by the migration rather than created on first write, so "no
-        pressure" and "nobody has set it" cannot come back as the same empty
-        result. They are different facts and only one of them is a reading.
+        pressure, neutral sentiment" and "nobody has set this" cannot come back
+        as the same empty result. They are different facts and only one of them
+        is a decision.
         """
         row = session.execute(sa.text(
-            "SELECT direction, magnitude FROM market_wave WHERE id = 1"
+            "SELECT wave_direction, wave_magnitude, sentiment "
+            "FROM market_conditions WHERE id = 1"
         )).mappings().first()
         if row is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                "the wave row is missing; migration 0013 seeds it")
-        return {"direction": row["direction"], "magnitude": row["magnitude"]}
+                                "the conditions row is missing; migration 0013 seeds it")
+        return {"direction": row["wave_direction"],
+                "magnitude": row["wave_magnitude"],
+                "sentiment": row["sentiment"]}
 
-    @app.put("/api/wave")
-    def set_wave(body: WaveRequest, who: Operator = operator,
-                 session: Session = session_dep) -> dict[str, Any]:
-        """Set the wave. An update, never an insert — there is only one.
+    @app.put("/api/scenario")
+    def set_scenario(body: ScenarioRequest, who: Operator = operator,
+                     session: Session = session_dep) -> dict[str, Any]:
+        """Set the conditions. An update, never an insert — there is one row.
 
-        PUT and not POST for the same reason: this names a thing that already
+        PUT and not POST for the same reason: this names something that already
         exists and replaces its contents, and sending it twice leaves the same
-        state. A POST here would imply a second wave could be created.
+        state. A POST would imply a second set of conditions could be created.
         """
         row = session.execute(sa.text(
-            "UPDATE market_wave SET direction = :d, magnitude = :m "
-            "WHERE id = 1 RETURNING direction, magnitude"
-        ), {"d": body.direction, "m": body.magnitude}).mappings().first()
+            "UPDATE market_conditions SET wave_direction = :d, wave_magnitude = :m, "
+            "sentiment = :s WHERE id = 1 "
+            "RETURNING wave_direction, wave_magnitude, sentiment"
+        ), {"d": body.direction, "m": body.magnitude,
+            "s": body.sentiment}).mappings().first()
         if row is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                "the wave row is missing; migration 0013 seeds it")
+                                "the conditions row is missing; migration 0013 seeds it")
 
-        # Audited because it is an input someone chose. Which pressure a
+        # Audited because these are inputs someone chose. Which conditions a
         # simulation was run under last month is a question the log has to be
-        # able to answer after the value has been changed.
-        audit(session, who.email, "wave.set", "wave", "market",
-              {"direction": body.direction, "magnitude": body.magnitude})
+        # able to answer after the values have been changed.
+        audit(session, who.email, "scenario.set", "scenario", "market",
+              {"direction": body.direction, "magnitude": body.magnitude,
+               "sentiment": body.sentiment})
         session.commit()
-        return {"direction": row["direction"], "magnitude": row["magnitude"]}
+        return {"direction": row["wave_direction"],
+                "magnitude": row["wave_magnitude"],
+                "sentiment": row["sentiment"]}
 
-    @app.get("/api/sentiment")
-    def read_sentiment(who: Operator = operator,
-                       session: Session = session_dep) -> dict[str, Any]:
-        """Fear and Greed: latest, three comparisons, and the year's extremes.
+    @app.get("/api/fear-greed")
+    def read_fear_greed(who: Operator = operator,
+                        session: Session = session_dep) -> dict[str, Any]:
+        """The measured index: latest, three comparisons, and the year's extremes.
+
+        Named for the index rather than for "sentiment", because the scenario
+        now carries a field by that name and the two must not be confused at the
+        call site either. This one is measured and dated; that one is assumed
+        and is not.
 
         Read back, never computed. §20.1 puts the boundary at the application
         deriving figures, and picking stored rows is not deriving one — but the
