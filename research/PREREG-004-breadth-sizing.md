@@ -30,7 +30,8 @@ predicted.
 > Each day *t*, scale the whole book by
 > **L_t = clip( σ_target / σ̂_p,t , 0 , 2.0 )**,
 > where σ̂_p,t is the realised standard deviation of the portfolio's daily net
-> return over the **trailing 90 days ending at t−1**.
+> return over the **trailing 90 days ending at t−1**. σ_target is fixed as
+> described in the amendment below.
 
 Three constants, none of them chosen here:
 
@@ -38,7 +39,7 @@ Three constants, none of them chosen here:
 |---|---|---|
 | Lookback | 90 days | The window PREREG-003 already fixed, for being one calendar quarter. Reusing it introduces no new degree of freedom. |
 | Cap | 2.0× | `RiskLimits.max_gross_exposure`, which already governs every order the risk layer sees. Inventing a study-specific cap would be inventing a knob. |
-| σ_target | 10% annualised | A conventional policy figure for a market-neutral book. Sharpe is invariant to it except through the cap, so it is reported as a scale and not as a result. |
+| σ_target | Realised portfolio volatility of the **first 90 live days**, fixed thereafter | Self-normalising and causal: known before the evaluated window opens. Sharpe is invariant to it except through the cap, so it is a scale and not a result. See the amendment below. |
 
 **This is breadth sizing, not a substitute for it.** With equal weights and a
 common per-asset volatility σ̄, effective breadth is N_eff = σ̄²/σ_p², so
@@ -47,6 +48,27 @@ scaling by the square root of realised breadth, adjusted for how volatile the
 individual legs happen to be. It reaches FINDING-004's recommendation without
 estimating a 470×470 correlation matrix from 90 observations, which cannot be
 done.
+
+### Amendment, 2026-09-26, before any sizing run
+
+The registered σ_target was 10% annualised. That is wrong for this book, and
+FINDING-004 already contained the numbers that say so: portfolio volatility runs
+0.010%–0.103% daily, which is 0.19%–1.97% annualised. A 10% target asks for
+roughly fifty times leverage, so the 2.0× cap would bind on every day of every
+quarter, leverage would be the constant 2.0, and the sized series would be the
+unsized series times two — identical Sharpe, and a trial spent measuring
+nothing.
+
+The replacement is **self-normalising**: σ_target is the realised portfolio
+volatility of the first 90 live days, fixed from then on, and the study is
+evaluated from live day 91. Median leverage is then near 1.0 by construction and
+the cap binds only where trailing volatility falls below half the opening
+quarter's — which is what a cap is for.
+
+Nothing was run to discover this. It uses only the quarterly volatilities
+already published in FINDING-004, it is committed before the first sizing run,
+and it costs about 90 days of evaluation window, which is stated here rather
+than absorbed quietly.
 
 ## Costs, charged because the last two versions of this did not
 
