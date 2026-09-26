@@ -90,8 +90,16 @@ def classify(bars: pl.DataFrame, spec: RegimeSpec | None = None) -> pl.DataFrame
     log_returns = np.zeros(n)
     log_returns[1:] = np.log(close[1:] / close[:-1])
 
+    # Exponentially weighted, for the reason given in labeling/barriers.py: a
+    # rolling window drops an observation as sharply as it took it, so a shock
+    # is paid for twice and the second time lands on a bar where nothing
+    # happened. Here that files a day under the wrong regime — and §13.1's point
+    # is that correlation is a property of the regime, which FINDING-004
+    # confirmed the expensive way.
     vol = (
-        pl.Series(log_returns).rolling_std(spec.vol_period).to_numpy()
+        pl.Series(log_returns)
+        .ewm_std(span=spec.vol_period, min_samples=spec.vol_period)
+        .to_numpy()
     )
     trend = np.full(n, np.nan)
     trend[spec.trend_period:] = (

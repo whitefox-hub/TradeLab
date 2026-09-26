@@ -124,10 +124,19 @@ def triple_barrier(
     spec = spec if spec is not None else BarrierSpec()
     frame = bars.sort("event_time")
 
+    # Exponentially weighted, not rolling. A rolling window has two edges: it
+    # takes an observation and, `vol_period` bars later, drops it — and the drop
+    # moves the estimate as much as the take did, on a bar where nothing
+    # happened. Barrier width is a decision, so that echo mislabels: a bar is
+    # recorded as having touched nothing because the barrier widened for a shock
+    # a full window in the past. RESULT-004 measured what the same edge costs
+    # when it drives position size, and tests/unit/test_estimator_echo.py holds
+    # the line here. An EWM has no trailing edge, only decay.
     vol = (
         frame.select(
             (pl.col("close") / pl.col("close").shift(1)).log()
-            .rolling_std(spec.vol_period).alias("vol")
+            .ewm_std(span=spec.vol_period, min_samples=spec.vol_period,
+                     ignore_nulls=False).alias("vol")
         )["vol"].fill_null(strategy="forward").fill_null(spec.min_vol).to_numpy()
     )
     vol = np.maximum(vol, spec.min_vol)
