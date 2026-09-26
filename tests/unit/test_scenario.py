@@ -250,3 +250,28 @@ def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
     source = inspect.getsource(create_app)
     assert "Not yet on the execution " in source
     assert "is constructed only in a test" in source
+
+
+@pytest.mark.fast
+def test_the_study_terms_match_the_registration() -> None:
+    """PREREG-005's parameters live in two places, and the one nobody checks is
+    the one that drifts. A study whose run and registration disagree cannot say
+    which came first, which is the entire value of having registered it.
+    """
+    from pathlib import Path
+
+    from tradelab.scenario import study
+
+    text = (Path(__file__).resolve().parents[2]
+            / "research/PREREG-005-operator-trend.md").read_text()
+
+    assert study.CUTOFF.isoformat() in text, "the cutoff is not the registered one"
+    assert f"**{study.HORIZON_DAYS} days**" in text
+    assert f"**{study.FIRST_LOOK_CALLS} directional\ncalls**" in text or (
+        f"**{study.FIRST_LOOK_CALLS} directional calls**" in text), (
+        "the stopping point in code is not the registered one")
+    assert study.MARKET in text
+    assert study.DIRECTIONAL == ("UP", "DOWN")
+    # The sensitivity horizons are declared, and declared as not deciding.
+    for horizon in study.SENSITIVITY_HORIZONS:
+        assert f"{horizon}-day" in text
