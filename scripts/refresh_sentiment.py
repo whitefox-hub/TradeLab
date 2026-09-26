@@ -11,7 +11,12 @@ import argparse
 
 import sqlalchemy as sa
 
-from tradelab.collectors.sentiment import fetch, fetch_cmc, store
+from tradelab.collectors.sentiment import (
+    fetch,
+    fetch_cmc,
+    fetch_cmc_history,
+    store,
+)
 from tradelab.config import Settings
 
 
@@ -22,6 +27,11 @@ def main() -> int:
     # alternative.me alone: CoinMarketCap serves only its latest value, so that
     # series starts the day it was first collected and accumulates forward.
     parser.add_argument("--limit", type=int, default=30)
+    # CoinMarketCap's latest endpoint gives one value; its history endpoint
+    # gives about 1185 days. The daily run does not need the second, so it is
+    # asked for rather than paid for every time.
+    parser.add_argument("--cmc-history", action="store_true",
+                        help="also page CoinMarketCap's full published history")
     args = parser.parse_args()
 
     engine = sa.create_engine(Settings().database_url)
@@ -31,8 +41,12 @@ def main() -> int:
     # the other. An undocumented endpoint can start demanding a key without
     # notice, and losing the series that still works alongside it would turn one
     # outage into two.
-    for label, pull in (("alternative.me", lambda: fetch(limit=args.limit)),
-                        ("coinmarketcap", fetch_cmc)):
+    sources = [("alternative.me", lambda: fetch(limit=args.limit)),
+               ("coinmarketcap", fetch_cmc)]
+    if args.cmc_history:
+        sources.append(("coinmarketcap history", fetch_cmc_history))
+
+    for label, pull in sources:
         try:
             readings = pull()
         except Exception as failure:

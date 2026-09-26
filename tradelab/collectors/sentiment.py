@@ -15,7 +15,7 @@ safely and one that quietly leaks.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import sqlalchemy as sa
@@ -37,7 +37,14 @@ SOURCE = "alternative.me/fng"
 #: after it was published, and does not see the earlier intraday values at all —
 #: less information than existed, which is the safe direction for that error.
 CMC_ENDPOINT = "https://pro-api.coinmarketcap.com/public-api/v3/fear-and-greed/latest"
+CMC_HISTORY = "https://pro-api.coinmarketcap.com/public-api/v3/fear-and-greed/historical"
 CMC_SOURCE = "coinmarketcap"
+
+#: The history endpoint returns nothing above roughly 500 and pages with
+#: `start`. Both are undocumented and found by asking: 1000 came back empty
+#: rather than clamped, so a caller that assumed a larger page would have
+#: silently collected nothing and reported success.
+CMC_PAGE = 500
 
 #: The five bands the index reports. Held here as well as in a database CHECK so
 #: a sixth one appearing upstream fails on the way in, where the payload is
@@ -45,6 +52,26 @@ CMC_SOURCE = "coinmarketcap"
 CLASSIFICATIONS = (
     "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed",
 )
+
+#: CoinMarketCap's own two endpoints disagree about capitalisation: `latest`
+#: says "Extreme Greed" and `historical` says "Extreme greed". Matched without
+#: case and stored in one form, so the same band does not become two values in
+#: a group-by — which is how a band ends up with half its days missing and
+#: nobody notices, because both spellings look right.
+_CANONICAL = {name.casefold(): name for name in CLASSIFICATIONS}
+
+
+def normalise(classification: str) -> str:
+    """The canonical band name, or an error naming what arrived.
+
+    Case is forgiven; anything else is not. A sixth band appearing upstream
+    fails here, where the payload is still available to look at, rather than as
+    a constraint violation somewhere later.
+    """
+    canonical = _CANONICAL.get(classification.strip().casefold())
+    if canonical is None:
+        raise ValueError(f"unknown classification {classification!r}")
+    return canonical
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,9 +117,7 @@ def fetch_cmc(client: httpx.Client | None = None) -> list[Reading]:
     if not data:
         raise RuntimeError("coinmarketcap returned no data")
 
-    classification = data["value_classification"]
-    if classification not in CLASSIFICATIONS:
-        raise ValueError(f"unknown classification {classification!r}")
+    classification = normalise(data["value_classification"])
     value = int(data["value"])
     if not 0 <= value <= 100:
         raise ValueError(f"value {value} is outside the published 0-100 scale")
@@ -104,6 +129,53 @@ def fetch_cmc(client: httpx.Client | None = None) -> list[Reading]:
         value=value, classification=classification,
         source=CMC_SOURCE, published_at=published,
     )]
+
+
+def fetch_cmc_history(client: httpx.Client | None = None,
+                      max_pages: int = 20) -> list[Reading]:
+    """CoinMarketCap's whole published history, paged.
+
+    One value per UTC day, and these are **closes**: the latest endpoint carries
+    an intraday update_time and this one does not, so a day here is the value
+    that day ended on. `available_at` is therefore the following midnight — the
+    first moment that day's close was knowable — and not the day's own start,
+    which would make it readable before it existed.
+
+    Paging stops on an empty page or on one that adds nothing new, so a server
+    that clamps `start` instead of honouring it ends the loop rather than
+    spinning on the same rows.
+    """
+    owned = client is None
+    client = client or httpx.Client(timeout=30.0)
+    out: list[Reading] = []
+    seen: set[str] = set()
+    try:
+        start = 1
+        for _ in range(max_pages):
+            payload = client.get(
+                CMC_HISTORY, params={"start": start, "limit": CMC_PAGE}).json()
+            error = (payload.get("status") or {}).get("error_message")
+            if error:
+                raise RuntimeError(f"coinmarketcap returned an error: {error}")
+            rows = payload.get("data") or []
+            fresh = [r for r in rows if r["timestamp"] not in seen]
+            if not fresh:
+                break
+            seen.update(r["timestamp"] for r in rows)
+            for row in fresh:
+                classification = normalise(row["value_classification"])
+                value = int(row["value"])
+                if not 0 <= value <= 100:
+                    raise ValueError(f"value {value} is outside the 0-100 scale")
+                day = datetime.fromtimestamp(int(row["timestamp"]), UTC)
+                out.append(Reading(
+                    day=day, value=value, classification=classification,
+                    source=CMC_SOURCE, published_at=day + timedelta(days=1)))
+            start += CMC_PAGE
+    finally:
+        if owned:
+            client.close()
+    return out
 
 
 def fetch(limit: int = 0, client: httpx.Client | None = None) -> list[Reading]:
@@ -122,9 +194,7 @@ def fetch(limit: int = 0, client: httpx.Client | None = None) -> list[Reading]:
 
     out: list[Reading] = []
     for row in payload.get("data") or []:
-        classification = row["value_classification"]
-        if classification not in CLASSIFICATIONS:
-            raise ValueError(f"unknown classification {classification!r}")
+        classification = normalise(row["value_classification"])
         value = int(row["value"])
         if not 0 <= value <= 100:
             raise ValueError(f"value {value} is outside the published 0-100 scale")
