@@ -15,12 +15,14 @@ module exists at all:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
 from tradelab.execution.types import AccountState, Instrument, Order
+from tradelab.news.context import EventContext
 
 
 class Breach(StrEnum):
@@ -44,6 +46,7 @@ class Breach(StrEnum):
     MAX_CONSECUTIVE_ERRORS = "max_consecutive_errors"
     PRICE_DEVIATION = "price_deviation"
     BELOW_MIN_VIABLE = "below_min_viable"
+    EVENT_CONTEXT = "event_context"
 
 
 #: Breaches that stop the whole run rather than one order. Halting on a loss
@@ -89,6 +92,15 @@ class Decision:
     def halts(self) -> bool:
         return self.breach in HALTING
 
+    @property
+    def damped(self) -> bool:
+        """Allowed, but at a size news cut down.
+
+        A breach on an allowed decision would read as a refusal anywhere that
+        only checks `breach`, so the one case where both are set has a name.
+        """
+        return self.allowed and self.breach is Breach.EVENT_CONTEXT
+
 
 def _refuse(breach: Breach, detail: str) -> Decision:
     return Decision(allowed=False, breach=breach, detail=detail)
@@ -100,9 +112,18 @@ class RiskEngine:
     def __init__(
         self, limits: RiskLimits, account: AccountState,
         clusters: dict[str, str] | None = None,
+        event_context: Callable[[str, datetime], EventContext] | None = None,
     ) -> None:
         self.limits = limits
         self.account = account
+        # How news reaches a decision. Injected rather than looked up here, so
+        # the engine stays independent of where events are stored and a
+        # backtest can supply a point-in-time view of its own.
+        #
+        # It conditions size; it does not produce a signal. §11.7 is explicit
+        # that sign is an input to an expected-reaction model and not a signal,
+        # so what an event earns here is a worse prior, not a direction.
+        self.event_context = event_context
         # Five strategies in one correlation cluster are one bet (§13.1), so a
         # per-strategy position cap does not cap the exposure that matters.
         self.clusters = clusters or {}
@@ -202,20 +223,43 @@ class RiskEngine:
                 f"last entry {(at - position.last_entry_at).total_seconds():.0f}s ago",
             )
 
+        # News, before size. An event that halves the intended position has to
+        # do so before the minimum-viable check, or an order gets approved at a
+        # size it will never be sent at.
+        context = self.event_context(order.asset, at) if self.event_context else None
+        if context is not None and context.size_multiplier < 1.0:
+            order = Order(
+                asset=order.asset, side=order.side,
+                quantity=order.quantity * Decimal(str(context.size_multiplier)),
+                order_type=order.order_type, limit_price=order.limit_price,
+                reduce_only=order.reduce_only,
+                client_order_id=order.client_order_id,
+                strategy_id=order.strategy_id,
+            )
+
         # Size, judged on the quantised quantity: the venue will round, so
         # approving an unrounded size approves something that will not trade.
+        def with_event_reason(detail: str) -> str:
+            """Both size refusals say when news caused them.
+
+            "below min_viable" on an order the strategy sized correctly is
+            otherwise unaccountable — the operator sees a rejection for a size
+            they never chose.
+            """
+            if context is None or context.size_multiplier >= 1.0:
+                return detail
+            return (f"{detail} after event damping to "
+                    f"{context.size_multiplier:.0%}: " + "; ".join(context.reasons))
+
         quantity = instrument.quantise(order.quantity)
         if quantity <= 0:
-            return _refuse(
-                Breach.BELOW_MIN_VIABLE,
-                f"{order.quantity} quantises to zero at lot size {instrument.lot_size}",
-            )
+            return _refuse(Breach.BELOW_MIN_VIABLE, with_event_reason(
+                f"{order.quantity} quantises to zero at lot size "
+                f"{instrument.lot_size}"))
         notional = quantity * price
         if notional < instrument.min_viable(price):
-            return _refuse(
-                Breach.BELOW_MIN_VIABLE,
-                f"{notional} below min_viable {instrument.min_viable(price)}",
-            )
+            return _refuse(Breach.BELOW_MIN_VIABLE, with_event_reason(
+                f"{notional} below min_viable {instrument.min_viable(price)}"))
         if notional < limits.min_position_notional:
             return _refuse(Breach.MIN_POSITION_NOTIONAL, f"{notional}")
         if notional > limits.max_position_notional:
@@ -247,6 +291,12 @@ class RiskEngine:
             if gross / account.equity > limits.max_leverage:
                 return _refuse(Breach.MAX_LEVERAGE, f"{gross / account.equity:.2f}x")
 
+        if context is not None and context.size_multiplier < 1.0:
+            return Decision(
+                allowed=True, breach=Breach.EVENT_CONTEXT,
+                detail=f"sized to {context.size_multiplier:.0%}: "
+                       + "; ".join(context.reasons),
+            )
         return Decision(allowed=True)
 
     def check_account(self, at: datetime) -> Decision:

@@ -1167,7 +1167,25 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                          "not know which mode it is running in.",
                  "rule": "Byte-identical across backtest, simulator, testnet and "
                          "live. Only the data feed and the venue adapter change."},
-                {"n": 10, "name": "Risk engine vetoes",
+                {"n": 10, "name": "News conditions the size",
+                 "does": "Look up every event visible at this instant that "
+                         "touches the asset, and damp the intended position: "
+                         "half under a live regime shift, seven tenths inside "
+                         "the three-day anticipation window of a scheduled one, "
+                         "and both compounding.",
+                 "rule": "News conditions, it does not signal. §11.7 puts sign "
+                         "as an input to an expected-reaction model and never a "
+                         "signal in itself — what is tradeable is the residual, "
+                         "observed minus expected, and trading the sign directly "
+                         "trades the half everyone has already priced. So an "
+                         "event earns a worse prior, not a direction. Visible "
+                         "means available_at has passed, not that it happened.",
+                 "cost": "Not damping at all was the state until now: events "
+                         "were recorded, rated and measured, and no decision "
+                         "read them. The residual itself still waits on §11.5 "
+                         "fitting an expected-reaction model, without which "
+                         "there is nothing to subtract from."},
+                {"n": 11, "name": "Risk engine vetoes",
                  "does": "Sixteen limits, evaluated by a component independent "
                          "of the strategy.",
                  "rule": "Positions and orders are counted here, from observed "
@@ -1176,14 +1194,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                          "these limits exist for. Enforced in every mode, so "
                          "the limiter's first real execution is never with real "
                          "money."},
-                {"n": 11, "name": "Write the intent, then send",
+                {"n": 12, "name": "Write the intent, then send",
                  "does": "Record what was wanted, with a deterministic order id, "
                          "before calling the venue.",
                  "rule": "Written before, never after. A process that dies on "
                          "the next line leaves a record that startup can resolve "
                          "by asking about a known id rather than guessing from a "
                          "position delta."},
-                {"n": 12, "name": "Fold the fill",
+                {"n": 13, "name": "Fold the fill",
                  "does": "Update the position from the fill the venue reported.",
                  "rule": "Positions move from fills and nothing else. A view "
                          "derived from a second source can agree with the venue "
