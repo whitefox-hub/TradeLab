@@ -50,6 +50,53 @@ class BacktestResult:
         return {k: getattr(self, k) for k in self.__slots__}
 
 
+def _legs(
+    close: np.ndarray, position: np.ndarray, costs: CostModel,
+    already_lagged: bool, funding: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The lag, the gross leg and every cost leg. Returns them unreduced.
+
+    Split out so `net_returns` below and `run` cannot disagree about what a net
+    return is. They did: the scenario runner judged a gate on the asset's own
+    price changes instead of the strategy's net returns, which for a constant
+    long position differ by 0.04 of Sharpe and for anything else by twelve or
+    more — a figure that looked right because the one case in use made two
+    different things coincide.
+    """
+    if not already_lagged:
+        position = np.concatenate([[0.0], position[:-1]])
+
+    returns = np.zeros_like(close)
+    returns[1:] = np.diff(close) / close[:-1]
+
+    gross = position * returns
+    traded = np.abs(np.diff(np.concatenate([[0.0], position])))
+
+    # Charged on the position held, signed: longs pay, shorts receive. A flat
+    # rate is a fallback; the real series belongs here whenever it is available.
+    if funding is not None:
+        funding_cost = position * np.asarray(funding, dtype=np.float64)
+    else:
+        funding_cost = position * costs.funding_per_bar
+
+    return position, gross, traded * costs.per_side + funding_cost, funding_cost, traded
+
+
+def net_returns(
+    close: np.ndarray, position: np.ndarray, costs: CostModel | None = None,
+    already_lagged: bool = False, funding: np.ndarray | None = None,
+) -> np.ndarray:
+    """The per-bar net return series `run` reduces to its summary figures.
+
+    Exposed because the gate needs the series and not the summary: a deflated
+    Sharpe is computed from returns, and anything else handed to it is a
+    statistic about something the strategy did not earn.
+    """
+    costs = costs or BINANCE_RETAIL
+    _, gross, cost, _, _ = _legs(close, position, costs, already_lagged, funding)
+    return gross - cost
+
+
 def run(
     close: np.ndarray, position: np.ndarray, costs: CostModel | None = None,
     timeframe: str = "1h", already_lagged: bool = False,
@@ -74,24 +121,8 @@ def run(
     any long-biased strategy.
     """
     costs = costs or BINANCE_RETAIL
-    if not already_lagged:
-        position = np.concatenate([[0.0], position[:-1]])
-
-    returns = np.zeros_like(close)
-    returns[1:] = np.diff(close) / close[:-1]
-
-    gross = position * returns
-    traded = np.abs(np.diff(np.concatenate([[0.0], position])))
-    cost = traded * costs.per_side
-
-    # Charged on the position held, signed: longs pay, shorts receive. A flat
-    # rate is a fallback; the real series belongs here whenever it is available.
-    if funding is not None:
-        funding_cost = position * np.asarray(funding, dtype=np.float64)
-    else:
-        funding_cost = position * costs.funding_per_bar
-    cost = cost + funding_cost
-
+    position, gross, cost, funding_cost, traded = _legs(
+        close, position, costs, already_lagged, funding)
     net = gross - cost
 
     equity = np.cumprod(1.0 + net)

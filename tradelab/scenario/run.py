@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from tradelab.engines.tier_a.engine import BacktestResult
+from tradelab.engines.tier_a.engine import BacktestResult, net_returns
 from tradelab.engines.tier_a.engine import run as backtest
 from tradelab.scenario.tilt import apply, exposure_multipliers, sentiment_bucket
 from tradelab.validation.deflated import sharpe_stats
@@ -120,7 +120,13 @@ def execute(direction: str, magnitude: int, sentiment: int,
 
     # Step 7. Derived every time rather than written down, so this stops saying
     # "the gate" as soon as something gets through it.
-    stats = sharpe_stats(np.diff(close) / close[:-1],
+    # The conditioned arm's own net returns, not the asset's price changes. The
+    # first version gated on `diff(close)/close`, which is a statistic about
+    # BTCUSDT and not about anything the run did — identical to within 0.04 of
+    # Sharpe for a constant long position, and wrong by twelve or more for any
+    # position that is not one. The reference being buy-and-hold is exactly what
+    # kept it invisible.
+    stats = sharpe_stats(net_returns(close, conditioned_position),
                          effective_n=float(conditioned.effective_n))
     gate = evaluate(stats, trials=1, n_oos_trades=int(conditioned.n_trades or 1),
                     bars_per_year=BARS_PER_YEAR, min_detectable_sharpe=0.5)

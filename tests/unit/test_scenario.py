@@ -164,3 +164,56 @@ def test_a_run_reports_the_step_it_reached_rather_than_a_verdict() -> None:
 
     assert GATE_STEP == 7
     del np_
+
+
+@pytest.mark.fast
+def test_the_gate_reads_the_arm_and_not_the_asset() -> None:
+    """A deflated Sharpe is computed from returns, and the returns have to be
+    the ones the run earned.
+
+    The first version gated on `diff(close)/close` — a statistic about BTCUSDT.
+    With the buy-and-hold reference it agrees to within 0.04 of Sharpe, which is
+    exactly why it survived; with a position that is not constantly long it is
+    wrong by twelve or more, and points the wrong way. This is the shape of
+    defect where one test case makes two different things coincide.
+    """
+    import numpy as np_
+
+    from tradelab.engines.tier_a.engine import net_returns
+    from tradelab.engines.tier_a.engine import run as backtest
+
+    close = 100.0 * np_.cumprod(
+        1.0 + np_.random.default_rng(11).normal(0.0, 0.002, 4000))
+
+    # `run` and `net_returns` are two views of one computation, so a Sharpe
+    # taken from the series has to equal the one the summary reports.
+    for position in (
+        np_.ones(close.size),
+        (np_.arange(close.size) // 60 % 2).astype(float),
+        np_.where((np_.arange(close.size) // 60) % 2 == 0, 1.0, -1.0),
+    ):
+        series = net_returns(close, position)
+        summary = backtest(close, position, timeframe="1m")
+        from_series = series.mean() / series.std(ddof=1) * np_.sqrt(525_600)
+        assert from_series == pytest.approx(summary.sharpe, abs=1e-9)
+
+    # And the asset's own returns are a different number, so gating on them
+    # would not have been caught by the equality above.
+    asset = np_.zeros_like(close)
+    asset[1:] = np_.diff(close) / close[:-1]
+    flipping = np_.where((np_.arange(close.size) // 60) % 2 == 0, 1.0, -1.0)
+    assert asset.mean() / asset.std(ddof=1) != pytest.approx(
+        backtest(close, flipping, timeframe="1m").sharpe, abs=0.5)
+
+
+@pytest.mark.fast
+def test_the_run_gates_on_the_conditioned_series() -> None:
+    """Asserted against the source, because the two series are numerically
+    close for the reference in use and a value test would pass either way."""
+    import inspect
+
+    from tradelab.scenario import run as runner
+
+    source = inspect.getsource(runner.execute)
+    assert "net_returns(close, conditioned_position)" in source
+    assert "np.diff(close) / close[:-1]" not in source
