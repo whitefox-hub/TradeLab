@@ -180,6 +180,20 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     app = FastAPI(title="TradeLab", docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
+    @app.middleware("http")
+    async def no_stale_chrome(request, call_next):
+        """Keep the browser from serving an old menu.
+
+        The sidebar lives in one file, so a cached app.js means a screen that
+        exists is missing from the navigation — which reads as the screen not
+        having been built. Revalidation costs one conditional request and
+        removes a class of confusion that is indistinguishable from a bug.
+        """
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
     def db():
         with make_session() as session:
             yield session

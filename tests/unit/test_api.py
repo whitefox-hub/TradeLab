@@ -15,6 +15,7 @@ import sqlalchemy as sa
 
 pytest.importorskip("fastapi")
 
+from fastapi.responses import FileResponse
 from fastapi.testclient import TestClient
 
 from tradelab.api.app import create_app
@@ -890,3 +891,42 @@ def test_the_algorithm_screen_computes_nothing() -> None:
     block = source[source.index('def algorithm('):source.index('def algorithm_screen(')]
     assert "SELECT count(*)" in block or "sum(executed_trials)" in block
     assert "session.rollback()" in block, "a missing table would take the view down"
+
+
+@pytest.mark.fast
+def test_the_chrome_is_revalidated_rather_than_cached(client: TestClient) -> None:
+    """The sidebar lives in one file, so a cached app.js means a screen that
+    exists is missing from the navigation — which reads as the screen not having
+    been built rather than as a stale asset."""
+    response = client.get("/static/app.js")
+    assert "no-cache" in response.headers.get("cache-control", "")
+    # HTML too: the pages carry the script tag that would otherwise be stale.
+    assert client.get("/algorithm").status_code == 200
+
+
+@pytest.mark.fast
+def test_every_built_screen_appears_in_the_menu(client: TestClient) -> None:
+    """A route that serves a page and is not linked is a page nobody finds."""
+    import re
+
+    menu = client.get("/static/app.js").text
+    linked = set(re.findall(r'href: "(/[a-z_-]+)"', menu))
+
+    # A screen is a route whose handler returns a FileResponse. Checked that way
+    # rather than by listing exceptions: an exception list needs editing every
+    # time something is added, and the edit that gets forgotten is the one that
+    # lets an unlinked page through.
+    served = set()
+    for route in client.app.routes:
+        annotation = getattr(getattr(route, "endpoint", None), "__annotations__", {})
+        # The string, not the class: app.py uses `from __future__ import
+        # annotations`, so every annotation there is already a string.
+        if annotation.get("return") in (FileResponse, "FileResponse"):
+            served.add(route.path)
+
+    assert served, "no screens found; the check is not looking at anything"
+    # /login is deliberately absent from the menu: it is where an unauthenticated
+    # visitor is sent, not somewhere to navigate to.
+    assert served - linked == {"/login"}, (
+        f"served but not in the menu: {served - linked - {'/login'}}"
+    )
