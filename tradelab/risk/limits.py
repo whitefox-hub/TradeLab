@@ -82,6 +82,58 @@ class RiskLimits:
     max_price_deviation_bps: Decimal = Decimal(50)
 
 
+#: What each limit stops, in one line, next to the limit it describes.
+#:
+#: Here rather than on the screen, so a page cannot describe a limit that no
+#: longer exists or miss one that was added. A test asserts every field of
+#: `RiskLimits` appears, which is what makes adding a limit without explaining
+#: it fail rather than ship.
+STOPS: dict[str, str] = {
+    "max_open_positions":
+        "A book wide enough that no single position matters is also one nobody "
+        "is watching.",
+    "max_open_orders":
+        "Unfilled orders are exposure the position count does not show.",
+    "max_positions_per_cluster":
+        "Five strategies in one correlation cluster are one bet (§13.1), so a "
+        "per-position cap does not cap the exposure that matters.",
+    "min_position_notional":
+        "Below a size, fees and slippage are the whole trade.",
+    "max_position_notional":
+        "An absolute ceiling, independent of equity, so a mis-priced equity "
+        "figure cannot authorise an unbounded order.",
+    "min_position_pct_equity":
+        "A position too small to move the book is a cost with no thesis.",
+    "max_position_pct_equity":
+        "One name cannot become the portfolio.",
+    "min_seconds_between_entries":
+        "A strategy re-entering within seconds is usually a loop, not a view.",
+    "max_gross_exposure":
+        "Longs plus shorts, so a market-neutral book cannot be leveraged "
+        "arbitrarily on the grounds of being neutral.",
+    "max_net_exposure":
+        "Directional exposure, which is the part a market move reaches.",
+    "max_leverage":
+        "Borrowed size, capped independently of gross, because the two fail "
+        "differently.",
+    "max_daily_loss":
+        "A fraction of the day's opening equity. Halts the run: accepting the "
+        "next order after a loss limit would make the limit decorative.",
+    "max_drawdown_from_peak":
+        "Halts, and a person has to clear it. A drawdown limit that resumes by "
+        "itself has not been reviewed, and the review is the control (§14.1).",
+    "max_orders_per_minute":
+        "A rate no human decision produces, so exceeding it is a malfunction "
+        "whatever the strategy believes.",
+    "max_consecutive_errors":
+        "Halts. A system failing repeatedly does not know what it holds, and "
+        "the next order is a guess.",
+    "max_price_deviation_bps":
+        "An order priced far from the market is a fat finger or a stale feed; "
+        "neither should reach a venue.",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     allowed: bool

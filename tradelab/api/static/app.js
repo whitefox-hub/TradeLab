@@ -17,7 +17,7 @@ const SCREENS = [
   { href: "/data-quality", label: "Data quality" },
   { href: "/audit", label: "Audit" },
   { label: "Runs", soon: true },
-  { label: "Risk limits", soon: true },
+  { href: "/risk-limits", label: "Risk limits" },
 ];
 
 function renderSidebar(active) {

@@ -545,12 +545,25 @@ def test_the_old_pipeline_path_redirects(client: TestClient) -> None:
     assert response.headers["location"] == "/algorithm"
 
 
+def _algorithm_source() -> str:
+    """The ALGORITHM literal alone.
+
+    Ended at the list's own closing bracket rather than at whatever route
+    follows it. The first version sliced up to `@app.get("/api/algorithm")` and
+    broke the moment another endpoint was written above that one — counting
+    `"name":` out of a SQL row as though it were a step.
+    """
+    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
+    start = source.index("ALGORITHM = [")
+    end = source.index("\n    ]\n", start) + len("\n    ]\n")
+    return source[start:end]
+
+
 @pytest.mark.fast
 def test_every_step_carries_the_rule_that_must_hold() -> None:
     """A sequence without its invariants is a list of function names. What makes
     it the algorithm is what has to be true when each step runs."""
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index("ALGORITHM = ["):source.index('@app.get("/api/algorithm")')]
+    block = _algorithm_source()
     assert block.count('"rule":') == block.count('"name":')
     assert block.count('"does":') == block.count('"name":')
 
@@ -561,8 +574,7 @@ def test_the_steps_are_numbered_in_the_order_they_run() -> None:
     numbering is the one defect it cannot be allowed to have."""
     import re
 
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index("ALGORITHM = ["):source.index('@app.get("/api/algorithm")')]
+    block = _algorithm_source()
     numbers = [int(n) for n in re.findall(r'"n": (\d+)', block)]
     assert numbers == list(range(1, len(numbers) + 1))
 
@@ -571,8 +583,7 @@ def test_the_steps_are_numbered_in_the_order_they_run() -> None:
 def test_the_steps_that_were_defects_say_what_they_cost() -> None:
     """A rule with no story behind it reads as a preference, and the next person
     reorders it. These four were real defects in this codebase."""
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index("ALGORITHM = ["):source.index('@app.get("/api/algorithm")')]
+    block = _algorithm_source()
     assert block.count('"cost":') >= 4
     # And the numbers in those stories are the measured ones, not round.
     assert "2.68" in block and "0.03" in block
@@ -1414,3 +1425,70 @@ def test_the_home_screen_computes_no_figure(client: TestClient) -> None:
     # Negated for display only, which is presentation and not derivation:
     # funding paid is a cost, and showing it as a positive gain would invert it.
     assert "money(-book.funding_paid" in markup
+
+
+@pytest.mark.fast
+def test_the_risk_screen_lists_every_limit_the_engine_has(client: TestClient) -> None:
+    """The list is derived from the engine, not written into the page.
+
+    A screen with its own copy of the limits keeps showing one after it is
+    removed and misses the one that was added — and this is the screen where
+    that matters most, because a limit nobody can see is one nobody checks.
+    """
+    import dataclasses
+
+    from tradelab.risk.limits import STOPS, RiskLimits
+
+    fields = {f.name for f in dataclasses.fields(RiskLimits)}
+
+    # Every limit is explained, beside the limit rather than on the page. A new
+    # one without a line here fails instead of shipping undocumented.
+    assert set(STOPS) == fields, (
+        f"undescribed: {sorted(fields - set(STOPS))}; "
+        f"described but gone: {sorted(set(STOPS) - fields)}")
+
+    markup = client.get("/static/risk_limits.html").text
+    # None of the sixteen names is hardcoded in the page.
+    for name in fields:
+        assert name not in markup, f"{name} is written into the screen"
+    assert "data.limits.map" in markup
+
+
+@pytest.mark.fast
+def test_halting_breaches_are_marked_as_such(client: TestClient) -> None:
+    """A limit that halts the run is a different thing from one that refuses an
+    order, and §14.1 adds a third: a drawdown halt a person must clear, because
+    one that resumes by itself has not been reviewed and the review is the
+    control.
+
+    Taken from the engine's own sets so the screen cannot disagree with what
+    actually happens.
+    """
+    from tradelab.risk.limits import HALTING, REQUIRES_HUMAN
+
+    assert {b.value for b in REQUIRES_HUMAN} <= {b.value for b in HALTING}, (
+        "a breach needs a person to clear it but does not halt")
+    assert {b.value for b in HALTING} == {
+        "max_daily_loss", "max_consecutive_errors", "max_drawdown_from_peak"}
+
+    markup = client.get("/static/risk_limits.html").text
+    assert "halts the run" in markup and "needs a person" in markup
+    assert "l.halts" in markup, "the screen decides halting for itself"
+
+
+@pytest.mark.fast
+def test_no_route_writes_a_risk_limit(client: TestClient) -> None:
+    """§12.4 keeps limits out of the operator's editable settings: a risk limit
+    defines behaviour. Changing one creates a configuration and a run records
+    which it ran under, so a limit is never edited beneath a position opened
+    under it."""
+    writable = {
+        (route.path, method)
+        for route in client.app.routes
+        for method in getattr(route, "methods", set())
+        if method in {"POST", "PUT", "PATCH", "DELETE"}
+    }
+    assert not any("risk" in path or "limit" in path for path, _ in writable)
+    markup = client.get("/static/risk_limits.html").text
+    assert "<input" not in markup and "<select" not in markup, (
+        "the risk screen offers a control that sets something")

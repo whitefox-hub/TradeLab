@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Risk limits — TradeLab</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .cards { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+    margin-top:20px; }
+  .card { padding:16px 18px; background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; }
+  .card .n { font-size:25px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .card .k { color:var(--muted); font-size:14px; margin-top:2px; }
+
+  .origin { margin:18px 0 0; padding:12px 16px; border-radius:10px; font-size:14px;
+    line-height:1.55; background:color-mix(in srgb, var(--warn) 10%, transparent);
+    border:1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
+
+  table.limits { margin-top:16px; table-layout:fixed; }
+  table.limits th:nth-child(1), table.limits td:nth-child(1) { width:26%; }
+  table.limits th:nth-child(2), table.limits td:nth-child(2) { width:13%; }
+  table.limits th:nth-child(3), table.limits td:nth-child(3) { width:45%; }
+  table.limits th:nth-child(4), table.limits td:nth-child(4) { width:16%; }
+  .limit-name { font-weight:620; font-family:ui-monospace,SFMono-Regular,monospace;
+    font-size:13.5px; }
+  .val { font-variant-numeric:tabular-nums; font-weight:640; font-size:15px; }
+  .val .dflt { display:block; color:var(--muted); font-size:12px; font-weight:450; }
+  .stops { font-size:14px; line-height:1.55; color:var(--muted); }
+  .tag { display:inline-block; padding:2px 9px; border-radius:99px; font-size:11.5px;
+    font-weight:650; letter-spacing:.04em; text-transform:uppercase;
+    border:1px solid currentColor; }
+  .tag.halts { color:var(--down); }
+  .tag.person { color:var(--warn); margin-left:6px; }
+  .tag.order { color:var(--muted); }
+
+  .kinds { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+  .kinds span { font-family:ui-monospace,SFMono-Regular,monospace; font-size:12.5px;
+    padding:3px 9px; border-radius:6px; background:var(--panel-2);
+    border:1px solid var(--line); color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <main class="content">
+    <h1>Risk limits</h1>
+    <p class="sub">What the engine refuses, and what it has refused.</p>
+
+    <div class="cards" id="cards"></div>
+    <p class="origin" id="origin"></p>
+
+    <table class="limits">
+      <thead><tr>
+        <th>Limit</th><th class="num">In force</th><th>What it stops</th>
+        <th>On breach</th>
+      </tr></thead>
+      <tbody id="limits"></tbody>
+    </table>
+
+    <p class="hint">Read, never set. A risk limit defines behaviour, so §12.4 keeps
+      it out of the operator's editable settings — changing one creates a new
+      configuration and a run records which it ran under, so a limit is never
+      edited beneath a position that was opened under it. The engine evaluates
+      these independently of the strategy and counts positions from observed
+      fills, never from what the strategy reports: a strategy that miscounts its
+      own state is the case these exist for.</p>
+
+    <h2>Every breach the engine can raise</h2>
+    <div class="kinds" id="kinds"></div>
+    <p class="hint">Three of these are not a configured number. <code>halted</code>
+      is a halt already in force, <code>below_min_viable</code> is a position too
+      small to be worth its costs, and <code>event_context</code> is the one case
+      where an order is allowed <em>and</em> carries a breach — news cutting the
+      size down rather than refusing it. Anywhere that checks only for a breach
+      would read that as a refusal, which is why it has a name.</p>
+
+    <h2>Breaches recorded</h2>
+    <table>
+      <thead><tr>
+        <th>Rule</th><th class="num">Observed</th><th class="num">Limit</th>
+        <th>Action</th><th class="num">When</th>
+      </tr></thead>
+      <tbody id="events"></tbody>
+    </table>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+mount("/risk-limits", { onReady: load });
+
+const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function load() {
+  const data = await api("/api/risk-limits");
+
+  $("cards").innerHTML = [
+    [data.limits.length, "limits enforced"],
+    [data.limits.filter((l) => l.halts).length, "halt the whole run"],
+    [data.needs_a_person.length, "need a person to clear"],
+    [data.event_count, "breaches recorded"],
+  ].map(([n, k]) => `<div class="card"><div class="n">${n}</div>
+    <div class="k">${k}</div></div>`).join("");
+
+  // Which of the two is in force, said rather than left to be inferred: a
+  // default displayed as a configuration is a limit nobody chose.
+  $("origin").textContent = data.config_name
+    ? `In force: configuration "${data.config_name}", valid from `
+      + `${data.valid_from.slice(0, 10)}. Values that differ from the engine's `
+      + "defaults are shown with the default beneath."
+    : "No configuration is stored, so these are the engine's own defaults. "
+      + "A run records the configuration it ran under, and none has run.";
+
+  $("limits").innerHTML = data.limits.map((l) => `
+    <tr>
+      <td><span class="limit-name">${escape(l.name)}</span></td>
+      <td class="num"><span class="val">${escape(l.value)}${
+        l.value !== l.default
+          ? `<span class="dflt">default ${escape(l.default)}</span>` : ""}</span></td>
+      <td class="stops">${escape(l.stops)}</td>
+      <td>${l.halts
+        ? `<span class="tag halts">halts the run</span>${
+            l.needs_a_person ? '<span class="tag person">needs a person</span>' : ""}`
+        : '<span class="tag order">refuses the order</span>'}</td>
+    </tr>`).join("");
+
+  $("kinds").innerHTML = data.breach_kinds
+    .map((k) => `<span>${escape(k)}</span>`).join("");
+
+  $("events").innerHTML = data.events.length
+    ? data.events.map((e) => `
+      <tr>
+        <td><span class="limit-name">${escape(e.rule)}</span></td>
+        <td class="num">${escape(e.observed)}</td>
+        <td class="num">${escape(e.limit_value)}</td>
+        <td>${escape(e.action)}</td>
+        <td class="num">${escape(e.at.slice(0, 16).replace("T", " "))}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="5" class="empty">No breach has been recorded, and none
+        could have been: nothing has executed. These limits are enforced in every
+        mode including backtest, so the first time the engine refuses an order
+        will not be with real money — but it has not refused one yet.</td></tr>`;
+}
+</script>
+</body>
+</html>

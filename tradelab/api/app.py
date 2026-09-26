@@ -1136,6 +1136,87 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         },
     ]
 
+    @app.get("/api/risk-limits")
+    def risk_limits(who: Operator = operator,
+                    session: Session = session_dep) -> dict[str, Any]:
+        """Every limit the engine enforces, and every breach it has recorded.
+
+        The list is **derived from the engine**, not written here: the fields of
+        `RiskLimits`, the `HALTING` set and `REQUIRES_HUMAN`. A page with its
+        own copy of the limits is a page that keeps showing one after it is
+        removed, and misses the one that was added — and this is the screen
+        where that would matter most.
+
+        Values come from the newest stored configuration when there is one, and
+        from the engine's defaults when there is not. Which of the two is in
+        force is reported rather than left to be inferred, because a default
+        displayed as a configuration is a limit nobody chose.
+        """
+        import dataclasses
+
+        from tradelab.risk.limits import (
+            HALTING,
+            REQUIRES_HUMAN,
+            STOPS,
+            Breach,
+            RiskLimits,
+        )
+
+        defaults = RiskLimits()
+        stored = session.execute(sa.text(
+            "SELECT * FROM risk_limit_configs ORDER BY valid_from DESC LIMIT 1"
+        )).mappings().first()
+
+        halting = {b.value for b in HALTING}
+        human = {b.value for b in REQUIRES_HUMAN}
+
+        limits = []
+        for field in dataclasses.fields(RiskLimits):
+            name = field.name
+            # The breach a limit raises is named after it, except the price one:
+            # `max_price_deviation_bps` raises `price_deviation`. Matched by
+            # membership rather than assumed equal, so a rename shows up as a
+            # limit that halts nothing instead of a crash.
+            breach = name if name in halting or name in human else (
+                "price_deviation" if name.startswith("max_price_deviation") else name)
+            limits.append({
+                "name": name,
+                "value": str(stored[name]) if stored is not None and name in stored
+                         else str(getattr(defaults, name)),
+                "default": str(getattr(defaults, name)),
+                "stops": STOPS.get(name, ""),
+                # A breach that halts the whole run, not just this order.
+                "halts": breach in halting,
+                # And one a person has to clear before it resumes.
+                "needs_a_person": breach in human,
+            })
+
+        events = session.execute(sa.text(
+            "SELECT rule, observed, limit_value, action, occurred_at, run_id "
+            "FROM risk_events ORDER BY occurred_at DESC LIMIT 100"
+        )).mappings().all()
+
+        return {
+            "source": "stored configuration" if stored is not None
+                      else "engine defaults, no configuration stored",
+            "config_name": None if stored is None else stored["name"],
+            "valid_from": None if stored is None
+                          else stored["valid_from"].isoformat(),
+            "limits": limits,
+            "halting": sorted(halting),
+            "needs_a_person": sorted(human),
+            # Every breach the engine can raise, including the ones that are not
+            # a configured number: a halt already in force, a position below the
+            # minimum viable size, and news cutting a size down.
+            "breach_kinds": sorted(b.value for b in Breach),
+            "events": [{
+                "rule": e["rule"], "observed": str(e["observed"]),
+                "limit_value": str(e["limit_value"]), "action": e["action"],
+                "at": e["occurred_at"].isoformat(), "run_id": str(e["run_id"]),
+            } for e in events],
+            "event_count": len(events),
+        }
+
     @app.get("/api/positions")
     def open_positions(who: Operator = operator,
                        session: Session = session_dep) -> dict[str, Any]:
@@ -1274,6 +1355,17 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "source": last["source"],
             },
         }
+
+    @app.get("/risk-limits", include_in_schema=False)
+    def risk_limits_screen() -> FileResponse:
+        """What the engine refuses, and what it has refused.
+
+        Read only. A risk limit defines behaviour, so §12.4 keeps it out of the
+        operator's editable settings: changing one creates a new configuration
+        and a run records which it ran under, so a limit is never edited beneath
+        a position opened under it.
+        """
+        return FileResponse(STATIC / "risk_limits.html")
 
     @app.get("/algorithm", include_in_schema=False)
     def algorithm_screen() -> FileResponse:
