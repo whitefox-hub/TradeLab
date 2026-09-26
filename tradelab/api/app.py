@@ -1055,12 +1055,18 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                  "rule": "Byte-identical across backtest, simulator, testnet and "
                          "live. Only the data feed and the venue adapter change."},
                 {"n": 10, "name": "The scenario conditions the size",
-                 "does": "Scale the intended position by the market trend set on Market "
-                         "Sentiment: positions agreeing with it up, positions "
-                         "disagreeing down, by up to half at magnitude 10. "
-                         "Collected events still damp it separately — half under "
-                         "a live regime shift, seven tenths inside the three-day "
-                         "anticipation window of a scheduled one, compounding.",
+                 "does": "In a scenario run, scale the intended position by the "
+                         "market trend set on Market Sentiment: positions "
+                         "agreeing with it up, positions disagreeing down, by up "
+                         "to half at magnitude 10. **Not yet on the execution "
+                         "path.** The tilt is imported by the scenario runner "
+                         "and by nothing else, and the event damping written for "
+                         "this step — half under a live regime shift, seven "
+                         "tenths inside a scheduled one's anticipation window — "
+                         "is constructed only in a test. Both are described here "
+                         "as what this step will do, and marked so, because a "
+                         "step described by how it ought to work reads as how it "
+                         "does.",
                  "rule": "The market trend conditions, it does not signal. §11.3 puts "
                          "direction as an input to an expected-reaction model "
                          "and never a signal in itself — what is tradeable is "

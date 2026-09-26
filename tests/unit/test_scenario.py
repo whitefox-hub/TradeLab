@@ -217,3 +217,36 @@ def test_the_run_gates_on_the_conditioned_series() -> None:
     source = inspect.getsource(runner.execute)
     assert "net_returns(close, conditioned_position)" in source
     assert "np.diff(close) / close[:-1]" not in source
+
+
+@pytest.mark.fast
+def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
+    """The tilt runs in the scenario runner and nowhere else, and the event
+    damping this step describes is constructed only in a test.
+
+    A step described by how it ought to work reads as how it does, and this one
+    is the entry point for operator judgement — the place where a false
+    description costs the most. So the claim is checked against the imports
+    rather than against the prose: the day the tilt reaches the execution path,
+    this fails and the sentence gets rewritten.
+    """
+    import inspect
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "tradelab"
+    importers = [
+        f.relative_to(root).as_posix()
+        for f in root.rglob("*.py")
+        if "scenario.tilt" in f.read_text() and "scenario/" not in f.relative_to(root).as_posix()
+    ]
+    assert importers == [], (
+        f"the tilt now reaches {importers}; step 10 says it does not, and one "
+        "of the two has to change")
+
+    from tradelab.api.app import create_app
+
+    # A contiguous fragment: the sentence is split across two string literals
+    # in the source, so the whole phrase never appears in it.
+    source = inspect.getsource(create_app)
+    assert "Not yet on the execution " in source
+    assert "is constructed only in a test" in source
