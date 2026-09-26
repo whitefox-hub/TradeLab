@@ -9,14 +9,8 @@ const SCREENS = [
   { href: "/market-sentiment", label: "Market Sentiment" },
   { href: "/macro", label: "Macro" },
   { href: "/parameters", label: "Parameters" },
-  { group: "Lifecycle" },
-  { href: "/strategies", label: "Strategies" },
-  { href: "/experiments", label: "Experiments" },
-  { label: "Approvals", soon: true },
   { group: "Operations" },
-  { href: "/data-quality", label: "Data quality" },
   { href: "/audit", label: "Audit" },
-  { label: "Runs", soon: true },
   { href: "/risk-limits", label: "Risk limits" },
 ];
 

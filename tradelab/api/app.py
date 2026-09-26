@@ -996,18 +996,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         """
         return FileResponse(STATIC / "market_sentiment.html")
 
-    @app.get("/strategies", include_in_schema=False)
-    def strategies_screen() -> FileResponse:
-        return FileResponse(STATIC / "strategies.html")
-
-    @app.get("/experiments", include_in_schema=False)
-    def experiments_screen() -> FileResponse:
-        return FileResponse(STATIC / "experiments.html")
-
-    @app.get("/data-quality", include_in_schema=False)
-    def data_quality_screen() -> FileResponse:
-        return FileResponse(STATIC / "data_quality.html")
-
     @app.get("/audit", include_in_schema=False)
     def audit_screen() -> FileResponse:
         return FileResponse(STATIC / "audit.html")

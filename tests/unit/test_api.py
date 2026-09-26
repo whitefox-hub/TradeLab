@@ -471,57 +471,12 @@ def test_the_content_area_is_not_capped(client: TestClient) -> None:
 
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(
-    "path", ["/strategies", "/experiments", "/data-quality", "/audit"],
-)
-def test_the_new_screens_are_served_and_mount_the_chrome(
-    client: TestClient, path: str,
-) -> None:
-    page = client.get(path).text
-    assert client.get(path).status_code == 200
-    assert '<link rel="stylesheet" href="/static/app.css">' in page
-    assert f'mount("{path}"' in page
 
 
-@pytest.mark.fast
-def test_the_menu_no_longer_offers_a_screen_that_exists_as_soon(
-    client: TestClient,
-) -> None:
-    """A built screen left greyed out is worse than one never listed: the
-    operator has been told it does not exist."""
-    menu = client.get("/static/app.js").text
-    for name in ("Strategies", "Experiments", "Data quality", "Audit"):
-        assert f'label: "{name}"' in menu
-        assert f'{{ label: "{name}", soon: true }}' not in menu
 
 
-@pytest.mark.fast
-def test_the_strategy_screen_shows_the_ladder_without_a_control(
-    client: TestClient,
-) -> None:
-    """§20.2, the most important thing in that section. Mode is displayed and
-    never edited, and the ladder is where an operator would most expect to find
-    a button that does not exist."""
-    page = client.get("/strategies").text
-    assert "LADDER" in page and "live_ramp" in page
-    assert "Displayed, never edited" in page
-    # No write route touches a strategy, which is the guarantee behind the text.
-    writable = [
-        route.path for route in client.app.routes
-        for method in getattr(route, "methods", set())
-        if method in {"POST", "PUT", "PATCH", "DELETE"}
-    ]
-    assert not any("strateg" in path for path in writable)
 
 
-@pytest.mark.fast
-def test_experiments_states_why_tier_a_is_absent(client: TestClient) -> None:
-    """An empty table with no explanation reads as a broken query. §5.7 keeps
-    tier A in Parquet on purpose, and the screen says so."""
-    page = client.get("/experiments").text
-    assert "Parquet" in page
-    assert "Tier A is not here" in page
 
 
 
@@ -1612,3 +1567,45 @@ def test_the_screen_offers_one_scale_with_five_in_the_middle(
     # number being halfway along a track that does not start at zero.
     assert 'id="t-neutral"' in markup
     assert "nothing new" in markup
+
+
+@pytest.mark.fast
+def test_the_menu_is_the_working_loop_and_nothing_else(client: TestClient) -> None:
+    """Set the conditions, run the algorithm, see where it stops, see what would
+    stop it if it ran — plus the record. Everything else that was on the menu
+    either had its number already showing on Home or Algorithm, or was a
+    promise: two entries marked "soon" advertised screens that did not exist and
+    could not be reached.
+
+    Asserted as equality, because the reason to add one back is worth having to
+    state.
+    """
+    import re
+
+    menu = client.get("/static/app.js").text
+    linked = re.findall(r'href: "(/[a-z_-]+)"', menu)
+
+    assert linked == [
+        "/home", "/algorithm", "/market-sentiment", "/macro", "/parameters",
+        "/audit", "/risk-limits",
+    ], f"the menu is now {linked}"
+
+    # Nothing is advertised that cannot be opened.
+    assert "soon: true" not in menu
+    for href in linked:
+        assert client.get(href).status_code == 200, f"{href} is offered but 404s"
+
+
+@pytest.mark.fast
+def test_a_removed_screen_leaves_its_data_behind(client: TestClient) -> None:
+    """The screens went; the tables, the endpoints and the rows did not. What
+    was removed is a page and a link, so a count that mattered still reaches
+    the operator from where it was already shown.
+    """
+    paths = {route.path for route in client.app.routes}
+    for endpoint in ("/api/strategies", "/api/experiments", "/api/data-quality"):
+        assert endpoint in paths, f"{endpoint} went with its screen"
+
+    # And the counts survive where they were already displayed.
+    assert "data-quality" in client.get("/static/index.html").text
+    assert "experiments" in client.get("/static/algorithm.html").text
