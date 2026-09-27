@@ -65,11 +65,56 @@ fresh value — a strict join across the catalogue returns **zero rows**. Anyone
 reading it is always reading a mixture of today and last month, and the screen
 does not currently say which.
 
+### 2b. Correction — the pooled figure was the wrong figure
+
+The table above is a pooled correlation, and §13.1 says plainly to compute
+correlation **per regime as well as overall**. FINDING-004 is the record of what
+happens when that instruction is skipped: a pooled +0.0094 was reported as a
+property of the strategy when it was a property of the regime.
+
+The same error is in the table above. Split by VIX tercile, fixed before
+looking:
+
+| Series | Calm | Middle | **Stress** | Pooled |
+|---|---|---|---|---|
+| **DTWEXBGS** (dollar) | **+0.125** | −0.161 | **−0.171** | −0.082 |
+| **HYSPREAD** (credit) | −0.052 | −0.161 | **−0.127** | −0.123 |
+| DGS2 | +0.177 | −0.036 | +0.008 | +0.049 |
+| The other five | noise | noise | noise | ~0 |
+
+The dollar **changes sign**: it moves with crypto in calm and against it in
+stress, and the pooled average cancels the two. That is the rotation thesis,
+appearing exactly where §13.1 says to look for it and nowhere else.
+
+**And it does not survive being counted honestly.** At 244 days a bucket the
+standard error is 0.064, so a single look needs |r| > 0.125 — but this is eight
+series across three buckets, twenty-four looks, and the corrected bar is
+**0.197**. Nothing reaches it:
+
+| | r | In SE | One look | Corrected |
+|---|---|---|---|---|
+| DTWEXBGS, stress | −0.171 | 2.7 | clears | **does not** |
+| HYSPREAD, stress | −0.127 | 2.0 | clears | **does not** |
+| DGS2, calm | +0.177 | 2.8 | clears | **does not** |
+
+And this is now the **second** cut of the same data. The first was justified —
+§13.1 instructs it — but the bar rose for taking it, and a third would be
+searching. The right response to a suggestive pattern at twenty-four looks is a
+registration, not another slice.
+
 ## So does it contribute anything?
 
-**Not through any channel measured here.** There is no daily relationship
-between the catalogue and crypto, and the rotation reading the screen is built
-around does not show up in the data at this frequency.
+**Something, in the direction the screen claims, and not enough to rely on.**
+
+Pooled, there is no daily relationship. Split by regime — which is what §13.1
+requires and what the first version of this finding failed to do — the dollar
+and the credit spread move against crypto in stress and the dollar flips sign
+between calm and stress. That is the rotation thesis, and it is where the thesis
+says it should be.
+
+It is also 2.7 standard errors on the best of twenty-four looks, against a
+corrected bar of 0.197 that none of them clears. Suggestive, unestablished, and
+the honest word for it is *unmeasured* rather than *absent*.
 
 **Its value rests entirely on PREREG-005.** The claimed mechanism is not
 statistical — it is that the operator reads these numbers, forms a view, and
@@ -78,11 +123,11 @@ exactly what PREREG-005 measures. If the operator's readings carry directional
 information, the catalogue is their input and earns its place. If they do not,
 this is a wall of numbers with a 1.5% ceiling behind it.
 
-What this finding removes is the *intermediate* justification: nobody should say
-"macro matters because money rotates" and point at these series. In this sample
-it does not, and the honest version of the argument is "the operator may see
-something a correlation does not", which is a hypothesis with a registration
-waiting on it.
+What this finding removes is the *strength* of the intermediate justification,
+not the justification itself. "Macro matters because money rotates" is visible
+in stress and only there, at a size this sample cannot establish. Anyone saying
+it should say which regime they mean and that the evidence is 2.7 standard
+errors on a twenty-four-look search.
 
 ## What it does not say
 
