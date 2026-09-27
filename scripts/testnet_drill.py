@@ -365,6 +365,36 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
                      {DRILL: price}, datetime.now(UTC), mid_price=price)
         print(f"  next id is new: {after.intents.records[-1].client_order_id not in used}")
 
+    # -- 13. a held position over its cap ------------------------------------
+    heading(13, "A position that outgrew its cap is trimmed back at the venue")
+    # Flat, and a fresh adapter: this one has carried every earlier drill's
+    # fills, and a new engine folds whatever its adapter holds. The first run
+    # of this drill did exactly that and trimmed a position that was not there.
+    flatten(adapter, now)
+    adapter = BinanceFuturesAdapter.from_environment(ExecutionMode.TESTNET,
+                                                     symbols=BASKET)
+    engine = build(adapter, "drill-13", equity)
+    engine.reconcile(now)
+    adapter.prime([DRILL])
+    engine.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price}, now,
+                  mid_price=price)
+    engine.apply_fills(now)
+    # Growth by price cannot be ordered on a testnet, so the other side of the
+    # same ratio moves instead: equity marked down until the position is over
+    # 25% of it, as RAVE's short was over a third of the book.
+    engine.risk.mark_equity(quantity * price * Decimal(2))
+    print(f"  holding {quantity} ≈ ${quantity * price:.2f}, equity marked "
+          f"${engine.account.equity:.2f}: {quantity * price / engine.account.equity:.0%} "
+          f"of it, cap {LIMITS.max_position_pct_equity:.0%}")
+    engine.halt("max_daily_loss: marked for the drill", now)
+    orders = engine.trim_held({DRILL: price}, now)
+    engine.apply_fills(now)
+    ours = engine.account.positions[DRILL].quantity
+    print(f"  halted first, as the loss limit would have: trimmed anyway, "
+          f"{[f'{o.side} {o.quantity} reduce_only={o.reduce_only}' for o in orders]}")
+    print(f"  after: ours {ours}, venue {adapter.positions().get(DRILL, 0)}, "
+          f"{ours * price / engine.account.equity:.0%} of equity")
+
     # -- not drilled here -----------------------------------------------------
     print(f"\n{'─' * 72}\n  NOT DRILLED, and why\n{'─' * 72}")
     print("  websocket drop   this adapter is REST only; there is no socket to drop")

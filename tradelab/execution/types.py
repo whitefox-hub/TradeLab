@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from enum import StrEnum
 
 
@@ -92,6 +92,21 @@ class Instrument:
         if self.lot_size <= 0:
             return quantity
         return (quantity // self.lot_size) * self.lot_size
+
+    def quantise_up(self, quantity: Decimal) -> Decimal:
+        """Round up to a whole number of lots. For reductions only.
+
+        The exception to `quantise`. When the order is a trim, rounding down
+        leaves the position a fraction of a lot over the cap it is being cut to,
+        and the next tick trims again for less than a lot, which quantises to
+        nothing. Over-trimming by under a lot is the safe side of a reduction.
+        """
+        if self.lot_size <= 0:
+            return quantity
+        # Not -(-q // lot): Decimal's // truncates toward zero rather than
+        # flooring, so that idiom rounds down here, silently.
+        lots = (quantity / self.lot_size).to_integral_value(rounding=ROUND_CEILING)
+        return lots * self.lot_size
 
     def round_price(self, price: Decimal) -> Decimal:
         if self.tick_size <= 0:

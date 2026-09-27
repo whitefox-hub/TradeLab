@@ -417,3 +417,97 @@ def test_recovery_is_a_startup_step_not_a_mid_run_one(tmp_path) -> None:
     engine.reconcile(NOW)
     with pytest.raises(RuntimeError, match="startup"):
         engine.recover(NOW)
+
+
+# -- held positions ------------------------------------------------------------
+#
+# RESULT-007: a short opened at 0.87% of equity grew to a third of the book in a
+# week, because the size cap was checked when the order was sent and never
+# again. These are the checks for the position that grows by itself.
+
+
+def _holding(quantity: str, side: Side = Side.BUY, **limits) -> ExecutionEngine:
+    engine = _engine(RiskLimits(min_seconds_between_entries=0, **limits))
+    engine.reconcile(NOW)
+    engine.submit(_order(quantity, side), PRICE, {}, NOW)
+    engine.apply_fills(NOW)
+    return engine
+
+
+def _reprice(engine: ExecutionEngine, price: Decimal) -> dict[str, Decimal]:
+    venue = getattr(engine.adapter, "inner", engine.adapter)
+    venue.prices["BTCUSDT"] = price
+    return {"BTCUSDT": price}
+
+
+@pytest.mark.fast
+def test_a_position_within_its_cap_is_left_alone() -> None:
+    engine = _holding("0.1")                      # $8k of $100k, cap 25%
+    assert engine.trim_held(_reprice(engine, PRICE), NOW) == []
+
+
+@pytest.mark.fast
+def test_a_position_that_grew_past_its_cap_is_trimmed_back_to_it() -> None:
+    # The absolute ceiling lifted, so the fraction is the cap under test.
+    engine = _holding("0.1", max_position_notional=Decimal(10_000_000))
+    prices = _reprice(engine, PRICE * 4)          # $32k of $100k: over 25%
+    orders = engine.trim_held(prices, NOW)
+    engine.apply_fills(NOW)
+
+    assert len(orders) == 1 and orders[0].reduce_only
+    assert orders[0].side is Side.SELL
+    held = engine.account.positions["BTCUSDT"].notional(prices["BTCUSDT"])
+    cap = engine.account.equity * engine.risk.limits.max_position_pct_equity
+    assert held <= cap, "trimmed, and still over the cap"
+    assert held > cap - BTC.lot_size * prices["BTCUSDT"], "trimmed more than a lot too far"
+
+
+@pytest.mark.fast
+def test_a_short_that_grew_is_bought_back() -> None:
+    """The RAVE case: short, the price runs, the short grows with it."""
+    engine = _holding("0.1", Side.SELL)
+    orders = engine.trim_held(_reprice(engine, PRICE * 4), NOW)
+    assert [(o.side, o.reduce_only) for o in orders] == [(Side.BUY, True)]
+
+
+@pytest.mark.fast
+def test_the_absolute_ceiling_binds_where_the_fraction_does_not() -> None:
+    engine = _holding("0.1", max_position_notional=Decimal(10_000))
+    orders = engine.trim_held(_reprice(engine, PRICE * 2), NOW)   # $16k, 16%
+    engine.apply_fills(NOW)
+    assert orders
+    assert engine.account.positions["BTCUSDT"].notional(PRICE * 2) <= Decimal(10_000)
+
+
+@pytest.mark.fast
+def test_a_halted_engine_still_trims() -> None:
+    """A halt stops new risk and closes nothing. Under RESULT-007's week the
+    daily loss limit halted on the 12th and the short went on growing into the
+    -43% day. Trimming is a reduction, and reductions go through a halt."""
+    engine = _holding("0.1", Side.SELL)
+    engine.halt("max_daily_loss: 14.25% today", NOW)
+    orders = engine.trim_held(_reprice(engine, PRICE * 4), NOW)
+    engine.apply_fills(NOW)
+    assert orders
+    assert engine.account.positions["BTCUSDT"].notional(PRICE * 4) <= \
+        engine.account.equity * engine.risk.limits.max_position_pct_equity
+
+
+@pytest.mark.fast
+def test_with_no_equity_left_everything_is_over_the_cap() -> None:
+    engine = _holding("0.1")
+    engine.risk.mark_equity(Decimal(0))
+    orders = engine.trim_held(_reprice(engine, PRICE), NOW)
+    assert [o.quantity for o in orders] == [Decimal("0.1")]
+
+
+@pytest.mark.fast
+def test_no_trim_from_a_view_reconciliation_has_found_wrong() -> None:
+    """Measured on the testnet: an engine halted by a divergence trimmed 177
+    units of a position the venue held 118 of, because our view was the one
+    known to be wrong. With a divergence open, sizing from our view is
+    guessing; the kill switch, which reads the venue's, is the tool."""
+    engine = _holding("0.1")
+    engine.account.positions["BTCUSDT"].quantity = Decimal("0.3")   # the bug
+    assert engine.reconcile(NOW), "the drill needs a divergence"
+    assert engine.trim_held(_reprice(engine, PRICE * 4), NOW) == []

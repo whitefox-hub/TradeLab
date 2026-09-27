@@ -105,7 +105,8 @@ STOPS: dict[str, str] = {
     "min_position_pct_equity":
         "A position too small to move the book is a cost with no thesis.",
     "max_position_pct_equity":
-        "One name cannot become the portfolio.",
+        "One name cannot become the portfolio — at entry, and afterwards: a "
+        "position that grows past it by price is trimmed back (RESULT-007).",
     "min_seconds_between_entries":
         "A strategy re-entering within seconds is usually a loop, not a view.",
     "max_gross_exposure":
@@ -390,6 +391,34 @@ class RiskEngine:
                 return _refuse(Breach.MAX_DRAWDOWN_FROM_PEAK, f"{drawdown:.2%} from peak")
 
         return Decision(allowed=True)
+
+    def held_excess(self, prices: dict[str, Decimal]) -> dict[str, Decimal]:
+        """How far each held position is over its size cap, in units of the asset.
+
+        The order-time check in `check` sees a position once, at the size it
+        was opened at. A position that grows by itself is never seen again.
+        RESULT-007 is the case: a short opened at 0.87% of equity reached about
+        a third of the book in a week, while every limit reported nothing.
+
+        The cap is the tighter of `max_position_pct_equity` of current equity
+        and `max_position_notional`. With no equity left, every position is
+        over any fraction of it and the whole of it is excess.
+        """
+        limits, equity = self.limits, self.account.equity
+        excess: dict[str, Decimal] = {}
+        for position in self.account.positions.values():
+            price = prices.get(position.asset)
+            if not position.is_open or price is None or price <= 0:
+                continue
+            size = abs(position.quantity)
+            if equity <= 0:
+                excess[position.asset] = size
+                continue
+            cap = min(equity * limits.max_position_pct_equity,
+                      limits.max_position_notional)
+            if size * price > cap:
+                excess[position.asset] = size - cap / price
+        return excess
 
     def enforce(self, at: datetime) -> Decision:
         """Evaluate account conditions and halt if any has fired.

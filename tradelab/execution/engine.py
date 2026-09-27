@@ -58,6 +58,10 @@ class ExecutionEngine:
     intents: IntentLog = field(default_factory=IntentLog)
     _sequence: int = 0
     _reconciled: bool = False
+    #: Set by a reconciliation that found a gap, and never cleared by one that
+    #: did not: the gap is evidence of a bug, and a later agreement does not
+    #: say the bug is gone.
+    _diverged: bool = False
     _applied: set[str] = field(default_factory=set)
 
     @property
@@ -83,6 +87,7 @@ class ExecutionEngine:
         ]
 
         if divergences:
+            self._diverged = True
             detail = ", ".join(f"{d.asset} ours={d.ours} venue={d.theirs}" for d in divergences)
             self.halt(f"position divergence at reconciliation: {detail}", at)
         self._reconciled = True
@@ -265,6 +270,38 @@ class ExecutionEngine:
             )
             applied += 1
         return applied
+
+    def trim_held(self, prices: dict[str, Decimal], at: datetime) -> list[Order]:
+        """Cut every held position that has grown past its cap back to it.
+
+        For the run loop to call on every tick, with the same prices it marks
+        equity at. Reduce-only, so it passes a halt: a halt stops new risk and
+        closes nothing, and under RESULT-007's week the run halted on the daily
+        loss limit and would have gone on holding the short that caused it.
+
+        Judged on our position view, not the venue's. A gap between the two is
+        reconciliation's to find, and trimming from the venue's number would
+        hide the gap by acting on it. So once a gap has been found, nothing is
+        trimmed at all: our view is the one known to be wrong, and the kill
+        switch, which reads the venue's, is the tool for that state. Measured
+        on the testnet before this guard existed: 177 units trimmed from a
+        position the venue held 118 of.
+        """
+        if self._diverged:
+            return []
+        orders = []
+        for asset, excess in sorted(self.risk.held_excess(prices).items()):
+            position = self.account.positions[asset]
+            instrument = self.instruments.get(asset)
+            size = abs(position.quantity)
+            quantity = min(instrument.quantise_up(excess) if instrument else excess, size)
+            if quantity <= 0:
+                continue
+            order = Order(asset, Side.SELL if position.quantity > 0 else Side.BUY,
+                          quantity, reduce_only=True)
+            self.submit(order, prices[asset], prices, at)
+            orders.append(order)
+        return orders
 
     # -- stopping ------------------------------------------------------------
 
