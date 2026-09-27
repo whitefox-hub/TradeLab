@@ -21,11 +21,11 @@ outcome records **when it was determined**, which is what the purge must cover.
 
 from __future__ import annotations
 
+from bisect import bisect_left, insort
 from dataclasses import dataclass
 from itertools import product
 
 import numpy as np
-import polars as pl
 
 BARS_PER_DAY = 288
 ATR_BARS = BARS_PER_DAY               # trailing 24 h
@@ -93,12 +93,26 @@ def true_range(s: Series) -> np.ndarray:
 
 
 def trailing_quantile(values: np.ndarray, window: int, q: float) -> np.ndarray:
-    """The q-quantile of the `window` bars before t, via polars' rolling kernel
-    on a one-bar lag."""
-    lagged = np.concatenate([[np.nan], values[:-1]])
-    return (pl.Series(lagged).rolling_quantile(q, window_size=window,
-                                               min_samples=window // 2)
-            .to_numpy().astype(np.float64))
+    """The q-quantile of the finite values among the `window` bars before t.
+
+    Exact, and incremental: one sorted window, one insertion and one removal per
+    bar. A rolling kernel that re-sorts every window is O(n·w), and at 8,640
+    bars a window that was the whole cost of building the candidates.
+    Nearest-rank on the lower side, and NaN until half the window is filled.
+    """
+    out = np.full(values.size, np.nan)
+    ordered: list[float] = []
+    for t in range(1, values.size):
+        entering = values[t - 1]
+        if np.isfinite(entering):
+            insort(ordered, float(entering))
+        if t - 1 - window >= 0:
+            leaving = values[t - 1 - window]
+            if np.isfinite(leaving):
+                del ordered[bisect_left(ordered, float(leaving))]
+        if len(ordered) >= window // 2:
+            out[t] = ordered[int(q * (len(ordered) - 1))]
+    return out
 
 
 # -- rule 1: the anomaly -------------------------------------------------------
@@ -227,27 +241,56 @@ FEATURES = (
 )
 
 
-def features(s: Series, entry: Fill, funding_z: float, btc_return: float) -> dict[str, float]:
+@dataclass(frozen=True, slots=True)
+class Context:
+    """Per-asset arrays the features read, computed once rather than per candidate.
+
+    Each is aligned to the bar it is known at. The z-scores' references cover
+    the 24 hours *before* the bar, and the volatilities end *at* the bar, whose
+    close is known when the feature is read.
+    """
+
+    atr: np.ndarray
+    volume_mean: np.ndarray
+    volume_std: np.ndarray
+    size: np.ndarray
+    size_mean: np.ndarray
+    size_std: np.ndarray
+    vol_1h: np.ndarray
+    vol_24h: np.ndarray
+
+
+def prepare(s: Series) -> Context:
+    size = np.divide(s.quote_volume, s.trades, out=np.full(s.trades.size, np.nan),
+                     where=s.trades > 0)
+    returns = np.diff(np.log(s.close), prepend=np.log(s.close[0]))
+    ending_at = np.concatenate([returns, [np.nan]])     # shift so the window ends at t
+    return Context(
+        atr=trailing_mean(true_range(s), ATR_BARS),
+        volume_mean=trailing_mean(s.quote_volume, ATR_BARS),
+        volume_std=trailing_std(s.quote_volume, ATR_BARS),
+        size=size, size_mean=trailing_mean(size, ATR_BARS),
+        size_std=trailing_std(size, ATR_BARS),
+        vol_1h=trailing_std(ending_at, 12)[1:],
+        vol_24h=trailing_std(ending_at, ATR_BARS)[1:],
+    )
+
+
+def features(s: Series, ctx: Context, entry: Fill, funding_z: float,
+             btc_return: float) -> dict[str, float]:
     t, f = entry.shock, entry.fill
     move = s.close[t] - s.open[t]
 
-    def z(values: np.ndarray) -> float:
-        mean = np.nanmean(values[max(t - ATR_BARS, 0):t])
-        std = np.nanstd(values[max(t - ATR_BARS, 0):t])
-        return float((values[t] - mean) / std) if std > 0 else 0.0
+    def z(value: float, mean: float, std: float) -> float:
+        return float((value - mean) / std) if np.isfinite(std) and std > 0 else 0.0
 
     oi_before = s.open_interest[t - 1] if t > 0 else np.nan
     oi_change = (s.open_interest[t] / oi_before - 1.0
                  if np.isfinite(oi_before) and oi_before > 0 else np.nan)
-    size = np.divide(s.quote_volume, s.trades, out=np.full(s.trades.size, np.nan),
-                     where=s.trades > 0)
-    returns = np.diff(np.log(s.close), prepend=np.log(s.close[0]))
-    vol_1h = np.std(returns[max(t - 11, 0):t + 1])
-    vol_24h = np.std(returns[max(t - ATR_BARS + 1, 0):t + 1])
     top_then = s.toptrader_ratio[t - 12] if t >= 12 else np.nan
     return {
         "shock_atr": float(abs(move) / entry.atr),
-        "shock_volume_z": z(s.quote_volume),
+        "shock_volume_z": z(s.quote_volume[t], ctx.volume_mean[t], ctx.volume_std[t]),
         "shock_taker_share": float(s.taker_buy_quote[t] / s.quote_volume[t])
         if s.quote_volume[t] > 0 else 0.5,
         "oi_change": float(oi_change),
@@ -257,9 +300,10 @@ def features(s: Series, entry: Fill, funding_z: float, btc_return: float) -> dic
         "funding_z": funding_z,
         "premium_change": float(s.premium[t] - s.premium[t - 1]) if t > 0 else np.nan,
         "toptrader_change": float(s.toptrader_ratio[t] - top_then),
-        "trade_size_z": z(size),
+        "trade_size_z": z(ctx.size[t], ctx.size_mean[t], ctx.size_std[t]),
         "btc_return": btc_return,
-        "vol_ratio": float(vol_1h / vol_24h) if vol_24h > 0 else np.nan,
+        "vol_ratio": float(ctx.vol_1h[t] / ctx.vol_24h[t])
+        if np.isfinite(ctx.vol_24h[t]) and ctx.vol_24h[t] > 0 else np.nan,
         "minutes_to_fill": float((f - t) * 5),
     }
 

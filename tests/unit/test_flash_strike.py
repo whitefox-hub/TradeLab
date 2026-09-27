@@ -188,3 +188,17 @@ def test_the_twelve_registered_configurations() -> None:
 @pytest.mark.fast
 def test_the_tick_is_read_from_the_prices_of_the_month() -> None:
     assert fs.infer_tick(np.array([1.00, 1.03, 1.01, 1.01, 1.05])) == pytest.approx(0.01)
+
+
+@pytest.mark.fast
+def test_the_features_at_a_fill_do_not_see_the_bars_after_it() -> None:
+    s = _series(600)
+    entry = Fill(shock=500, fill=503, side=1, price=float(s.close[500]), atr=0.1)
+    before = fs.features(s, fs.prepare(s), entry, 0.0, 0.0)
+    arrays = {k: getattr(s, k).copy() for k in Series.__dataclass_fields__}
+    for key in ("close", "open", "high", "low", "quote_volume", "taker_buy_quote",
+                "open_interest", "premium", "toptrader_ratio"):
+        arrays[key][504:] *= 3.0
+    later = Series(**arrays)
+    after = fs.features(later, fs.prepare(later), entry, 0.0, 0.0)
+    assert before == pytest.approx(after, nan_ok=True)
