@@ -394,6 +394,24 @@ def test_the_history_already_at_the_venue_is_not_folded_as_ours() -> None:
 
 
 @pytest.mark.fast
+def test_the_trades_of_one_order_are_recovered_by_its_venue_id() -> None:
+    """After a restart the recent history is primed away, so an order that
+    filled while the process was dead has to be asked about by name."""
+    asked: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(dict(request.url.params))
+        return httpx.Response(200, json=[{**TRADE, "orderId": 28605172275}])
+
+    adapter = _adapter(handler)
+    assert adapter.recover_fills("BTCUSDT", "run-1-3", "28605172275") == 1
+    assert asked[0]["orderId"] == "28605172275"
+    assert adapter.fills[0].client_order_id == "run-1-3"
+    assert adapter.recover_fills("BTCUSDT", "run-1-3", "28605172275") == 0
+    assert adapter.prime(["BTCUSDT"]) == 0, "a recovered trade primed as history"
+
+
+@pytest.mark.fast
 def test_the_same_trade_is_not_folded_twice_across_orders() -> None:
     """Collecting on every order makes the dedupe by venue trade id
     load-bearing rather than decorative."""

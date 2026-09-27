@@ -18,12 +18,16 @@ for.
 from __future__ import annotations
 
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
+from tradelab.execution.adapters import Ack, VenueAdapter
 from tradelab.execution.binance import BinanceFuturesAdapter, VenueError
 from tradelab.execution.engine import ExecutionEngine
+from tradelab.execution.intent import IntentLog, IntentState
 from tradelab.execution.types import (
     AccountState,
     ExecutionMode,
@@ -44,6 +48,27 @@ DRILL = "ADAUSDT"
 #: mean the drills never reach the venue at all — which is the failure mode
 #: where a suite passes by not running.
 LIMITS = RiskLimits(min_seconds_between_entries=0, max_orders_per_minute=60)
+
+
+class _Dies(VenueAdapter):
+    """The process dying around a send, which no venue can be asked to do."""
+
+    def __init__(self, inner: BinanceFuturesAdapter, *, after_sending: bool) -> None:
+        self.inner, self.after_sending, self.mode = inner, after_sending, inner.mode
+
+    def submit(self, order: Order, at: datetime) -> Ack:
+        if self.after_sending:
+            self.inner.submit(order, at)
+        raise ConnectionError("process killed")
+
+    def cancel_all(self, at: datetime) -> int:
+        return self.inner.cancel_all(at)
+
+    def positions(self) -> dict[str, Decimal]:
+        return self.inner.positions()
+
+    def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
+        return self.inner.already_executed(asset, client_order_id)
 
 
 def heading(number: int, title: str) -> None:
@@ -141,8 +166,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
 
     # -- 4. the id already sent ----------------------------------------------
     heading(4, "Resolving an id the venue may already have executed")
-    from tradelab.execution.intent import IntentState
-
     sent = next(i.client_order_id for i in reversed(engine.intents.records)
                 if i.state is IntentState.ACKNOWLEDGED)
     for label, cid in (("an id we did send", sent), ("an id we never sent", "no-such-id")):
@@ -293,6 +316,54 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
                              now, mid_price=price)
     print(f"  a new order afterwards: allowed={decision.allowed} "
           f"{decision.breach or ''} {decision.detail}")
+
+    # -- 12. a restart with memory ------------------------------------------
+    heading(12, "Die between send and answer, then restart from the log")
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "intents.jsonl"
+        run_id = f"drill-12-{int(now.timestamp())}"
+        before = build(adapter, run_id, equity)
+        before.intents = IntentLog(path=path)
+        before.reconcile(now)
+        adapter.prime([DRILL])
+
+        before.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price}, now,
+                      mid_price=price)
+        print("  order 1 acknowledged; the process dies before folding its fill")
+        before.adapter = _Dies(adapter, after_sending=True)
+        before.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price}, now,
+                      mid_price=price)
+        print("  order 2 reached the venue; the process died before the answer")
+        before.adapter = _Dies(adapter, after_sending=False)
+        before.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price}, now,
+                      mid_price=price)
+        print("  order 3 died before it was sent")
+        with path.open("a") as handle:
+            handle.write('{"at": "')
+        print("  and the log ends in half a line, as a kill -9 mid-write leaves it")
+        used = {i.client_order_id for i in before.intents.records}
+        print(f"  venue holds {adapter.positions().get(DRILL, 0)}; "
+              f"unresolved in the log: {len(before.intents.unresolved())}")
+
+        # Nothing of the dead process is carried over: a new adapter with no
+        # memory of what it sent, and a new engine that has only the file.
+        fresh = BinanceFuturesAdapter.from_environment(ExecutionMode.TESTNET,
+                                                       symbols=BASKET)
+        after = build(fresh, run_id, equity)
+        after.intents = IntentLog.load(path)
+        loaded = len(after.intents.records)
+        divergences = after.recover(datetime.now(UTC))
+        held = after.account.positions.get(DRILL)
+        print(f"  restarted: read {loaded} records back, the torn line cut")
+        for intent in after.intents.records:
+            if "restart" in intent.reason:
+                print(f"    {intent.client_order_id[:12]}…  {intent.state:12} {intent.reason}")
+        print(f"  our view {held.quantity if held else 0}, venue "
+              f"{fresh.positions().get(DRILL, 0)}, divergences "
+              f"{divergences or 'none'}, halted {after.account.halted}")
+        after.submit(Order(DRILL, Side.SELL, quantity, reduce_only=True), price,
+                     {DRILL: price}, datetime.now(UTC), mid_price=price)
+        print(f"  next id is new: {after.intents.records[-1].client_order_id not in used}")
 
     # -- not drilled here -----------------------------------------------------
     print(f"\n{'─' * 72}\n  NOT DRILLED, and why\n{'─' * 72}")

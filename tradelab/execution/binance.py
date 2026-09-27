@@ -429,6 +429,25 @@ class BinanceFuturesAdapter(VenueAdapter):
         """
         trades = self._signed("GET", "/fapi/v1/userTrades",
                               {"symbol": asset, "limit": 100})
+        return self._fold_trades(trades)
+
+    def recover_fills(self, asset: str, client_order_id: str,
+                      venue_order_id: str) -> int:
+        """The trades of one order, asked for by the venue's id for it.
+
+        For a restart. The fresh process primes the recent history away as not
+        its own, so an order that filled while the old one was dead would be
+        primed with it. Run before `prime`, and the recovered trades are seen
+        already and stay folded.
+        """
+        if not venue_order_id:
+            return 0
+        self._our_orders[venue_order_id] = client_order_id
+        trades = self._signed("GET", "/fapi/v1/userTrades",
+                              {"symbol": asset, "orderId": venue_order_id})
+        return self._fold_trades(trades)
+
+    def _fold_trades(self, trades: object) -> int:
         assert isinstance(trades, list)
         added = 0
         for trade in trades:

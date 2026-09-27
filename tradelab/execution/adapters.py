@@ -57,6 +57,27 @@ class VenueAdapter(ABC):
     def positions(self) -> dict[str, Decimal]:
         """What the *venue* says is held, for reconciliation against our view."""
 
+    # -- restart (§14.3) -----------------------------------------------------
+
+    @abstractmethod
+    def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
+        """The venue's answer for an id we may have sent. None if never seen."""
+
+    def recover_fills(self, asset: str, client_order_id: str,
+                      venue_order_id: str) -> int:
+        """Bring in the trades of one order that the process may have missed.
+
+        Zero where fills cannot be missed, as in a simulator whose fills are
+        recorded in the same call that makes them.
+        """
+        del asset, client_order_id, venue_order_id
+        return 0
+
+    def prime(self, symbols: list[str] | None = None) -> int:
+        """Mark history already at the venue as not ours. Zero where there is none."""
+        del symbols
+        return 0
+
 
 @dataclass
 class SimulatedAdapter(VenueAdapter):
@@ -115,6 +136,12 @@ class SimulatedAdapter(VenueAdapter):
     def cancel_all(self, at: datetime) -> int:
         return 0  # market orders fill immediately; nothing rests
 
+    def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
+        for fill in self._fills:
+            if fill.asset == asset and fill.client_order_id == client_order_id:
+                return Ack(client_order_id, OrderStatus.FILLED)
+        return None
+
     def positions(self) -> dict[str, Decimal]:
         return {a: q for a, q in self._held.items() if q != 0}
 
@@ -153,6 +180,19 @@ class HaltedAdapter(VenueAdapter):
 
     def positions(self) -> dict[str, Decimal]:
         return self.inner.positions()
+
+    # Reading what happened is never refused. A halted run that cannot ask
+    # about its own orders cannot know what it is holding while it flattens.
+
+    def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
+        return self.inner.already_executed(asset, client_order_id)
+
+    def recover_fills(self, asset: str, client_order_id: str,
+                      venue_order_id: str) -> int:
+        return self.inner.recover_fills(asset, client_order_id, venue_order_id)
+
+    def prime(self, symbols: list[str] | None = None) -> int:
+        return self.inner.prime(symbols)
 
 
 def closing_orders(

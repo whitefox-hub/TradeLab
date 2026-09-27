@@ -259,3 +259,161 @@ def test_the_log_survives_a_restart(tmp_path) -> None:
     written = path.read_text().strip().splitlines()
     assert len(written) >= 3
     assert '"state": "sent"' in path.read_text()
+
+
+# -- restart -------------------------------------------------------------------
+#
+# A restart is a new engine over the same venue and the same log file. The
+# simulator's adapter stands in for the venue, so it is the one object carried
+# across; everything the engine knew is rebuilt from the file or not at all.
+
+
+def _restarted(path, adapter) -> ExecutionEngine:
+    engine = _engine()
+    engine.adapter = adapter
+    engine.intents = IntentLog.load(path)
+    return engine
+
+
+class _SendsThenDies(SimulatedAdapter):
+    """The order reaches the venue, and the process dies before the answer."""
+
+    def submit(self, order, at):
+        super().submit(order, at)
+        raise ConnectionError("socket closed after send")
+
+
+class _DiesBeforeSending(SimulatedAdapter):
+    def submit(self, order, at):
+        raise ConnectionError("socket closed before send")
+
+
+@pytest.mark.fast
+def test_the_log_is_read_back_and_a_torn_last_line_is_cut(tmp_path) -> None:
+    """A process killed mid-write leaves half a line. It never formed a record,
+    so it is dropped — and cut from the file, because the next append would
+    otherwise join it and turn a torn tail into a corrupt middle."""
+    path = tmp_path / "intents.jsonl"
+    engine = _engine()
+    engine.intents = IntentLog(path=path)
+    engine.reconcile(NOW)
+    engine.submit(_order(), PRICE, {}, NOW)
+    written = list(engine.intents.records)
+    with path.open("a") as handle:
+        handle.write('{"at": "2026-09-25T12:')
+
+    loaded = IntentLog.load(path)
+    assert loaded.records == written
+    assert path.read_text().endswith("}\n")
+
+    loaded.append(written[-1])
+    assert len(IntentLog.load(path).records) == len(written) + 1
+
+
+@pytest.mark.fast
+def test_a_corrupt_record_before_the_end_is_refused(tmp_path) -> None:
+    """Only the tail can be torn by a crash. Damage anywhere else is not a
+    crash, and skipping it would rebuild a position from part of its history."""
+    path = tmp_path / "intents.jsonl"
+    engine = _engine()
+    engine.intents = IntentLog(path=path)
+    engine.reconcile(NOW)
+    engine.submit(_order(), PRICE, {}, NOW)
+    lines = path.read_text().splitlines()
+    lines[1] = "not a record"
+    path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match="line 2"):
+        IntentLog.load(path)
+
+
+@pytest.mark.fast
+def test_a_restart_rebuilds_its_positions_from_the_log(tmp_path) -> None:
+    """Drill 3 is a restart with no memory, and it halts, correctly. With the
+    log it has memory, and the same venue position agrees."""
+    path = tmp_path / "intents.jsonl"
+    before = _engine()
+    before.intents = IntentLog(path=path)
+    before.reconcile(NOW)
+    before.submit(_order("0.02"), PRICE, {}, NOW)
+    before.submit(_order("0.01", Side.SELL), PRICE, {}, NOW + timedelta(minutes=5))
+    before.apply_fills(NOW)
+    held = before.account.positions["BTCUSDT"]
+
+    after = _restarted(path, before.adapter)
+    assert after.recover(NOW + timedelta(hours=1)) == []
+    assert not after.account.halted
+
+    rebuilt = after.account.positions["BTCUSDT"]
+    assert (rebuilt.quantity, rebuilt.avg_price, rebuilt.realised_pnl) == \
+        (held.quantity, held.avg_price, held.realised_pnl)
+
+
+@pytest.mark.fast
+def test_a_restart_continues_the_sequence_rather_than_reusing_ids(tmp_path) -> None:
+    """Ids are derived from run and sequence. A restart counting from zero
+    derives the ids of orders already sent, and for a market order the venue
+    accepts the repeat — the doubled position §14.3 exists to prevent."""
+    path = tmp_path / "intents.jsonl"
+    before = _engine()
+    before.intents = IntentLog(path=path)
+    before.reconcile(NOW)
+    before.submit(_order(), PRICE, {}, NOW)
+    before.apply_fills(NOW)
+    used = {i.client_order_id for i in before.intents.records}
+
+    after = _restarted(path, before.adapter)
+    after.recover(NOW)
+    after.submit(_order(), PRICE, {}, NOW + timedelta(minutes=5))
+
+    assert after.intents.records[-1].client_order_id not in used
+
+
+@pytest.mark.fast
+def test_an_order_that_died_in_flight_is_resolved_against_the_venue(tmp_path) -> None:
+    """The case the log is written before the send for. The venue has the
+    position; the log says only that the order might exist."""
+    path = tmp_path / "intents.jsonl"
+    before = _engine()
+    before.intents = IntentLog(path=path)
+    before.reconcile(NOW)
+    before.adapter = _SendsThenDies(instruments={"BTCUSDT": BTC},
+                                    prices={"BTCUSDT": PRICE})
+    before.submit(_order(), PRICE, {}, NOW)
+    assert [i.state for i in before.intents.unresolved()] == [IntentState.UNKNOWN]
+
+    after = _restarted(path, before.adapter)
+    assert after.recover(NOW) == []
+
+    assert after.intents.unresolved() == []
+    assert after.account.positions["BTCUSDT"].quantity == Decimal("0.01")
+    assert not after.account.halted
+
+
+@pytest.mark.fast
+def test_an_order_the_venue_never_saw_is_closed_as_absent(tmp_path) -> None:
+    """Absent, not rejected and not resent. Whether to send it again is the
+    strategy's decision on today's prices, not recovery's on yesterday's."""
+    path = tmp_path / "intents.jsonl"
+    before = _engine()
+    before.intents = IntentLog(path=path)
+    before.reconcile(NOW)
+    before.adapter = _DiesBeforeSending(instruments={"BTCUSDT": BTC},
+                                        prices={"BTCUSDT": PRICE})
+    before.submit(_order(), PRICE, {}, NOW)
+
+    after = _restarted(path, before.adapter)
+    after.recover(NOW)
+
+    assert after.intents.unresolved() == []
+    assert after.intents.records[-1].state is IntentState.ABSENT
+    assert after.adapter.fills == []
+
+
+@pytest.mark.fast
+def test_recovery_is_a_startup_step_not_a_mid_run_one(tmp_path) -> None:
+    engine = _engine()
+    engine.intents = IntentLog(path=tmp_path / "intents.jsonl")
+    engine.reconcile(NOW)
+    with pytest.raises(RuntimeError, match="startup"):
+        engine.recover(NOW)

@@ -9,19 +9,21 @@ sent.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 
 from tradelab.execution.adapters import HaltedAdapter, VenueAdapter, closing_orders
-from tradelab.execution.intent import IntentLog, IntentState
+from tradelab.execution.intent import Intent, IntentLog, IntentState
 from tradelab.execution.types import (
     AccountState,
     ExecutionMode,
+    Fill,
     Instrument,
     Order,
     OrderStatus,
     Position,
+    Side,
 )
 from tradelab.risk.limits import Decision, RiskEngine
 
@@ -90,24 +92,84 @@ class ExecutionEngine:
         position = self.account.positions.get(asset)
         return position.quantity if position else Decimal(0)
 
-    def resume_unresolved(self, at: datetime) -> list[str]:
-        """Settle orders that were sent but never acknowledged (§14.3).
+    def recover(self, at: datetime) -> list[Divergence]:
+        """Restart from the intent log, then reconcile. Plan.md §14.3.
 
-        Their ids are deterministic, so the venue can be asked about each one by
-        name rather than guessed at from a position delta.
+        Drill 3 is a restart with no memory, and it halts because it has to: the
+        venue holds a position the new process knows nothing of. This is the
+        restart with memory. In order:
+
+        1. Positions are rebuilt from the FILLED records, and the sequence
+           continues from the last one written. Counting from zero would derive
+           the ids of orders already sent, and the venue accepts a repeated id
+           once the first has left the book.
+        2. Each order that may exist — SENT or UNKNOWN — is asked about by its
+           id. Never seen: ABSENT, and not resent; whether to send it again is
+           the strategy's call on today's prices. Seen: its fills are fetched.
+        3. So are the fills of every order the venue acknowledged, because a
+           process can die after the acknowledgement and before the fill is
+           folded, and a resting order can fill while nobody is running.
+        4. Reconcile. A gap still left is a real one and halts, as always.
+        5. Prime the venue's remaining history as not ours.
+
+        Every order that reached the venue is asked about, so a restart costs a
+        request per order in the log. That is the price of not guessing.
         """
-        pending = self.intents.unresolved()
-        for intent in pending:
-            self.intents.append(
-                type(intent)(
-                    at=at, run_id=intent.run_id, sequence=intent.sequence,
-                    client_order_id=intent.client_order_id, asset=intent.asset,
-                    side=intent.side, quantity=intent.quantity,
-                    state=IntentState.UNKNOWN,
-                    reason="sent before restart; resolve against the venue",
-                )
-            )
-        return [i.client_order_id for i in pending]
+        if self._reconciled:
+            raise RuntimeError(
+                f"{self.run_id}: recover() is a startup step; this engine has "
+                "already reconciled and may have traded")
+
+        self._sequence = max(
+            (i.sequence for i in self.intents.records if i.run_id == self.run_id),
+            default=0)
+        for intent in self.intents.records:
+            if intent.state is IntentState.FILLED:
+                self._fold_recorded(intent)
+
+        reached: dict[str, tuple[str, str]] = {
+            i.client_order_id: (i.asset, i.venue_order_id)
+            for i in self.intents.records
+            if i.state is IntentState.ACKNOWLEDGED and i.client_order_id
+        }
+        for intent in self.intents.unresolved():
+            found = self.adapter.already_executed(intent.asset, intent.client_order_id)
+            if found is None:
+                state, reason = IntentState.ABSENT, "resolved after restart: never seen"
+            elif found.status is OrderStatus.REJECTED:
+                state, reason = IntentState.REJECTED, "resolved after restart: rejected"
+            else:
+                state = IntentState.ACKNOWLEDGED
+                reason = f"resolved after restart: venue reports {found.status}"
+                reached[intent.client_order_id] = (intent.asset, found.venue_order_id)
+            self.intents.append(replace(
+                intent, at=at, state=state, reason=reason,
+                venue_order_id=found.venue_order_id if found else ""))
+
+        for client_order_id, (asset, venue_order_id) in reached.items():
+            self.adapter.recover_fills(asset, client_order_id, venue_order_id)
+        self.apply_fills(at)
+
+        divergences = self.reconcile(at)
+        self.adapter.prime(sorted(self.instruments))
+        return divergences
+
+    def _fold_recorded(self, intent: Intent) -> None:
+        if intent.price is None:
+            raise ValueError(
+                f"{self.run_id}: a fill on {intent.asset} was logged without its "
+                "price, so the position cannot be rebuilt. The log predates "
+                "recovery; reconcile against the venue by hand before resuming")
+        identity = intent.venue_order_id or intent.client_order_id
+        if identity in self._applied:
+            return
+        position = self.account.positions.setdefault(intent.asset, Position(intent.asset))
+        position.apply(Fill(
+            asset=intent.asset, side=Side(intent.side), quantity=intent.quantity,
+            price=intent.price, fee=intent.fee or Decimal(0), at=intent.at,
+            client_order_id=intent.client_order_id,
+            venue_trade_id=intent.venue_order_id))
+        self._applied.add(identity)
 
     # -- the loop ------------------------------------------------------------
 
@@ -199,7 +261,7 @@ class ExecutionEngine:
                 Order(fill.asset, fill.side, fill.quantity,
                       client_order_id=fill.client_order_id),
                 self.run_id, self._sequence, IntentState.FILLED, at,
-                venue_order_id=fill.venue_trade_id,
+                venue_order_id=fill.venue_trade_id, price=fill.price, fee=fill.fee,
             )
             applied += 1
         return applied
