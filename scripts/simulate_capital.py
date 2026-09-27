@@ -38,20 +38,17 @@ from tradelab.execution.types import (
 from tradelab.risk.limits import RiskEngine, RiskLimits
 from tradelab.scenario.run import _bars
 from tradelab.scenario.tilt import NEUTRAL, exposure_multipliers
+from tradelab.strategy.base import Context
+from tradelab.strategy.reference import BuyAndHold
 
 ASSET = "BTCUSDT"
 
-#: Fraction of the limit the base position takes, leaving room for the trend.
-#:
-#: Sizing at the cap makes the trend one-directional: any upward tilt then asks
-#: for more than the risk engine allows, and the answer to "more than allowed"
-#: is not a smaller order, it is a veto. Measured here first — at the cap, a
-#: trend of 10 produced 168 vetoes and no position at all, performing worse
-#: than a trend of 5.
-#:
-#: Two thirds leaves the maximal tilt landing exactly on the cap (2/3 x 1.5 = 1),
-#: so the trend has its full range and never asks for the impossible.
-BASE_FRACTION = Decimal(2) / Decimal(3)
+#: Step 9 is now a real call. The strategy asks for a signed fraction of
+#: equity; the trend conditions it (step 10) and the risk engine vetoes what is
+#: left (step 11). The reference asks for two thirds of the position cap, which
+#: is what leaves the maximal tilt landing exactly on the cap rather than past
+#: it — at the cap, a trend of 10 produced 168 vetoes and no position at all.
+STRATEGY = BuyAndHold()
 
 #: Binance USD-M BTCUSDT. The lot size is what binds at small capital, not the
 #: notional minimum — §14.1's point, and the reason this script exists.
@@ -95,8 +92,9 @@ def main() -> int:
         db = None
     limits, source = active_limits(db)
 
-    long_multiplier, _ = exposure_multipliers(args.trend)
+    long_multiplier, short_multiplier = exposure_multipliers(args.trend)
     print(f"capital        : {args.capital:,.2f} USDT")
+    print(f"strategy       : {STRATEGY.name}")
     print(f"limits         : {source}")
     print(f"market trend   : {args.trend} "
           f"({'neutral' if args.trend == NEUTRAL else f'longs x{long_multiplier}'})")
@@ -110,8 +108,8 @@ def main() -> int:
     increment = INSTRUMENT.lot_size * price0
     print(f"max per position: {ceiling:,.2f} "
           f"({'pct_equity' if by_pct < limits.max_position_notional else 'notional'} binds)")
-    print(f"base position   : {ceiling * BASE_FRACTION:,.2f} "
-          f"({BASE_FRACTION:.0%} of the cap, so the trend has room upward)")
+    print(f"asked for       : {args.capital * STRATEGY.exposure:,.2f} "
+          f"({STRATEGY.exposure:.1%} of equity, by the strategy)")
     print(f"min viable      : {INSTRUMENT.min_viable(price0):,.2f} "
           f"(lot {INSTRUMENT.lot_size} x price {price0:,.0f})")
     print(f"size increment  : {increment:,.2f}  "
@@ -146,15 +144,27 @@ def main() -> int:
     for i in range(0, close.size, step):
         at = start + timedelta(minutes=i)
         price = Decimal(str(close[i]))
+        held = (account.positions[ASSET].quantity
+                if ASSET in account.positions else Decimal(0))
         adapter.prices[ASSET] = price
         prices = {ASSET: price}
 
-        # Step 9: the strategy asks. Buy and hold, conditioned by the trend
-        # (step 10), sized to the ceiling the limits allow.
-        target_notional = ceiling * BASE_FRACTION * Decimal(str(long_multiplier))
-        held = account.positions[ASSET].quantity if ASSET in account.positions \
-            else Decimal(0)
+        # Step 9: the strategy asks, from this instant's data and nothing
+        # later. `history` ends before the bar being decided on, so a strategy
+        # cannot read the price it is about to trade at.
+        target = STRATEGY.decide(Context(
+            at=at, asset=ASSET, history=close[:i], last_close=price,
+            held=held, equity=account.equity))
+
+        # Step 10: the trend conditions the size. Longs and shorts scale
+        # opposite ways, so a short does not get pushed further into a trend it
+        # disagrees with.
+        multiplier = long_multiplier if target.exposure >= 0 else short_multiplier
+        target_notional = (abs(target.exposure) * account.equity
+                           * Decimal(str(multiplier)))
         wanted = INSTRUMENT.quantise(target_notional / price)
+        if target.exposure < 0:
+            wanted = -wanted
         delta = wanted - held
         if abs(delta) * price < INSTRUMENT.min_viable(price):
             continue
@@ -185,10 +195,10 @@ def main() -> int:
     equity = args.capital + realised + unrealised
 
     if submitted == 0:
-        smallest = INSTRUMENT.quantise(
-            ceiling * BASE_FRACTION / price0) * price0
-        print("no order was ever asked for, and this is why: the base position "
-              f"of {ceiling * BASE_FRACTION:,.2f} quantises down to "
+        asked = args.capital * STRATEGY.exposure
+        smallest = INSTRUMENT.quantise(asked / price0) * price0
+        print("no order was ever asked for, and this is why: the position "
+              f"the strategy asked for, {asked:,.2f}, quantises down to "
               f"{smallest:,.2f}, which is below the venue minimum of "
               f"{INSTRUMENT.min_viable(price0):,.2f}. The book stays flat with "
               "no veto and no error - the one failure mode that looks like a "
