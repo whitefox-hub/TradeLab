@@ -231,3 +231,36 @@ and that gate is judged on the forward days alone.
 * No in-hindsight best configuration presented as the strategy.
 * No relaxing the trade-through rule, the queue haircut or stop-first ordering.
 * No forward simulation on a refuted verdict because the screen is empty.
+
+## Amendment, 2026-09-27 — the operator's trend enters the forward simulation
+
+Written after RESULT-008 (`afe7394`) and before a single forward bar exists.
+
+The operator's instruction: **the Market Trend slider must be taken into
+account.** The trend is the one channel through which the operator's reading
+of the news, the macro catalogue included, reaches the algorithm (§20). So the
+forward simulation runs **two books on the same signals**:
+
+| Book | Size per trade | Role |
+|---|---|---|
+| **Registered** | fixed risk, 0.25% of equity at the stop | The procedure as registered. The §15 gate after 180 days is judged **on this book alone** |
+| **Operator** | the same, × `1 + tilt(trend, side)` from `tradelab.scenario.tilt`, with the trend read at each entry | What the operator sees as the strategy with their judgement applied |
+
+Both books receive identical candidates, model decisions, fills and exits, and
+both run under §14.1 and `trim_held`. Only size differs, and only by the tilt.
+Where a cap binds in one book and not the other, the books may take different
+trades, and that is reported.
+
+**What the difference measures.** Operator book minus registered book is the
+contribution of the slider, trade by trade. Each trade records the trend value
+at entry and its `source` (`manual`, `adopted`, `derived`, as PREREG-005's
+amendment defines them). That is evidence about the operator's reading at a
+horizon PREREG-005 does not cover. It is reported, and it is **not** a
+substitute for PREREG-005. That study's rule, horizon and sample are
+unchanged.
+
+**What this does not change.** The procedure, its features, its twelve
+configurations, the break-even rule, the forward horizon and the gate. The tilt
+is bounded at ±50% (`TILT_CEILING`), so at a maximal reading one stop costs
+0.375% of equity in the operator book. Rule 3's two-stop bound is judged on the
+registered book, where it was registered.
