@@ -152,8 +152,10 @@ async function load() {
 
   const stale = series.filter((s) => s.days_old > 45).length;
   const unsafe = series.filter((s) => !s.point_in_time_safe).length;
-  const pressure = scenario.direction === "NORMAL"
-    ? "NORMAL" : `${scenario.direction} ${scenario.magnitude}`;
+  // One 1-10 scale, 5 neutral (b3f90ee). The direction is derived from it by
+  // the server, so the card shows the scale position beside the word.
+  const pressure = scenario.direction === "NEUTRAL"
+    ? "NEUTRAL" : `${scenario.direction} ${scenario.trend}/10`;
   const fg = sentiment.available ? sentiment.primary : null;
 
   $("cards").innerHTML = [

@@ -1648,3 +1648,23 @@ def test_the_catalogue_covers_somewhere_for_money_to_go() -> None:
         assert isinstance(spec.is_revised, bool), code
         assert isinstance(spec.has_vintages, bool), code
         assert not (spec.is_revised and spec.has_vintages) or spec.has_vintages
+
+
+@pytest.mark.fast
+def test_the_home_page_reads_only_fields_the_scenario_returns(client: TestClient) -> None:
+    """Home showed "NEUTRAL undefined" for as long as it outlived b3f90ee: the
+    trend became one 1-10 scale, `magnitude` left the response, and the card
+    went on reading it — and on testing for a "NORMAL" that no longer exists."""
+    import inspect
+    import re
+
+    route = next(r for r in client.app.routes
+                 if getattr(r, "path", None) == "/api/scenario"
+                 and "GET" in getattr(r, "methods", set()))
+    returned = set(re.findall(r'"(\w+)":', inspect.getsource(route.endpoint)))
+    page = client.get("/home").text
+    read = set(re.findall(r"scenario\.(\w+)", page))
+
+    assert read, "the home page no longer reads the scenario; update this test"
+    assert read <= returned, f"home reads {sorted(read - returned)}, which is never sent"
+    assert '"NORMAL"' not in page, "NORMAL is not a direction the scale produces"
