@@ -541,6 +541,11 @@ class PositionRow(Base):
     unrealised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     realised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     funding_paid: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    #: Who sized it: `operator` (trend not 5) or `algorithm` (trend 5), and the
+    #: setting then in force. PREREG-009 is decided by guide (migration 0022).
+    guide: Mapped[str | None] = mapped_column(String(16))
+    trend: Mapped[int | None] = mapped_column(SmallInteger)
+    trend_source: Mapped[str | None] = mapped_column(Text)
 
 
 class Balance(Base):
