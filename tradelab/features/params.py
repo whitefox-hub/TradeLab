@@ -35,26 +35,6 @@ class IntRange:
 
 
 @dataclass(frozen=True, slots=True)
-class FloatRange:
-    low: float
-    high: float
-    step: float
-
-    def values(self) -> Iterator[float]:
-        current, out = self.low, []
-        while current <= self.high + 1e-12:
-            out.append(round(current, 10))
-            current += self.step
-        return iter(out)
-
-    def contains(self, value: Any) -> bool:
-        return isinstance(value, int | float) and self.low <= value <= self.high
-
-    def schema(self) -> dict:
-        return {"type": "number", "minimum": self.low, "maximum": self.high}
-
-
-@dataclass(frozen=True, slots=True)
 class Choice:
     options: tuple[Any, ...]
 

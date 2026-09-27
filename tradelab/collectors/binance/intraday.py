@@ -29,7 +29,6 @@ import csv
 import io
 import time
 import zipfile
-from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
@@ -66,14 +65,6 @@ METRICS_SCHEMA = {
     "toptrader_account_ratio": pl.Float64, "toptrader_position_ratio": pl.Float64,
     "global_account_ratio": pl.Float64, "taker_buy_sell_ratio": pl.Float64,
 }
-
-
-@dataclass(frozen=True, slots=True)
-class Membership:
-    asset: str
-    symbol: str
-    month: date
-    delisted_at: datetime | None
 
 
 # -- parsing ---------------------------------------------------------------------

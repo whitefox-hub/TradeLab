@@ -152,18 +152,3 @@ def surprise_sigma(actual: float, consensus: float, dispersion: float) -> float 
     return (actual - consensus) / dispersion
 
 
-def rolling_dispersion(values: list[float], window: int = 24) -> float | None:
-    """Standard deviation of recent changes, as a stand-in for forecast dispersion.
-
-    A proper dispersion is the spread of economists' forecasts, which no free
-    feed carries. This substitutes the series' own recent variability, which is
-    a different quantity — it says how unusual the *move* was, not how unusual it
-    was *against expectations*. Named plainly so nobody later reads it as the
-    real thing.
-    """
-    if len(values) < window + 1:
-        return None
-    changes = [b - a for a, b in zip(values[-window - 1:-1], values[-window:], strict=True)]
-    mean = sum(changes) / len(changes)
-    variance = sum((c - mean) ** 2 for c in changes) / (len(changes) - 1)
-    return variance**0.5 or None

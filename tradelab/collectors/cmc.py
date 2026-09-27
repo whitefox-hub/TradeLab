@@ -126,10 +126,6 @@ class QuotaReached(RuntimeError):
 KEY_VAR = "CMC_API_KEY"
 
 
-def has_key() -> bool:
-    return bool(os.environ.get(KEY_VAR, "").strip())
-
-
 def client() -> CoinMarketCap:
     """Keyed when a key is in the environment, keyless otherwise.
 

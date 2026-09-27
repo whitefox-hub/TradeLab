@@ -20,7 +20,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import polars as pl
 
 from tradelab.engines.tier_a.costs import BINANCE_RETAIL, CostModel
 
@@ -45,9 +44,6 @@ class BacktestResult:
     # serially dependent returns, not 240 observations, and every significance
     # figure computed from the bar count inherits that inflation (§7).
     effective_n: float
-
-    def as_dict(self) -> dict:
-        return {k: getattr(self, k) for k in self.__slots__}
 
 
 def _legs(
@@ -183,10 +179,3 @@ def threshold_position(signal: np.ndarray, entry: float, exit_: float | None = N
     return (held > 0).astype(np.float64)
 
 
-def run_frame(
-    frame: pl.DataFrame, signal_column: str, entry: float, exit_: float | None = None,
-    costs: CostModel | None = None, timeframe: str = "1h",
-) -> BacktestResult:
-    close = frame["close"].to_numpy().astype(np.float64)
-    signal = frame[signal_column].to_numpy().astype(np.float64)
-    return run(close, threshold_position(signal, entry, exit_), costs, timeframe)

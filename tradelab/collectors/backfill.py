@@ -145,33 +145,32 @@ def _write_days(collector, result: Progress, frame, root: Path, asset: str,
 
 def _fetch_one_day(collector, result: Progress, root: Path, asset: str,
                    day: date, timeframe: str) -> None:
-    if True:
-        try:
-            frame = collector.fetch_day(asset, day)
-        except Exception as exc:
-            # One bad day must not abandon six years of an asset. Logged and
-            # skipped; the missing partition is visible in the manifest later.
-            log.warning("fetch_failed", asset=asset, day=str(day), error=str(exc))
-            return
+    try:
+        frame = collector.fetch_day(asset, day)
+    except Exception as exc:
+        # One bad day must not abandon six years of an asset. Logged and
+        # skipped; the missing partition is visible in the manifest later.
+        log.warning("fetch_failed", asset=asset, day=str(day), error=str(exc))
+        return
 
-        if frame is None or not frame.height:
-            # No archive for that date: the contract was not listed yet. This is
-            # the point-in-time universe doing its job, not a gap (§4.4).
-            result.days_absent += 1
-            return
+    if frame is None or not frame.height:
+        # No archive for that date: the contract was not listed yet. This is
+        # the point-in-time universe doing its job, not a gap (§4.4).
+        result.days_absent += 1
+        return
 
-        report = collector.validate(Batch("ohlcv", "binance", asset, frame, collector.schema))
-        result.issues.extend(report.issues)
-        if not report.ok:
-            log.warning("day_refused", asset=asset, day=str(day),
-                        issues=[str(i.kind) for i in report.blocking])
-            return
+    report = collector.validate(Batch("ohlcv", "binance", asset, frame, collector.schema))
+    result.issues.extend(report.issues)
+    if not report.ok:
+        log.warning("day_refused", asset=asset, day=str(day),
+                    issues=[str(i.kind) for i in report.blocking])
+        return
 
-        path = write_partition(frame, collector.schema, root, "ohlcv", "binance",
-                               asset, day, timeframe=timeframe)
-        result.days_written += 1
-        result.rows += frame.height
-        result.bytes_written += path.stat().st_size
+    path = write_partition(frame, collector.schema, root, "ohlcv", "binance",
+                           asset, day, timeframe=timeframe)
+    result.days_written += 1
+    result.rows += frame.height
+    result.bytes_written += path.stat().st_size
 
 
 def backfill_universe(

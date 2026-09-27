@@ -27,7 +27,6 @@ be refitted without re-measuring.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 import numpy as np
@@ -181,13 +180,3 @@ def scored_against(rating_sigma: float, reactions: list[Reaction],
     return None if match is None else rating_sigma - match.z
 
 
-def utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-def window_bounds(event_at: datetime, bars_per_day: int) -> tuple[datetime, datetime]:
-    """How much history a measurement needs either side of the event."""
-    return (
-        event_at - timedelta(days=ESTIMATION_DAYS + 2),
-        event_at + timedelta(minutes=max(HORIZONS) + 1440),
-    )

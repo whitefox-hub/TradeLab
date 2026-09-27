@@ -47,7 +47,3 @@ def feature_set_hash(feature_set: FeatureSet, registry: Registry | None = None) 
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def expand(name: str, registry: Registry | None = None) -> FeatureSet:
-    """Every parameterisation of one definition."""
-    reg = registry if registry is not None else REGISTRY
-    return [(name, params) for params in reg.get(name).grid()]

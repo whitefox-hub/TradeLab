@@ -642,5 +642,3 @@ def heartbeat_due(last_armed: datetime, timeout_ms: int, now: datetime,
     return elapsed_ms >= timeout_ms * safety
 
 
-def utc_now() -> datetime:
-    return datetime.now(UTC)

@@ -88,8 +88,6 @@ class Registry:
     def get(self, name: str) -> FeatureDef:
         return self.features[name]
 
-    def by_family(self, family: str) -> list[FeatureDef]:
-        return [f for f in self.features.values() if f.family == family]
 
     def max_lookback(self, feature_set: list[tuple[str, dict]]) -> int:
         """Largest lookback in a feature set.

@@ -59,12 +59,6 @@ class BarrierSpec:
     # effectively unreachable.
     scale_to_horizon: bool = True
 
-    def as_dict(self) -> dict:
-        return {
-            "profit_mult": self.profit_mult, "stop_mult": self.stop_mult,
-            "max_holding": self.max_holding, "vol_period": self.vol_period,
-            "scale_to_horizon": self.scale_to_horizon,
-        }
 
     @property
     def horizon_scale(self) -> float:

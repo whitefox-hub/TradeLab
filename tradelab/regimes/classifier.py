@@ -59,9 +59,6 @@ class RegimeSpec:
     # market went somewhere; low means it wandered.
     efficiency_quantile: float = 0.60
 
-    def as_dict(self) -> dict:
-        return {f: getattr(self, f) for f in self.__slots__}
-
 
 def _expanding_quantile(values: np.ndarray, q: float, warmup: int) -> np.ndarray:
     """Quantile of everything strictly BEFORE each point.

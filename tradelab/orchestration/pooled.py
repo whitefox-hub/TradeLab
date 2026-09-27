@@ -89,15 +89,6 @@ class PooledResult:
         """Selected on IN-SAMPLE score. Its out-of-sample figure is the result."""
         return max(self.configs, key=lambda c: c.is_sharpe)
 
-    def most_consistent(self) -> PooledConfig:
-        """Highest breadth, tie-broken by Sharpe.
-
-        Usually the better thing to promote: a configuration positive across
-        forty assets with a modest Sharpe is a different claim from one carried
-        by a single outlier.
-        """
-        return max(self.configs, key=lambda c: (round(c.breadth, 2), c.is_sharpe))
-
 
 def run_pooled(
     root: Path, assets: list[str], feature: str, param_name: str,
