@@ -9,6 +9,15 @@
 > minutes later: features 4, 5, 6 and 9, and the persistence check's
 > open-interest condition, saw into the bar after the shock.
 >
+> And a second part, found while repairing the first: even stamped correctly,
+> a bar's auxiliary readings are **published after it closes**. The REST
+> endpoints serve the bar in ~1 s, its premium in ~14 s, open interest in
+> ~19 s and the top-trader ratio in ~2 minutes. A decision at the bar's close
+> cannot have them. So premium and metrics are now usable from the next bar's
+> close (`flash_data.AUX_USABLE_AFTER_MS`), in the backtest and the forward run
+> alike, through one shared `assemble`. A replication started with only the
+> first repair was stopped before it produced a result.
+>
 > Neither the synthetic preflight nor the lookahead probe could catch it,
 > because the error was in the data's convention and not in the code. The
 > parser now stamps metrics at `create_time + 5 min`, the downloaded files have

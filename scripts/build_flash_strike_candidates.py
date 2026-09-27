@@ -29,19 +29,16 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from tradelab.strategy import flash_data
 from tradelab.strategy import flash_strike as fs
 
-STEP = 300_000
 SEED = 20260927
 
 
 def load(root: Path, asset: str) -> pl.DataFrame | None:
-    """One asset's bars on a complete 5-minute grid, with premium and metrics.
-
-    A missing bar becomes a zero-volume bar at the previous close, so bar
-    arithmetic (30 minutes = 6 bars) stays true. Metrics are joined backward
-    within ten minutes, so a stale snapshot is absent rather than carried.
-    """
+    """One asset's bars from the archive, assembled by `flash_data.assemble`,
+    which the forward simulation also uses: the model must be traded on inputs
+    assembled the way it was trained on them."""
     def read(kind: str) -> pl.DataFrame | None:
         files = sorted((root / kind / asset).glob("*.parquet"))
         frames = [f for f in (pl.read_parquet(p) for p in files) if not f.is_empty()]
@@ -51,48 +48,11 @@ def load(root: Path, asset: str) -> pl.DataFrame | None:
     klines = read("klines")
     if klines is None:
         return None
-    grid = pl.DataFrame({"available_ms": np.arange(
-        klines["available_ms"].min(), klines["available_ms"].max() + 1, STEP)})
-    bars = grid.join(klines, on="available_ms", how="left").with_columns(
-        pl.col("close").forward_fill())
-    bars = bars.with_columns(
-        [pl.col(c).fill_null(pl.col("close")) for c in ("open", "high", "low")]
-        + [pl.col(c).fill_null(0) for c in ("volume", "quote_volume", "trades",
-                                            "taker_buy_volume", "taker_buy_quote")])
-    premium = read("premiumIndexKlines")
-    if premium is not None:
-        bars = bars.join(premium.select("available_ms", pl.col("close").alias("premium")),
-                         on="available_ms", how="left")
-    else:
-        bars = bars.with_columns(pl.lit(None, dtype=pl.Float64).alias("premium"))
-    metrics = read("metrics")
-    if metrics is not None:
-        bars = bars.sort("available_ms").join_asof(
-            metrics.select(pl.col("available_ms").alias("snap_ms"), "open_interest",
-                           pl.col("toptrader_position_ratio").alias("toptrader")),
-            left_on="available_ms", right_on="snap_ms", strategy="backward",
-            tolerance=2 * STEP)
-    else:
-        bars = bars.with_columns(pl.lit(None, dtype=pl.Float64).alias("open_interest"),
-                                 pl.lit(None, dtype=pl.Float64).alias("toptrader"))
-    months = bars.select((pl.col("available_ms") - 1).cast(pl.Datetime("ms", "UTC"))
-                         .dt.strftime("%Y-%m").alias("month"))["month"]
-    ticks = {m: fs.infer_tick(g["close"].to_numpy())
-             for (m,), g in bars.with_columns(months.alias("m")).group_by("m")}
-    return bars.with_columns(months.alias("month"),
-                             months.replace_strict(ticks, return_dtype=pl.Float64).alias("tick"))
+    return flash_data.assemble(klines, read("premiumIndexKlines"), read("metrics"))
 
 
 def series(bars: pl.DataFrame) -> fs.Series:
-    def col(name: str) -> np.ndarray:
-        return bars[name].cast(pl.Float64).to_numpy()
-    return fs.Series(
-        close_ms=bars["available_ms"].to_numpy(), open=col("open"), high=col("high"),
-        low=col("low"), close=col("close"), volume=col("volume"),
-        quote_volume=col("quote_volume"), trades=col("trades"),
-        taker_buy_quote=col("taker_buy_quote"), premium=col("premium"),
-        open_interest=col("open_interest"), toptrader_ratio=col("toptrader"),
-        tick=col("tick"))
+    return flash_data.series(bars)
 
 
 def funding_per_bar(panel: Path, asset: str, close_ms: np.ndarray) -> tuple[np.ndarray, dict]:
