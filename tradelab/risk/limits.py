@@ -227,7 +227,26 @@ class RiskEngine:
         if not loss_check.allowed:
             return loss_check
 
-        if mid_price is not None and mid_price > 0:
+        # §14.1: reject orders far from mid, to protect against corrupt data.
+        #
+        # A mid of zero or below is *itself* corrupt data — it is what a broken
+        # feed reports — so it refuses rather than skipping the check. The first
+        # version skipped on `mid_price > 0`, which disabled the guard against
+        # corrupt data using one particular kind of corrupt data: a price ten
+        # times the real one was refused with a good mid and **allowed** with a
+        # mid of zero. Measured, not imagined.
+        #
+        # `None` still skips, and that is a different statement: the caller says
+        # it has no reference, which a backtest without book data legitimately
+        # does. A caller on a path that reaches a venue must supply one, because
+        # "no reference" is not "no deviation".
+        if mid_price is not None:
+            if mid_price <= 0:
+                return _refuse(
+                    Breach.PRICE_DEVIATION,
+                    f"mid of {mid_price} is not a price; the feed is broken and "
+                    "deviation cannot be checked against it",
+                )
             deviation = abs(price - mid_price) / mid_price * Decimal(10_000)
             if deviation > limits.max_price_deviation_bps:
                 return _refuse(
