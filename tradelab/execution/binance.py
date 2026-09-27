@@ -9,6 +9,8 @@ local simulator cannot produce any of them.
     -2013  order does not exist
     -2015  key unknown, or not permitted from this address
     -2019  insufficient margin
+    -2027  position over what the leverage bracket allows
+    -4116  client order id already on the book
     -1003  request weight exceeded
     -1111  precision over what the instrument allows
     -1121  invalid symbol
@@ -72,6 +74,8 @@ BAD_SIGNATURE = -1022
 TIMESTAMP_DRIFT = -1021
 UNKNOWN_ORDER = -2013
 INSUFFICIENT_MARGIN = -2019
+POSITION_OVER_BRACKET = -2027
+DUPLICATE_CLIENT_ID = -4116
 RATE_LIMITED = -1003
 BAD_PRECISION = -1111
 UNKNOWN_SYMBOL = -1121
@@ -80,8 +84,8 @@ BELOW_MIN_NOTIONAL = -4164
 #: Codes meaning "this order will never work as sent" rather than "try again".
 #: Retrying one of these burns rate limit and the error counter for nothing.
 PERMANENT: frozenset[int] = frozenset({
-    BAD_SIGNATURE, INSUFFICIENT_MARGIN, BAD_PRECISION, UNKNOWN_SYMBOL,
-    BELOW_MIN_NOTIONAL, -2010, -4003, -4131,
+    BAD_SIGNATURE, INSUFFICIENT_MARGIN, POSITION_OVER_BRACKET, BAD_PRECISION,
+    UNKNOWN_SYMBOL, BELOW_MIN_NOTIONAL, -2010, -4003, -4131,
 })
 
 #: Codes indicating an environment fault rather than a bad order. Worth
@@ -243,6 +247,22 @@ class BinanceFuturesAdapter(VenueAdapter):
 
     def _signed(self, method: str, path: str,
                 params: Params | None = None) -> object:
+        """One signed request, resynced and resent once if the clock drifted.
+
+        -1021 is refused before the venue reads the request, so resending is
+        safe even for an order. Once, and not in a loop: drift that survives a
+        fresh offset is the host's clock, and it has to be raised to be fixed.
+        """
+        try:
+            return self._send_signed(method, path, params)
+        except VenueError as refused:
+            if refused.code != TIMESTAMP_DRIFT:
+                raise
+            self.sync_clock()
+            return self._send_signed(method, path, params)
+
+    def _send_signed(self, method: str, path: str,
+                     params: Params | None = None) -> object:
         query = {**(params or {}), "timestamp": self._now_ms(),
                  "recvWindow": self.recv_window_ms}
         return self._read(
@@ -332,6 +352,11 @@ class BinanceFuturesAdapter(VenueAdapter):
         That is what §14.3 means by resolving from a known id instead of
         guessing from a position delta — and the guarantee is ours, not the
         venue's.
+
+        While an order rests the venue *does* refuse its id, with -4116. That
+        is answered with the order already there rather than a rejection: the
+        retry found what it was looking for, and counting it as an error lets a
+        correct placement walk the engine towards `max_consecutive_errors`.
         """
         instrument = self.instruments.get(order.asset)
         if instrument is None:
@@ -361,6 +386,12 @@ class BinanceFuturesAdapter(VenueAdapter):
         try:
             response = self._signed("POST", "/fapi/v1/order", params)
         except VenueError as refused:
+            if refused.code == DUPLICATE_CLIENT_ID:
+                existing = self.already_executed(order.asset, order.client_order_id)
+                if existing is not None:
+                    if existing.venue_order_id:
+                        self._our_orders[existing.venue_order_id] = order.client_order_id
+                    return existing
             return self._reject(order, f"{refused.code}: {refused.message}")
 
         assert isinstance(response, dict)
@@ -500,6 +531,18 @@ class BinanceFuturesAdapter(VenueAdapter):
             except VenueError:
                 continue
         return cancelled
+
+    def open_orders(self, symbol: str | None = None) -> list[str]:
+        """Client order ids resting at the venue, as the venue lists them.
+
+        Read rather than tracked, for the same reason as `positions`: the
+        switches that cancel orders — ours and the venue's own countdown — are
+        only proven by what the book shows afterwards.
+        """
+        resting = self._signed("GET", "/fapi/v1/openOrders",
+                               {"symbol": symbol} if symbol else None)
+        assert isinstance(resting, list)
+        return [str(o["clientOrderId"]) for o in resting]
 
     def positions(self) -> dict[str, Decimal]:
         """What the venue says is held. The only view §14.2 reconciles against.

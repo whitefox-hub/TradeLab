@@ -227,6 +227,9 @@ def test_a_symbol_the_venue_does_not_list_is_refused_at_startup() -> None:
         (-4164, "Order's notional must be no smaller than 50", True, False),
         (-1111, "Precision is over the maximum defined for this asset", True, False),
         (-1121, "Invalid symbol", True, False),
+        (-2019, "Margin is insufficient.", True, False),
+        (-2027, "Exceeded the maximum allowable position at current leverage.",
+         True, False),
     ],
 )
 def test_venue_errors_are_classified_not_lumped_together(
@@ -467,6 +470,69 @@ def test_a_known_id_can_be_resolved_instead_of_resent() -> None:
 
 
 @pytest.mark.fast
+def test_a_duplicate_id_on_the_book_resolves_to_the_order_already_there() -> None:
+    """The other half of the venue's idempotency, measured on the testnet: while
+    an order rests, a second one under the same id is refused with -4116.
+
+    That refusal is the answer to a retry, not a failure. Reported as a
+    rejection it counted towards `max_consecutive_errors`, so a process retrying
+    after a timeout could halt itself over an order that was placed correctly
+    the first time — and it said the order was not there when it was.
+    """
+    resting = Order("BTCUSDT", Side.BUY, Decimal("0.002"), OrderType.LIMIT,
+                    limit_price=Decimal("80000")).with_id("run-1", 3)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/fapi/v1/order":
+            return httpx.Response(400, json={"code": -4116,
+                                             "msg": "ClientOrderId is duplicated."})
+        if request.url.params.get("origClientOrderId") == resting.client_order_id:
+            return httpx.Response(200, json={"orderId": 1316174295, "status": "NEW"})
+        return httpx.Response(200, json=[])
+
+    adapter = _adapter(handler)
+    ack = adapter.submit(resting, NOW)
+
+    assert ack.status is OrderStatus.ACCEPTED
+    assert ack.venue_order_id == "1316174295"
+    assert adapter.rejections == [], "a placed order counted as a refusal"
+
+
+@pytest.mark.fast
+def test_drift_is_resynced_once_and_the_request_retried() -> None:
+    """-1021 means the venue refused the request before reading it, so sending
+    it again is safe — once the clock is corrected. Measured: 20 s of drift
+    fails every signed call, and nothing recovered without a restart."""
+    calls = {"time": 0, "signed": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/fapi/v1/time":
+            calls["time"] += 1
+            return httpx.Response(200, json={"serverTime": 1_790_000_000_000})
+        calls["signed"] += 1
+        if calls["signed"] == 1:
+            return httpx.Response(400, json={"code": -1021, "msg": "outside recvWindow"})
+        return httpx.Response(200, json={"positions": []})
+
+    assert _adapter(handler).positions() == {}
+    assert calls == {"time": 1, "signed": 2}
+
+
+@pytest.mark.fast
+def test_drift_that_survives_a_resync_is_raised_not_looped_on() -> None:
+    """A clock the venue still refuses after correcting is a host fault, and
+    retrying forever would hide it behind the rate limit."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/fapi/v1/time":
+            return httpx.Response(200, json={"serverTime": 1_790_000_000_000})
+        return httpx.Response(400, json={"code": -1021, "msg": "outside recvWindow"})
+
+    with pytest.raises(VenueError) as refused:
+        _adapter(handler).positions()
+    assert refused.value.code == -1021
+
+
+@pytest.mark.fast
 def test_an_unreadable_answer_is_not_read_as_never_sent() -> None:
     """The dangerous failure: rate limited or signature rejected, read as "no
     such order", answered by resending. Only -2013 means never sent."""
@@ -478,6 +544,19 @@ def test_an_unreadable_answer_is_not_read_as_never_sent() -> None:
 
 
 # -- stopping ----------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_open_orders_are_read_from_the_venue_by_our_name_for_them() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(parse_qs(request.url.query.decode()))
+        return httpx.Response(200, json=[{"symbol": "BTCUSDT", "orderId": 7,
+                                          "clientOrderId": "run-1-3"}])
+
+    assert _adapter(handler).open_orders("BTCUSDT") == ["run-1-3"]
+    assert seen["symbol"] == ["BTCUSDT"]
 
 
 @pytest.mark.fast

@@ -18,10 +18,11 @@ for.
 from __future__ import annotations
 
 import sys
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from tradelab.execution.binance import BinanceFuturesAdapter
+from tradelab.execution.binance import BinanceFuturesAdapter, VenueError
 from tradelab.execution.engine import ExecutionEngine
 from tradelab.execution.types import (
     AccountState,
@@ -171,19 +172,134 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
         print("  the adapter, decides this — see test_a_fill_carries_the_venue_"
               "trade_id.")
 
-    # -- 6. the dead man's switch --------------------------------------------
-    heading(6, "A kill switch that does not depend on our process")
-    armed = adapter.arm_dead_mans_switch(DRILL, 30_000)
-    print(f"  armed at the venue for {armed} ms")
-    adapter.disarm_dead_mans_switch(DRILL)
-    print("  disarmed (countdown zero cancels the timer, not the orders)")
+    # Everything below starts flat, because every drill from here builds a
+    # fresh engine and a fresh engine reconciling against a held position is
+    # drill 3 again, not the drill it was meant to be.
+    flatten(adapter, datetime.now(UTC))
+    below = adapter.instruments[DRILL].round_price(price * Decimal("0.97"))
 
-    # -- 7. the kill switch ---------------------------------------------------
-    heading(7, "Kill switch, from the venue's view and not ours")
+    def resting(tag: str) -> Order:
+        """A buy 3% under the market: on the book, and nowhere near filling."""
+        return Order(DRILL, Side.BUY, quantity, OrderType.LIMIT,
+                     limit_price=below).with_id(f"drill-{tag}-{int(now.timestamp())}", 0)
+
+    # -- 6. the dead man's switch, left to fire -------------------------------
+    heading(6, "Dead man's switch: stop talking and let the venue cancel")
+    order = resting("dms")
+    adapter.submit(order, now)
+    print(f"  resting at the venue: {order.client_order_id in adapter.open_orders(DRILL)}")
+    armed = adapter.arm_dead_mans_switch(DRILL, 5_000)
+    print(f"  armed for {armed} ms, and not re-armed")
+    started = time.monotonic()
+    while order.client_order_id in adapter.open_orders(DRILL):
+        if time.monotonic() - started > 20:
+            print("  NOT CANCELLED after 20 s — the switch did not fire")
+            break
+        time.sleep(1)
+    else:
+        print(f"  cancelled by the venue after {time.monotonic() - started:.1f} s, "
+              "with no call from us")
+
+    # -- 7. idempotency where the venue does enforce it ----------------------
+    heading(7, "The same id twice, while the first still rests")
+    order = resting("dup")
+    first, second = adapter.submit(order, now), adapter.submit(order, now)
+    listed = adapter.open_orders(DRILL).count(order.client_order_id)
+    print(f"  first  -> {first.status} venue id {first.venue_order_id}")
+    print(f"  second -> {second.status} venue id {second.venue_order_id} "
+          f"{second.reason or ''}")
+    print(f"  on the book under that id: {listed}   same order: "
+          f"{first.venue_order_id == second.venue_order_id}")
+    print("  a market order's id is freed at once (drill 4's case); a resting")
+    print("  one is refused with -4116 and resolved to the order already there.")
+    adapter.cancel_all(now)
+
+    # -- 8. rejection for margin, until the error limit halts ----------------
+    heading(8, "Insufficient margin, three times, and the engine stops")
+    # Limits wide enough that the venue is the one to refuse. Everything the
+    # risk engine checks is exercised elsewhere; this is about the path a
+    # venue refusal takes once it is past the veto.
+    wide = RiskLimits(min_seconds_between_entries=0, max_orders_per_minute=60,
+                      max_position_notional=Decimal(10_000_000),
+                      max_position_pct_equity=Decimal(1_000),
+                      max_gross_exposure=Decimal(1_000), max_net_exposure=Decimal(1_000),
+                      max_leverage=Decimal(1_000))
+    engine = ExecutionEngine(
+        run_id="drill-8", mode=ExecutionMode.TESTNET, adapter=adapter,
+        risk=RiskEngine(wide, AccountState(equity=equity, peak_equity=equity,
+                                           day_start_equity=equity)),
+        instruments=adapter.instruments)
+    engine.reconcile(now)
+    too_big = adapter.instruments[DRILL].quantise(equity * 25 / below)
+    print(f"  asking for {too_big} units ≈ ${too_big * below:,.0f} on "
+          f"${equity:,.0f} of equity")
+    for attempt in range(1, 5):
+        decision = engine.submit(
+            Order(DRILL, Side.BUY, too_big, OrderType.LIMIT, limit_price=below),
+            below, {DRILL: below}, now)
+        print(f"  attempt {attempt}: {decision.breach or 'venue'} {decision.detail}  "
+              f"errors={engine.account.consecutive_errors} "
+              f"halted={engine.account.halted}")
+        if engine.account.halted:
+            break
+    print(f"  reason: {engine.account.halt_reason}")
+    print(f"  on the book: {adapter.open_orders(DRILL) or 'nothing'}")
+
+    # -- 9. clock drift -------------------------------------------------------
+    heading(9, "Clock drift past the receive window")
+    good = adapter._clock_offset_ms
+    adapter._clock_offset_ms = good - 20_000
+    try:
+        adapter._send_signed("GET", "/fapi/v2/account")
+        print("  the venue accepted a request 20 s stale — recvWindow is not enforced")
+    except VenueError as refused:
+        print(f"  without the resync: {refused.code} {refused.message}")
+    adapter._clock_offset_ms = good - 20_000
+    held = adapter.positions()
+    print(f"  with it: answered ({held or 'flat'}), offset "
+          f"{good - 20_000} -> {adapter._clock_offset_ms} ms")
+
+    # -- 10. corrupt data -----------------------------------------------------
+    heading(10, "Corrupt prices never reach the venue")
+    engine = build(adapter, "drill-10", equity)
+    engine.reconcile(now)
+    before = len(adapter.rejections)
+    for label, bad, mid in (("a 50% jump", price * Decimal("1.5"), price),
+                            ("a zero price", Decimal(0), price),
+                            ("a zero mid", price, Decimal(0))):
+        decision = engine.submit(Order(DRILL, Side.BUY, quantity), bad,
+                                 {DRILL: bad}, now, mid_price=mid)
+        print(f"  {label:13} -> allowed={decision.allowed} "
+              f"{decision.breach or ''} {decision.detail}")
+    print(f"  venue rejections caused: {len(adapter.rejections) - before}; "
+          f"on the book: {adapter.open_orders(DRILL) or 'nothing'}")
+
+    # -- 11. the kill switch, mid-flight -------------------------------------
+    heading(11, "Kill switch with a position open and an order resting")
+    engine = build(adapter, "drill-11", equity)
+    engine.reconcile(now)
+    adapter.prime([DRILL])
+    engine.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price}, now,
+                  mid_price=price)
+    order = resting("kill")
+    adapter.submit(order, now)
+    print(f"  before: holding {adapter.positions().get(DRILL, 0)}, "
+          f"resting {len(adapter.open_orders(DRILL))}")
     orders = engine.kill(now)
-    print(f"  flattening orders built from the venue: {len(orders)}")
-    for order in orders:
-        print(f"    {order.side} {order.quantity} {order.asset} reduce_only={order.reduce_only}")
+    print(f"  kill sent {len(orders)} reduce-only order(s)")
+    print(f"  after:  holding {adapter.positions().get(DRILL, 0)}, "
+          f"resting {len(adapter.open_orders(DRILL))}, halted {engine.account.halted}")
+    decision = engine.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price},
+                             now, mid_price=price)
+    print(f"  a new order afterwards: allowed={decision.allowed} "
+          f"{decision.breach or ''} {decision.detail}")
+
+    # -- not drilled here -----------------------------------------------------
+    print(f"\n{'─' * 72}\n  NOT DRILLED, and why\n{'─' * 72}")
+    print("  websocket drop   this adapter is REST only; there is no socket to drop")
+    print("  venue rate limit reaching -1003 costs the key a ban of minutes to days;")
+    print(f"                   last weight reading {adapter.weight_used} of 2400/min")
+    print("  registry restore §16.10, a database drill, not a venue one")
 
     return 0
 
