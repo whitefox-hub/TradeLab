@@ -33,7 +33,7 @@ collectors = [
     "coinmarketcap-sdk>=4.0.3,<5",
 ]
 # Phase 2-3 — features, labels, validation
-research = ["numpy>=1.26", "scipy>=1.13", "statsmodels>=0.14", "scikit-learn>=1.5", "arch>=7.0", "numba>=0.60"]
+research = ["numpy>=1.26", "scipy>=1.13", "statsmodels>=0.14", "scikit-learn>=1.5", "arch>=7.0", "numba>=0.60", "lightgbm>=4.3"]
 # Phase 1+ — orchestration
 orchestration = ["dagster>=1.7", "dagster-postgres>=0.23", "dagster-webserver>=1.7"]
 # Phase 4 — API
