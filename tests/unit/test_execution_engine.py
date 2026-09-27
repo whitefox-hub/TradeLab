@@ -13,6 +13,7 @@ from tradelab.execution.intent import IntentLog, IntentState
 from tradelab.execution.types import (
     AccountState,
     ExecutionMode,
+    Fill,
     Instrument,
     Order,
     OrderStatus,
@@ -173,6 +174,40 @@ def test_positions_move_only_from_fills() -> None:
     # Idempotent: applying again must not double the position.
     assert engine.apply_fills(NOW) == 0
     assert engine.account.positions["BTCUSDT"].quantity == Decimal("0.01")
+
+
+@pytest.mark.fast
+def test_one_order_filling_in_pieces_is_folded_whole() -> None:
+    """A real venue answers one order with several trades, all under the same
+    client order id. Folding was keyed on that id, so the first piece was
+    counted and the rest were discarded as duplicates — leaving our position a
+    third of the venue's, with no error anywhere. Fills are keyed on the
+    venue's own trade id where there is one.
+    """
+    engine = _engine()
+    engine.reconcile(NOW)
+    engine.adapter._fills.extend(
+        Fill("BTCUSDT", Side.BUY, Decimal("0.001"), PRICE, Decimal(0), NOW,
+             client_order_id="one-order", venue_trade_id=str(4227901 + piece))
+        for piece in range(3)
+    )
+
+    assert engine.apply_fills(NOW) == 3
+    assert engine.account.positions["BTCUSDT"].quantity == Decimal("0.003")
+    assert engine.apply_fills(NOW) == 0, "re-reading the same trades doubled them"
+
+
+@pytest.mark.fast
+def test_a_fill_that_cannot_be_named_is_refused_rather_than_swallowed() -> None:
+    """An empty key makes the first fill swallow every one after it, and the
+    symptom is a position quietly too small rather than an error."""
+    engine = _engine()
+    engine.reconcile(NOW)
+    engine.adapter._fills.append(
+        Fill("BTCUSDT", Side.BUY, Decimal("0.001"), PRICE, Decimal(0), NOW,
+             client_order_id=""))
+    with pytest.raises(ValueError, match="folded exactly once"):
+        engine.apply_fills(NOW)
 
 
 @pytest.mark.fast

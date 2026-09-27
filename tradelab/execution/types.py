@@ -133,6 +133,21 @@ class Fill:
     fee: Decimal
     at: datetime
     client_order_id: str
+    #: The venue's own id for this trade, where the venue gives one. Empty in
+    #: the simulator, which has no trades of its own to name.
+    venue_trade_id: str = ""
+
+    @property
+    def identity(self) -> str:
+        """What makes this fill distinct, so it is folded exactly once.
+
+        The venue's trade id first, because one order can produce several
+        trades and every one of them carries the same client order id. Dedupe
+        on the client id alone and a fill that arrived in three pieces is
+        counted as one — which is the partial-fill failure §16.7 asks about,
+        arriving as a position quietly smaller than the venue's.
+        """
+        return self.venue_trade_id or self.client_order_id
 
 
 @dataclass

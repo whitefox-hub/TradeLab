@@ -183,15 +183,23 @@ class ExecutionEngine:
         """
         applied = 0
         for fill in self.adapter.fills:
+            if not fill.identity:
+                # Every fill must be nameable or none of them can be counted:
+                # an empty key makes the first fill swallow all the rest.
+                raise ValueError(
+                    f"{self.run_id}: a fill on {fill.asset} carries neither a "
+                    f"venue trade id nor a client order id, so it cannot be "
+                    f"folded exactly once")
             position = self.account.positions.setdefault(fill.asset, Position(fill.asset))
-            if fill.client_order_id in self._applied:
+            if fill.identity in self._applied:
                 continue
             position.apply(fill)
-            self._applied.add(fill.client_order_id)
+            self._applied.add(fill.identity)
             self.intents.record(
                 Order(fill.asset, fill.side, fill.quantity,
                       client_order_id=fill.client_order_id),
                 self.run_id, self._sequence, IntentState.FILLED, at,
+                venue_order_id=fill.venue_trade_id,
             )
             applied += 1
         return applied
