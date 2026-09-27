@@ -145,8 +145,18 @@ def test_limit_price_is_rounded_to_the_tick() -> None:
 
 
 @pytest.mark.fast
-def test_the_client_order_id_becomes_the_venue_idempotency_key() -> None:
-    """This is what makes a retry after a timeout safe (§14.3)."""
+def test_the_client_order_id_is_sent_and_is_derived_not_drawn() -> None:
+    """The id goes out with the order and the same order always computes the
+    same one — which is what §14.3 needs, and is all this shows.
+
+    It was named `..._becomes_the_venue_idempotency_key` and said it was what
+    made a retry safe. The testnet says otherwise: two MARKET orders with one
+    id were both accepted and the position doubled, because Binance frees a
+    client id the moment the order leaves the book. The mock could not have
+    caught that — it answered FILLED to whatever arrived. The guard is the
+    caller resolving a known id before resending; see
+    `BinanceFuturesAdapter.already_executed`.
+    """
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
