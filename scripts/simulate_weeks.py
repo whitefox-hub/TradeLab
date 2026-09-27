@@ -32,6 +32,23 @@ from tradelab.risk.limits import RiskLimits
 EXCHANGE_INFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 WEEK = 7
 
+#: Excluded by hand. Their lot sizes put them out of reach at small capital
+#: anyway — one lot of BTC is $65 against a $25 cap — and holding the two names
+#: every other asset is correlated with would make a basket of five into a
+#: leveraged bet on the factor FEASIBILITY-008 measured at 38% of the variance.
+EXCLUDED = ("BTC", "ETH")
+
+#: How many random baskets to average over, per week.
+#:
+#: The first version took "the cheapest openable" assets, and since most
+#: perpetuals tie at a 5 USDT floor the sort fell through to alphabetical: the
+#: basket was 1INCH, ACH, ADA, AEVO, AGLD, and every figure reported came from
+#: the top of the alphabet. Random draws measure what a basket of five does,
+#: rather than what one arbitrary basket did.
+BASKETS = 60
+
+SEED = 20260926
+
 
 def venue_rules() -> dict[str, tuple[Decimal, Decimal]]:
     """(lot size, minimum notional) per asset, from the venue."""
@@ -80,6 +97,7 @@ def main() -> int:
 
     fee = Decimal(str(BINANCE_RETAIL.per_side))
     results: list[float] = []
+    spreads: list[float] = []
     openable_counts: list[int] = []
 
     for start in range(0, prices.shape[1] - WEEK, WEEK):
@@ -91,36 +109,42 @@ def main() -> int:
         openable = []
         for index, asset in enumerate(assets):
             rule = rules.get(asset)
-            if rule is None or entry[index] <= 0:
+            if rule is None or entry[index] <= 0 or asset in EXCLUDED:
                 continue
             lot, floor = rule
             viable = max(floor, lot * Decimal(str(entry[index])))
             if viable <= cap_per_position:
                 openable.append((index, lot, viable))
         openable_counts.append(len(openable))
-        if not openable:
+        if len(openable) < limits.max_open_positions:
             results.append(0.0)
+            spreads.append(0.0)
             continue
 
-        # Equal weight across as many as the limits allow, cheapest first so
-        # the quantisation wastes least.
-        openable.sort(key=lambda row: row[2])
-        chosen = openable[: limits.max_open_positions]
-        each = min(cap_per_position, args.capital / len(chosen))
+        # Equal weight across as many as the limits allow, drawn at random and
+        # averaged. Picking which five is a selection rule, and a selection rule
+        # is a strategy — one nobody registered, whose result would be reported
+        # here as the market's.
+        week = []
+        for draw in range(BASKETS):
+            rng = np.random.default_rng(SEED + start * 1000 + draw)
+            picks = rng.permutation(len(openable))[: limits.max_open_positions]
+            chosen = [openable[i] for i in picks]
+            each = min(cap_per_position, args.capital / len(chosen))
 
-        deployed = Decimal(0)
-        gain = Decimal(0)
-        for index, lot, _ in chosen:
-            price = Decimal(str(entry[index]))
-            quantity = (each / price // lot) * lot
-            if quantity <= 0:
-                continue
-            notional = quantity * price
-            deployed += notional
-            moved = Decimal(str(exit_[index] / entry[index])) - 1
-            # Entry and exit, both charged.
-            gain += notional * moved - notional * fee * 2
-        results.append(float(gain / args.capital))
+            gain = Decimal(0)
+            for index, lot, _ in chosen:
+                price = Decimal(str(entry[index]))
+                quantity = (each / price // lot) * lot
+                if quantity <= 0:
+                    continue
+                notional = quantity * price
+                moved = Decimal(str(exit_[index] / entry[index])) - 1
+                # Entry and exit, both charged.
+                gain += notional * moved - notional * fee * 2
+            week.append(float(gain / args.capital))
+        results.append(float(np.mean(week)))
+        spreads.append(float(np.std(week, ddof=1)))
 
     outcomes = np.array(results) * 100
     print(f"assets openable     : median {int(np.median(openable_counts))} "
@@ -135,6 +159,8 @@ def main() -> int:
         print(f"  {pct:>2}th percentile  : {np.percentile(outcomes, pct):+7.2f}%")
     print(f"\n  a week's outcome is {outcomes.std(ddof=1):.2f}% wide (one standard "
           f"deviation), against a median of {np.median(outcomes):+.2f}%.")
+    print(f"  and *which five* you happened to pick moves it by "
+          f"{np.mean(spreads) * 100:.2f}% within a single week.")
     print("  Reporting one week as the answer would be reporting one draw.")
     print("\nThere is no strategy: this is the market, sized by what the limits "
           "and the venue allow, less costs.")
