@@ -38,6 +38,15 @@ import polars as pl
 ARCHIVE = "https://data.binance.vision/data/futures/um"
 REST = "https://fapi.binance.com"
 
+#: The archive stamps a metrics snapshot five minutes before the moment it
+#: describes. Measured 2026-09-27 against /futures/data/openInterestHist on three
+#: assets and three days: the value the REST endpoint stamps 01:00, and
+#: publishes by 01:01, is stamped 00:55 in the daily archive, 13 of 13 times,
+#: every time. Taking the archive's stamp as the moment of availability fed every
+#: feature built on open interest a reading from five minutes later. That is
+#: the leak that voided RESULT-008.
+METRICS_STAMP_LAG_MS = 300_000
+
 UNIVERSE_SIZE = 100          # FEASIBILITY-008's breadth row, PREREG-008
 RANKING_DAYS = 30
 MIN_HISTORY_DAYS = 30
@@ -83,7 +92,11 @@ def parse_klines(text: str) -> pl.DataFrame:
 
 def parse_metrics(text: str) -> pl.DataFrame:
     """Blank fields are absent readings, not zeros: the ratios are missing for
-    stretches of some assets' history, and a zero ratio is a claim."""
+    stretches of some assets' history, and a zero ratio is a claim.
+
+    `available_ms` is the archive's `create_time` **plus five minutes**, which is
+    when the REST endpoint says the reading exists (`METRICS_STAMP_LAG_MS`).
+    """
     def number(value: str) -> float | None:
         return float(value) if value.strip() else None
 
@@ -92,7 +105,8 @@ def parse_metrics(text: str) -> pl.DataFrame:
         if not row or not row[0][:1].isdigit():
             continue
         stamp = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-        out.append((int(stamp.timestamp() * 1000), number(row[2]), number(row[3]),
+        out.append((int(stamp.timestamp() * 1000) + METRICS_STAMP_LAG_MS,
+                    number(row[2]), number(row[3]),
                     number(row[4]), number(row[5]), number(row[6]), number(row[7])))
     return pl.DataFrame(out, schema=METRICS_SCHEMA, orient="row")
 

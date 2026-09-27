@@ -56,7 +56,8 @@ def test_a_blank_ratio_is_absent_not_zero() -> None:
     assert row["open_interest"] == 0.0
     assert row["toptrader_account_ratio"] is None
     assert row["toptrader_position_ratio"] == pytest.approx(0.208662)
-    assert row["available_ms"] == int(datetime(2025, 5, 10, 2, 30, tzinfo=UTC).timestamp() * 1000)
+    # The archive's 02:30 is the REST endpoint's 02:35, and that is when it exists.
+    assert row["available_ms"] == int(datetime(2025, 5, 10, 2, 35, tzinfo=UTC).timestamp() * 1000)
 
 
 @pytest.mark.fast

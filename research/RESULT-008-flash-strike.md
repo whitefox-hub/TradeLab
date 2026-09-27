@@ -1,5 +1,21 @@
 # Result 008 — Flash Strike: the model finds something, the pullback selects against it, and two years cannot tell
 
+> **VOID, 2026-09-27.** The daily `metrics` archive stamps each open-interest
+> and top-trader snapshot **five minutes before** the reading it describes.
+> Measured against the REST endpoint, which publishes that reading within a
+> minute of it: 13 of 13 snapshots on each of three assets and three days, all
+> at −5 minutes. The pipeline took the archive's stamp as the moment of
+> availability. So at a bar's close it read open interest measured five
+> minutes later: features 4, 5, 6 and 9, and the persistence check's
+> open-interest condition, saw into the bar after the shock.
+>
+> Neither the synthetic preflight nor the lookahead probe could catch it,
+> because the error was in the data's convention and not in the code. The
+> parser now stamps metrics at `create_time + 5 min`, the downloaded files have
+> been shifted once (`scripts/fix_metrics_stamp.py`), and the run is repeated
+> with no rule changed, as RESULT-003 was repeated as 003b. **RESULT-008b** is
+> the result of record. What follows is kept as it was written.
+
 Run 2026-09-27 against research/PREREG-008-flash-strike.md (`2615de8`), with
 the pipeline committed (`117cd44`) before it read a market candidate. One
 procedure, one trial. Evaluated 2025-03-01 → 2026-09-25: 19 traded months,

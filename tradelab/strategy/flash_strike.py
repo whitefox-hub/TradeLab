@@ -190,23 +190,29 @@ class Outcome:
 
 
 def exit_trade(s: Series, entry: Fill, sl_mult: float, tp_mult: float,
-               hold_minutes: int, funding_per_bar: np.ndarray) -> Outcome | None:
+               hold_minutes: int, funding_per_bar: np.ndarray,
+               upto: int | None = None) -> Outcome | None:
     """Walk forward from the fill until a barrier or the clock ends it.
 
     In the fill bar only the stop can trigger, because a limit filled inside a
     bar may have filled at its end. When one bar touches both barriers the stop
     came first. A stop the bar opens through executes at the bar's worst price.
     A take profit, being a resting limit, needs a trade-through by one tick.
+
+    `upto` is the last closed bar, for a position still open: the outcome is
+    returned if a barrier or the clock has already decided it, and None if the
+    trade is still running. Without it, the whole horizon must exist.
     """
     side, price = entry.side, entry.price
     distance = sl_mult * entry.atr
     stop = price - side * distance
     target = price + side * tp_mult * distance
     horizon = entry.fill + hold_minutes // 5
-    if horizon >= s.close.size:
+    last = s.close.size - 1 if upto is None else min(upto, s.close.size - 1)
+    if upto is None and horizon > last:
         return None
 
-    for j in range(entry.fill, horizon + 1):
+    for j in range(entry.fill, min(horizon, last) + 1):
         worst = s.low[j] if side > 0 else s.high[j]
         best = s.high[j] if side > 0 else s.low[j]
         stopped = (worst <= stop) if side > 0 else (worst >= stop)
@@ -218,8 +224,17 @@ def exit_trade(s: Series, entry: Fill, sl_mult: float, tp_mult: float,
         hit = (best >= target + tick) if side > 0 else (best <= target - tick)
         if j > entry.fill and hit:
             return _close(s, entry, target, j, 1, MAKER + MAKER, funding_per_bar)
+    if horizon > last:
+        return None                     # still open
     return _close(s, entry, float(s.close[horizon]), horizon, 0, MAKER + TAKER,
                   funding_per_bar)
+
+
+def levels(entry: Fill, sl_mult: float, tp_mult: float) -> tuple[float, float]:
+    """(stop, target) prices for an entry, as `exit_trade` computes them."""
+    distance = sl_mult * entry.atr
+    return (entry.price - entry.side * distance,
+            entry.price + entry.side * tp_mult * distance)
 
 
 def _close(s: Series, entry: Fill, out: float, bar: int, reason: int,

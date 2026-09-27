@@ -202,3 +202,15 @@ def test_the_features_at_a_fill_do_not_see_the_bars_after_it() -> None:
     later = Series(**arrays)
     after = fs.features(later, fs.prepare(later), entry, 0.0, 0.0)
     assert before == pytest.approx(after, nan_ok=True)
+
+
+@pytest.mark.fast
+def test_an_open_trade_is_open_until_a_barrier_or_the_clock_decides_it() -> None:
+    s = _with(_flat(40, 102.0), high=(20, 103.02))
+    entry = _entry()
+    assert fs.exit_trade(s, entry, 1.0, 1.0, 120, NO_FUNDING, upto=15) is None
+    decided = fs.exit_trade(s, entry, 1.0, 1.0, 120, NO_FUNDING, upto=25)
+    assert decided is not None and decided.reason == 1 and decided.exit_bar == 20
+    assert decided == fs.exit_trade(s, entry, 1.0, 1.0, 120, NO_FUNDING, upto=39)
+    timed = fs.exit_trade(_flat(40, 102.0), entry, 1.0, 1.0, 30, NO_FUNDING, upto=18)
+    assert timed is not None and timed.reason == 0
