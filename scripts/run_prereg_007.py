@@ -233,17 +233,25 @@ def report(book: Book, days: list) -> None:
 
     beta = float(np.cov(net, book.market)[0, 1] / np.var(book.market, ddof=1))
     print(f"\nrealised beta to the equal-weighted market : {beta:+.3f}")
-    per_position = float(np.sum(np.var(book.contributions, axis=1, ddof=1)))
+    # (Σσᵢ)² / var(Σcᵢ): one if every position moved together, the count of
+    # positions if none did. The first run printed Σσᵢ² / var(Σcᵢ) instead,
+    # which is one for *independent* positions — the opposite reading.
+    spread = float(np.sum(np.std(book.contributions, axis=1, ddof=1)))
     portfolio = float(np.var(book.contributions.sum(axis=0), ddof=1))
     print(f"realised breadth (price leg)             : "
-          f"{per_position / portfolio if portfolio else float('nan'):.1f}")
+          f"{spread ** 2 / portfolio if portfolio else float('nan'):.1f}")
+    stats = sharpe_stats(net, effective_n=float(net.size))
+    print(f"skew / kurtosis                          : "
+          f"{stats.skew:+.2f} / {stats.kurtosis:.2f}")
 
     # Rule 1 of the registration, before anything else is read as an answer.
     top = np.sort(net)[::-1][:CONCENTRATION_DAYS]
-    share = float(top.sum() / total) if total > 0 else float("nan")
     weekly = np.array([net[i:i + 7].sum() for i in range(0, net.size - 6, 7)])
-    print(f"\nconcentration      : top {CONCENTRATION_DAYS} days = "
-          f"{share:.1%} of net return (limit {CONCENTRATION_LIMIT:.0%})")
+    if total > 0:
+        print(f"\nconcentration      : top {CONCENTRATION_DAYS} days = "
+              f"{top.sum() / total:.1%} of net return (limit {CONCENTRATION_LIMIT:.0%})")
+    else:
+        print("\nconcentration      : not applicable, the net return is not positive")
     print(f"weeks positive     : {np.mean(weekly > 0):.1%} of {weekly.size}")
     print(f"weekly median/mean : {np.median(weekly):+.4%} / {weekly.mean():+.4%}")
 
@@ -268,13 +276,18 @@ def verdict(book: Book) -> None:
         print(f"    - {reason}")
 
     # The registration's order, applied as written.
+    # Rule 2 is read from the moments and not from the gate, because the gate
+    # can stop earlier — here on its 100-trade minimum — without reaching them.
+    # The first run of this script tested rule 5 before rule 2, which is not
+    # the order registered, and called REFUTED what the registration calls
+    # INCONCLUSIVE.
     top = np.sort(net)[::-1][:CONCENTRATION_DAYS].sum()
     if total > 0 and top / total > CONCENTRATION_LIMIT:
         answer = "INCONCLUSIVE — rule 1: the return is a few days, not frequent small gains"
+    elif abs(stats.skew) > 3.0 or stats.kurtosis > 30.0:
+        answer = "INCONCLUSIVE — rule 2: moments outside the deflated Sharpe's range"
     elif total <= 0 or observed <= 0:
         answer = "REFUTED — rule 5: net at or below zero"
-    elif gate.metrics.get("moments_out_of_range"):
-        answer = "INCONCLUSIVE — rule 2: moments outside the deflated Sharpe's range"
     elif observed > bar:
         answer = ("PASSES THIS FAMILY'S BAR — rule 3: not a candidate; the "
                   "survivorship rebuild and 180 forward days are next")
