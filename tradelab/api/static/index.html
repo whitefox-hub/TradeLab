@@ -56,7 +56,7 @@
         <th>Asset</th><th>Side</th><th class="num">Quantity</th>
         <th class="num">Avg entry</th><th class="num">Unrealised</th>
         <th class="num">Realised</th><th class="num">Funding</th>
-        <th>Mode</th><th class="num">As of</th>
+        <th>Guide</th><th>Mode</th><th class="num">As of</th>
       </tr></thead>
       <tbody id="book"></tbody>
     </table>
@@ -109,19 +109,24 @@ function renderBook(book) {
       <div class="k">${c.k}</div>
     </div>`).join("");
 
-  $("book-note").textContent = book.fills === 0
-    ? "Nothing has executed."
+  $("book-note").textContent = book.snapshots
+    ? "Simulator, fake capital. Nothing here has been validated (§15)."
+    : book.fills === 0 ? "Nothing has executed."
     : `${book.fills.toLocaleString()} fills folded.`;
 
   if (!book.positions.length) {
     // The empty state says why. A blank table reads as a quiet day, and this
     // is not one — no strategy has been promoted, so nothing can have traded.
-    $("book").innerHTML = `<tr><td colspan="9"><p class="empty-why">No position is
-      open, and none has ever been: the runs table is empty. Steps 8 to 13 of the
-      <a href="/algorithm">sequence</a> are execution and need a strategy promoted
-      through §15 — 001 and 002 were refuted, 003 and 004 did not reach the
-      resolvable threshold. Until one does, this table stays empty by construction
-      rather than by chance.</p></td></tr>`;
+    // Said as it is: forward books may exist and be flat, and none of them is a
+    // promoted strategy. A blank table would read as a quiet day.
+    $("book").innerHTML = `<tr><td colspan="10"><p class="empty-why">No position is
+      open. ${book.runs_live
+        ? `${book.runs_live} forward book(s) run in the simulator on fake capital
+           (PREREG-008, PREREG-009) and hold nothing at this moment.`
+        : "No forward book is running."}
+      Nothing has been promoted through §15 (see the
+      <a href="/algorithm">sequence</a>), so no book here is a validated
+      strategy.</p></td></tr>`;
     return;
   }
 
@@ -134,7 +139,12 @@ function renderBook(book) {
       <td class="num money ${sign(p.unrealised_pnl)}">${money(p.unrealised_pnl)}</td>
       <td class="num money ${sign(p.realised_pnl)}">${money(p.realised_pnl)}</td>
       <td class="num money ${sign(-p.funding_paid)}">${money(-p.funding_paid)}</td>
-      <td><span class="mode ${escape(p.mode)}">${escape(p.mode)}</span></td>
+      <td title="${escape(p.book || "")}">${p.guide
+        ? `${p.guide === "operator" ? "operator" : "algorithm"} · trend ${p.trend}`
+          + (p.trend_source && p.trend_source !== "manual" ? ` (${escape(p.trend_source)})` : "")
+        : "—"}</td>
+      <td><span class="mode ${escape(p.mode)}">${escape(p.mode)}</span>
+        <div class="d">not validated</div></td>
       <td class="num">${escape(p.as_of.slice(0, 16).replace("T", " "))}</td>
     </tr>`).join("");
 }

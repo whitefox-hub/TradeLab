@@ -1310,12 +1310,14 @@ def test_the_book_shows_the_latest_snapshot_of_each_open_position(monkeypatch) -
 
 @pytest.mark.fast
 def test_the_book_says_why_it_is_empty(client: TestClient) -> None:
-    """A blank table reads as a quiet day, and this is not one: no strategy has
-    been promoted, so nothing can have traded. The empty state says so and
-    points at the sequence."""
+    """A blank table reads as a quiet day. Forward books now run in the
+    simulator (PREREG-008, 009), so an empty table may be a flat book rather
+    than an empty registry, and either way nothing has been promoted. The empty
+    state says both and points at the sequence."""
     markup = client.get("/static/index.html").text
     assert "empty-why" in markup
-    assert "runs table is empty" in markup
+    assert "Nothing has been promoted through §15" in markup
+    assert "fake capital" in markup
     assert "/algorithm" in markup
 
 
@@ -1668,3 +1670,19 @@ def test_the_home_page_reads_only_fields_the_scenario_returns(client: TestClient
     assert read, "the home page no longer reads the scenario; update this test"
     assert read <= returned, f"home reads {sorted(read - returned)}, which is never sent"
     assert '"NORMAL"' not in page, "NORMAL is not a direction the scale produces"
+
+
+@pytest.mark.fast
+def test_every_open_position_shows_who_guided_it(client: TestClient) -> None:
+    """PREREG-009: the operator's reading and the algorithm's rule share one
+    book, and the operator asked to see which sized each position."""
+    import inspect
+
+    route = next(r for r in client.app.routes
+                 if getattr(r, "path", None) == "/api/positions")
+    source = inspect.getsource(route.endpoint)
+    for field in ('"guide"', '"trend"', '"trend_source"'):
+        assert field in source
+    markup = client.get("/static/index.html").text
+    assert "<th>Guide</th>" in markup
+    assert "not validated" in markup

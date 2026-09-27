@@ -1313,6 +1313,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "SELECT DISTINCT ON (p.run_id, p.asset) "
             "  p.run_id, p.asset, p.as_of, p.qty, p.avg_entry, "
             "  p.unrealised_pnl, p.realised_pnl, p.funding_paid, "
+            "  p.guide, p.trend, p.trend_source, r.params->>'label' AS book, "
             "  r.mode, r.venue, r.status, r.base_currency "
             "FROM positions p JOIN runs r ON r.id = p.run_id "
             "ORDER BY p.run_id, p.asset, p.as_of DESC"
@@ -1334,6 +1335,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # nobody can see which money it is.
             "mode": r["mode"], "venue": r["venue"], "status": r["status"],
             "currency": r["base_currency"],
+            # Who sized it (PREREG-009): the operator's reading when the trend
+            # was not 5, the algorithm's rule when it was. Null for a book with
+            # no notion of a guide.
+            "guide": r["guide"], "trend": r["trend"], "trend_source": r["trend_source"],
+            "book": r["book"],
         } for r in rows if (r["qty"] or 0) != 0]
 
         totals = session.execute(sa.text(
@@ -1361,6 +1367,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 sa.text("SELECT count(*) FROM risk_events")).scalar() or 0),
             "fills": int(session.execute(
                 sa.text("SELECT count(*) FROM fills")).scalar() or 0),
+            # Forward books fold fills in their own intent logs rather than the
+            # `fills` table, so a count of zero there is not "nothing has run".
+            "snapshots": int(session.execute(
+                sa.text("SELECT count(*) FROM positions")).scalar() or 0),
         }
 
     @app.get("/api/algorithm")
