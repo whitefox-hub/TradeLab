@@ -7,6 +7,7 @@ A forward run is not a promotion: the strategy stays `validating`; §15's
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import uuid
@@ -45,7 +46,7 @@ class Store:
 
     def ensure_strategy(self, name: str, impl: Path, status: str = "validating") -> uuid.UUID:
         """One row per strategy name and code hash (§16.1)."""
-        code_hash = hashlib.sha256(impl.read_bytes()).hexdigest()
+        code_hash = code_identity(impl)
         with self.engine.begin() as db:
             found = db.execute(sa.text(
                 "SELECT id FROM strategies WHERE name = :n AND code_hash = :h"),
@@ -140,6 +141,20 @@ class Store:
         with self.engine.begin() as db:
             db.execute(sa.text("UPDATE runs SET status = 'halted', halt_reason = :r "
                                "WHERE id = :id"), {"r": reason, "id": run_id})
+
+
+def code_identity(impl: Path) -> str:
+    """Hash of the code itself: the AST with docstrings removed, so an edit to comments
+    or docstrings is not a new strategy. A raw-bytes hash opened a second run of the
+    trend book after a comment-only cleanup, which showed its positions twice."""
+    tree = ast.parse(impl.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                node.body = body[1:] or [ast.Pass()]
+    return hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest()
 
 
 def _git_head() -> str:

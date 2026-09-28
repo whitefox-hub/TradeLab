@@ -105,3 +105,16 @@ def test_atr_and_momentum_use_closed_days_only() -> None:
     assert tb.momentum(close) == 1
     assert tb.momentum(close[::-1]) == -1
     assert tb.momentum(close[:5]) == 0
+
+
+@pytest.mark.fast
+def test_a_comment_or_docstring_edit_is_not_a_new_strategy(tmp_path) -> None:
+    """A raw-bytes hash made a comment-only cleanup open a second run of the book."""
+    from tradelab.orchestration.forward import code_identity
+
+    a, b, c = tmp_path / "a.py", tmp_path / "b.py", tmp_path / "c.py"
+    a.write_text('"""Long story."""\n\n# why\ndef f(x):\n    """Doc."""\n    return x + 1\n')
+    b.write_text('"""Short."""\ndef f(x):\n    return x + 1  # terse\n')
+    c.write_text('def f(x):\n    return x + 2\n')
+    assert code_identity(a) == code_identity(b)
+    assert code_identity(a) != code_identity(c)
