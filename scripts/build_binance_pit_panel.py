@@ -11,7 +11,7 @@ under the venue's shared rate limit (~30 min full run).
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import httpx
@@ -23,11 +23,23 @@ START = datetime(2024, 9, 25, tzinfo=UTC)
 END = datetime(2026, 9, 25, 23, 59, 59, tzinfo=UTC)
 
 
+def set_window(start: date | None, end: date | None) -> None:
+    global START, END
+    if start:
+        START = datetime(start.year, start.month, start.day, tzinfo=UTC)
+    if end:
+        END = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=UTC)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=Path("data/parquet/binance_pit"))
+    parser.add_argument("--start", type=date.fromisoformat, default=None,
+                        help="window start, UTC (default: the 2024-09 window)")
+    parser.add_argument("--end", type=date.fromisoformat, default=None)
     parser.add_argument("--only", nargs="*", default=None)
     args = parser.parse_args()
+    set_window(args.start, args.end)
     args.out.mkdir(parents=True, exist_ok=True)
     # END must be a completed UTC day: an in-progress day has a partial close and
     # partial settlements (the five-venue panel carries exactly that on 2026-09-25).

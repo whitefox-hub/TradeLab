@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -45,12 +45,28 @@ def previous(month: date) -> date:
     return date(month.year - (month.month == 1), (month.month - 2) % 12 + 1, 1)
 
 
+def set_window(start: date | None, end: date | None) -> None:
+    """The window, and the first universe month: the first with 30 ranked days in it."""
+    global START, END, FIRST_MONTH
+    if start:
+        START = datetime(start.year, start.month, start.day, tzinfo=UTC)
+        ranked = start + timedelta(days=30)
+        FIRST_MONTH = (ranked if ranked.day == 1 else
+                       date(ranked.year + ranked.month // 12, ranked.month % 12 + 1, 1))
+    if end:
+        END = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=UTC)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--panel", type=Path, default=Path("data/parquet/binance_pit"))
     parser.add_argument("--out", type=Path, default=Path("data/parquet/intraday"))
+    parser.add_argument("--start", type=date.fromisoformat, default=None,
+                        help="window start, UTC (default: the 2024-09 window)")
+    parser.add_argument("--end", type=date.fromisoformat, default=None)
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
+    set_window(args.start, args.end)
     args.out.mkdir(parents=True, exist_ok=True)
     client = httpx.Client(timeout=60.0)
 

@@ -205,6 +205,10 @@ def collect(client: httpx.Client, contract: Contract,
         bars = rest_bars(client, contract.symbol, start, end)
         rates = rest_funding(client, contract.symbol, start, end) if bars else []
         source = "rest"
+        # REST forgets removed contracts silently (empty, not -1121), e.g. LUNA or MATIC
+        # for 2022; for a symbol known only to the archive, empty means ask the archive.
+        if not bars and contract.status == "ARCHIVED":
+            raise Refused("-1121: empty REST history for an archive-only symbol")
     except Refused as refused:
         if "-1121" not in str(refused):
             raise
