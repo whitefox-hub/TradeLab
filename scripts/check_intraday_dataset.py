@@ -1,22 +1,9 @@
 """Data assertions on the PREREG-008 intraday set. Plan.md §4.2, §16.7.
 
-Reads what the builder wrote and reports what is wrong with it. It computes no
-return, so it spends no trial.
+Coverage, duplicates, ordering, sanity, cross-kind alignment and universe churn.
+Computes no return, so spends no trial.
 
-For each kind and asset-month:
-
-* **coverage**: 5-minute slots present against slots expected. Expected runs
-  from the later of the month's start and the asset's first bar to the earlier
-  of the month's end, the window's end and delisting;
-* **duplicates** and **ordering**;
-* **sanity**: for klines, low ≤ open, close ≤ high, prices positive, taker
-  volume within total; for metrics, open interest not negative.
-
-Across kinds: the share of kline slots that have a premium bar and a metrics
-snapshot within five minutes, which is the join a feature will make.
-
-And the universe's churn: how many names each month were not members the
-month before.
+    python scripts/check_intraday_dataset.py [--root data/parquet/intraday]
 """
 
 from __future__ import annotations

@@ -1,16 +1,7 @@
 """Materialised bar aggregates. Plan.md §5.7, §9.6.
 
-§5.7 says coarser bars are derived rather than stored as primary, and that still
-holds: the 1m archive remains the source of truth and these are reproducible from
-it. What changes is that deriving them once is the difference between a research
-campaign that iterates and one that does not — loading and aggregating 130,000
-1m files per study took minutes per configuration while the engine evaluates 648
-of them a second.
-
-A cache that can silently diverge from its source is worse than no cache, so each
-materialised partition records the content hash of the 1m files it was built
-from. A source file appearing or changing makes the derived partition detectably
-stale rather than quietly wrong.
+A cache of bars derived from the 1m archive (still the source of truth, §5.7). Each
+partition records a hash of its source files, so a changed source makes it detectably stale.
 """
 
 from __future__ import annotations
@@ -40,10 +31,7 @@ class Materialised:
 def _source_hash(root: Path, asset: str, source_tf: str) -> str:
     """Hash of the source partition list: names and sizes, not contents.
 
-    Contents would mean reading gigabytes to decide whether a cache is fresh,
-    which defeats the purpose. Names and sizes catch a day appearing, a revision
-    landing or a file being rewritten, which is every way the source changes here
-    given partitions are immutable (§3.2).
+    Sufficient because partitions are immutable (§3.2); contents would cost gigabytes of reads.
     """
     base = root / "ohlcv" / f"tf={source_tf}" / "venue=binance" / f"asset={asset}"
     if not base.exists():
@@ -97,9 +85,7 @@ def materialise_asset(
 
     path = target_path(root, asset, timeframe)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Overwritten rather than revisioned: this is a cache keyed on its source,
-    # not an observation. Immutability protects facts; a derived view of a fact
-    # is not one (§3.2).
+    # Overwritten, not revisioned: a derived cache, not an observation (§3.2).
     frame.write_parquet(path, compression="zstd", compression_level=3)
     return Materialised(asset, timeframe, path, frame.height, digest)
 

@@ -1,9 +1,9 @@
 """Pull CMC100 into `market_index_readings`. Plan.md §20, PREREG-005.
 
-Idempotent and resumable. The daily run wants `--latest`, which is one request.
-`--history` pages from wherever the table left off and stops when the anonymous
-quota runs out, storing what it got — so running it on successive days walks
-backfill to completion without a key.
+Idempotent; resumes from the first gap and stores what it got when the anonymous quota
+runs out, so daily runs complete the backfill without a key.
+
+    python scripts/refresh_market_index.py [--full]
 """
 
 from __future__ import annotations
@@ -18,13 +18,7 @@ from tradelab.config import Settings
 
 
 def _report_budget(label: str) -> None:
-    """What the vendor says, and what this run spent. Free to ask.
-
-    Printed on every run rather than only when something is wrong: a quota is
-    the kind of thing nobody looks at until it has already stopped the
-    collection, and by then the series has a hole that looks like a quiet
-    market.
-    """
+    """Print the vendor quota and this run's spend (every run, so exhaustion is seen early)."""
     from tradelab.collectors.cmc import budget, spent
 
     allowance = budget()
@@ -46,15 +40,13 @@ def main() -> int:
     engine = sa.create_engine(Settings().database_url)
     since = INCEPTION if args.full else resume_from(engine)
 
-    # Only the historical endpoint. `latest` is an intraday quote and the SDK
-    # drops its time of day, so a value published at 18:00 would be stored as
-    # knowable at midnight. The historical series already includes today.
+    # Historical endpoint only: the SDK drops `latest`'s time of day, which would leak an
+    # 18:00 quote to midnight. The historical series already includes today.
     try:
         collected = fetch_history(since=since)
         print(f"{store(engine, collected)} changed, from {since}")
     except QuotaReached as stopped:
-        # Stored before reporting, so the ceiling costs a re-run and not the
-        # pages already fetched.
+        # Store before reporting so the pages already fetched are kept.
         print(f"{store(engine, stopped.collected)} changed from {since}, "
               f"then {stopped}")
     _report_budget("budget")

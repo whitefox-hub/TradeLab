@@ -1,12 +1,6 @@
-"""Effective breadth of the cross-venue funding dispersion signal. Plan.md §0.4a.
+"""Effective breadth of the Binance-Bybit funding spread signal, pre-registration. §0.4a.
 
-§0.4a establishes that the detection threshold is fixed by calendar span, so the
-only fast lever is breadth — and breadth means bets held *at the same time* that
-are *uncorrelated*. A hundred spreads that all move together are one bet.
-
-This measures that before anything is pre-registered, because a hypothesis whose
-effective breadth is near one cannot clear the threshold and should not consume
-a trial. It is the check that PREREG-001 would have failed.
+    python scripts/measure_funding_breadth.py [--assets 60] [--days 180]
 """
 
 from __future__ import annotations
@@ -24,8 +18,7 @@ BYBIT = "https://api.bybit.com/v5/market/funding/history"
 
 
 def _daily(rows: list[tuple[int, float]]) -> dict[str, float]:
-    """Funding summed per UTC day: venues settle on different intervals (8h, 4h,
-    1h), so a per-settlement comparison would compare different things."""
+    """Funding summed per UTC day, since venues settle on different intervals."""
     out: dict[str, float] = {}
     for ms, rate in rows:
         day = datetime.fromtimestamp(ms / 1000, UTC).date().isoformat()
@@ -80,8 +73,7 @@ def main() -> int:
     start = end - timedelta(days=args.days)
     start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
-    # Assets on both venues, ordered so the sample is not chosen by anything the
-    # signal could depend on.
+    # Alphabetical selection, so the sample does not depend on the signal.
     binance_universe = {
         s["symbol"].removesuffix("USDT")
         for s in httpx.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=30)
@@ -130,9 +122,7 @@ def main() -> int:
     off = corr[~np.eye(len(corr), dtype=bool)]
     mean_rho = float(np.nanmean(off))
     n = len(corr)
-    # Two readings of the same thing. The first is the textbook adjustment; the
-    # second is the participation ratio of the eigenvalue spectrum, which does
-    # not assume a single common factor.
+    # Mean-rho adjustment, and eigenvalue participation ratio (no single-factor assumption).
     n_eff_rho = n / (1 + (n - 1) * mean_rho) if mean_rho > 0 else float(n)
     eigenvalues = np.linalg.eigvalsh(np.nan_to_num(corr))
     n_eff_pr = float(eigenvalues.sum() ** 2 / (eigenvalues**2).sum())
@@ -147,9 +137,7 @@ def main() -> int:
     print(f"\nmean |daily spread|       : {mean_abs:.5%} "
           f"({mean_abs * 365:.2%}/yr gross)")
 
-    # Persistence. A spread that exists but does not survive the holding period
-    # is not harvestable: the position is entered on a difference that has
-    # already gone by the time both legs are on.
+    # A spread that does not persist over the holding period is not harvestable.
     print("\nspread autocorrelation (mean across assets):")
     for lag in (1, 3, 7, 14, 30):
         rhos = [

@@ -1,17 +1,11 @@
 #!/usr/bin/env python
-"""Build the survivorship-neutral Binance panel. Plan.md §4.4, RESULT-007.
-
-Every USDT crypto perpetual that traded on Binance inside the window, delisted
-ones included, with daily close and daily funding. The same window as the
-five-venue panel it replaces, so the two can be compared asset by asset where
-they overlap.
+"""Build the survivorship-neutral Binance panel (delisted included). Plan.md §4.4, RESULT-007.
 
     python scripts/build_binance_pit_panel.py              # everything, resumable
     python scripts/build_binance_pit_panel.py --only RAVEUSDT ALPACAUSDT
 
-Resumes by skipping assets already written, and records the ones that never
-traded in the window, so a rerun does not ask about them again. Funding is
-paced under the venue's shared limit, so the full run takes about half an hour.
+Resumes by skipping written assets and those logged as never traded. Funding is paced
+under the venue's shared rate limit (~30 min full run).
 """
 
 from __future__ import annotations
@@ -35,10 +29,8 @@ def main() -> int:
     parser.add_argument("--only", nargs="*", default=None)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    # The day still in progress has an intraday "close" and part of its
-    # settlements. The five-venue panel was fetched on its own last day and
-    # carries exactly that on 2026-09-25: ADA at 0.2558 against a true close of
-    # 0.2586, RAVE with five of six settlements.
+    # END must be a completed UTC day: an in-progress day has a partial close and
+    # partial settlements (the five-venue panel carries exactly that on 2026-09-25).
     today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     if today <= END:
         raise SystemExit(f"END {END:%Y-%m-%d} is not a completed UTC day yet")

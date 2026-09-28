@@ -87,8 +87,7 @@ def upgrade() -> None:
         sa.Column("id", UUID, primary_key=True),
         sa.Column("transition", sa.String(48), nullable=False),
         sa.Column("thresholds", postgresql.JSONB, nullable=False),
-        # NOT NULL: lowering a bar always carries its reason, attached to every
-        # verdict issued under it (§20.3).
+        # NOT NULL: every bar change carries its reason (§20.3).
         sa.Column("rationale", sa.Text, nullable=False),
         sa.Column("changed_by", UUID, sa.ForeignKey("users.id")),
         sa.Column("valid_from", TS, nullable=False, server_default=sa.func.now()),
@@ -101,8 +100,7 @@ def upgrade() -> None:
         sa.Column("strategy_id", UUID, sa.ForeignKey("strategies.id"), nullable=False),
         sa.Column("search_method", sa.String(16), nullable=False),
         sa.Column("planned_trials", sa.Integer, nullable=False),
-        # Input to DSR/PBO. Monotonic, never reset: a reset makes the
-        # multiple-testing control a lie (§8.3).
+        # Input to DSR/PBO. Monotonic, never reset (§8.3).
         sa.Column("executed_trials", sa.Integer, nullable=False, server_default="0"),
         sa.Column("min_detectable_sharpe", sa.Numeric(10, 4), nullable=False),
         sa.Column("hold_days_min", sa.Numeric(8, 3), nullable=False),
@@ -137,8 +135,7 @@ def upgrade() -> None:
         sa.Column("realised_hold_days", sa.Numeric(10, 4)),
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("created_at", TS, nullable=False, server_default=sa.func.now()),
-        # Tier 1 results live in Parquet; only candidates earn referential
-        # integrity (§5.7).
+        # Tier 1 results live in Parquet; only tier >= 2 rows here (§5.7).
         sa.CheckConstraint("tier >= 2", name="ck_experiment_tier_min"),
     )
     op.create_index("ix_experiments_study", "experiments", ["study_id"])
@@ -182,8 +179,7 @@ def upgrade() -> None:
         sa.Column("from_state", sa.String(16), nullable=False),
         sa.Column("to_state", sa.String(16), nullable=False),
         sa.Column("gate_config_id", UUID, sa.ForeignKey("gate_configs.id")),
-        # Snapshot of the criteria as evaluated: a later reading shows what was
-        # true at the moment, not what is true now (§20.3).
+        # Snapshot of the criteria as evaluated then, not as they are now (§20.3).
         sa.Column("evidence", postgresql.JSONB, nullable=False),
         sa.Column("actor", sa.Text, nullable=False),
         sa.Column("occurred_at", TS, nullable=False, server_default=sa.func.now()),

@@ -1,16 +1,9 @@
-"""Two years of funding across five venues. Plan.md §0.4 hypothesis 3.
+"""Two years of funding and closes across five venues. Plan.md §0.4 hypothesis 3.
 
-FEASIBILITY-003 measured breadth on 95 days and two venues and said explicitly
-that 95 days is not an evidence horizon. This is the collection that fixes that.
+Universe: perpetuals listed on all five venues (availability-based, so registrable without
+seeing returns; biased toward established names). Checkpointed per asset.
 
-The asset set is **the perpetuals listed on all five venues**. That is a
-selection rule, and it is chosen because it is based on availability rather than
-on anything the signal could depend on — it can be stated in a pre-registration
-without having looked at a single return. Restricting to five-venue assets does
-bias toward the more established names, which is recorded here and not defended.
-
-Checkpointed per asset, because a two-hour collection that loses everything on
-one timeout is a collection that never finishes.
+    python scripts/collect_multivenue_funding.py [--days 730] [--limit N]
 """
 
 from __future__ import annotations
@@ -108,9 +101,8 @@ def main() -> int:
                     continue          # one venue missing is a narrower panel, not a failure
                 if not daily.height:
                     continue
-                # The price leg, joined on the same day key. RESULT-003 was
-                # voided for omitting it: basis volatility ran 42x the funding
-                # spread, so a panel without closes measures one leg of two.
+                # Price leg is required: RESULT-003 was voided for omitting it
+                # (basis volatility ran 42x the funding spread).
                 marks = closes(venue, base, start, end, client=client)
                 price = pl.DataFrame({
                     "day": [

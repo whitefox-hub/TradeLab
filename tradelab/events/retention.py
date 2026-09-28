@@ -1,20 +1,8 @@
 """How far back the event corpus is kept. Plan.md §11.8, §12.4.
 
-One window, read by both the ingestor and the prune, because they have to agree:
-the ingestor is idempotent by article id, so deleting rows without narrowing what
-gets imported leaves the next run putting them straight back. A prune that undoes
-itself on the next tick is worse than none, since it looks done.
-
-The window is an operator setting rather than a constant, and it is the lever
-that decides how much history the event-reaction work of §11.5 will have to fit
-on. Shortening it makes the screens quiet; it also shortens the record that
-hypothesis 5 of §0.4 depends on, which is a trade the operator makes knowingly
-rather than one buried in a script.
-
-Nothing here is irreversible. The announcement Parquet is the source of truth,
-so raising the window and re-running the ingestor rebuilds exactly what was
-removed. Human annotations are the one exception — they are not derived from
-anything and cannot be rebuilt.
+One operator-set window, read by both ingestor and prune: the ingestor is idempotent, so a
+prune alone would be undone next run. Pruned rows rebuild from the Parquet, except human
+annotations.
 """
 
 from __future__ import annotations

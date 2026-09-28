@@ -1,15 +1,7 @@
 """Every position says who guided it. research/PREREG-009-trend-book.md.
 
-The trend book holds two guides in one book: the operator's reading when the
-trend is not 5, and the algorithm's rule when it is. The operator asked for a
-field saying which one sized each position, so the two can be judged apart on
-the same screen, and P&L by guide is how PREREG-009 is decided.
-
-`trend` and `trend_source` record the setting in force when the position was
-sized, so a position can be traced to the reading that caused it after the
-slider has moved on. All three are nullable: a position from a book with no
-notion of a guide, such as Flash Strike's registered book, has none, and an
-empty field says so better than an invented one.
+`guide` is operator (trend != 5) or algorithm (trend 5); PREREG-009 is decided by P&L
+per guide. `trend`/`trend_source` snapshot the setting. All nullable for guide-less books.
 """
 
 from __future__ import annotations

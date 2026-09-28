@@ -1,22 +1,10 @@
 #!/usr/bin/env python
 """Queue calibration for PREREG-008: does the bar model's fill survive the trades?
 
-The bar model fills a resting limit when a later 5-minute bar trades through
-it by one tick. Price-time priority settles the queue question for such a
-fill: a trade printed a tick beyond the limit means the whole level at the
-limit was consumed first, our order included. What the bar cannot see is
-*when*. A through-print before the order could have been resting is not a fill,
-and neither is one after the order's thirty minutes.
-
-So, for a stratified sample of 2,000 bar-model fills, this reads the day's
-`aggTrades` and asks whether the first trade a tick or more through the limit
-came after the shock bar closed plus the placement latency, and before the
-order expired. The share that does is the haircut `run_prereg_008.py` applies
-to every bar-model fill, as a random thinning.
-
-The REST endpoint serves only the last two days of aggregate trades (-4166,
-measured), so the daily archive is read. Each file is fetched once, processed
-in memory and discarded.
+For a stratified sample of bar-model fills, checks in `aggTrades` that a print a tick
+through the limit falls between placement (shock close + latency) and expiry. The
+confirmed share is the fill haircut `run_prereg_008.py` applies. Uses the daily archive:
+REST serves only the last two days of aggTrades (error -4166).
 
     python scripts/calibrate_flash_strike_fills.py
 """

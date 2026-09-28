@@ -1,13 +1,7 @@
-"""Universe-wide historical backfill. Plan.md §4.1, §17 phase 1.
+"""Universe-wide historical backfill (Plan.md §4.1, §17 phase 1).
 
-Designed around the fact that this runs for days: it must be interruptible at any
-moment, resume without re-downloading, and show progress while it works.
-
-Resumability is by file existence rather than by bookkeeping. Partitions are
-immutable (§3.2), so a partition that exists is a partition that is complete, and
-that makes resume correct even after a hard kill — no state to reconcile, nothing
-to trust. The watermark is for observability, not for correctness.
-"""
+Resumes by file existence: partitions are immutable (§3.2), so an existing one is complete.
+The watermark is for observability only."""
 
 from __future__ import annotations
 
@@ -74,13 +68,8 @@ def backfill_asset(
     asset: str, start: date, end: date, root: Path, timeframe: str = "1m",
     client: httpx.Client | None = None,
 ) -> Progress:
-    """Backfill one asset, a month per request wherever possible.
-
-    The monthly archive holds the same bytes as its thirty daily files but costs
-    one request instead of thirty, and the archive is latency-bound rather than
-    bandwidth-bound. The trailing month falls back to daily files, because the
-    monthly archive for an unfinished month does not exist yet.
-    """
+    """Backfill one asset, a month per request where possible; the unfinished trailing month
+    has no monthly archive and uses daily files."""
     collector = BinanceKlineBulk(timeframe, client=client)
     result = Progress()
     current_month = (end.year, end.month)
@@ -106,9 +95,7 @@ def backfill_asset(
             _write_days(collector, result, frame, root, asset, timeframe, set(wanted))
             continue
 
-        # No monthly archive: either the trailing partial month, or a month
-        # before the contract was listed. Fall through to per-day requests,
-        # which distinguish the two.
+        # No monthly archive (trailing month or pre-listing): per-day requests tell them apart.
         for day in wanted:
             _fetch_one_day(collector, result, root, asset, day, timeframe)
 
@@ -148,14 +135,12 @@ def _fetch_one_day(collector, result: Progress, root: Path, asset: str,
     try:
         frame = collector.fetch_day(asset, day)
     except Exception as exc:
-        # One bad day must not abandon six years of an asset. Logged and
-        # skipped; the missing partition is visible in the manifest later.
+        # One bad day must not abandon the asset; the gap shows in the manifest.
         log.warning("fetch_failed", asset=asset, day=str(day), error=str(exc))
         return
 
     if frame is None or not frame.height:
-        # No archive for that date: the contract was not listed yet. This is
-        # the point-in-time universe doing its job, not a gap (§4.4).
+        # Not listed yet: not a gap (§4.4).
         result.days_absent += 1
         return
 
@@ -177,12 +162,7 @@ def backfill_universe(
     assets: dict[str, date], end: date, root: Path, timeframe: str = "1m",
     workers: int = 6, on_asset: object = None,
 ) -> Progress:
-    """Backfill every asset from its listing date.
-
-    `assets` maps symbol to listing date, so each contract is fetched only from
-    when it existed. Concurrency is modest on purpose: the archive is a CDN and
-    the bottleneck is bandwidth, not request slots.
-    """
+    """Backfill every asset from its listing date (`assets`: symbol -> listing date)."""
     total = Progress(assets_total=len(assets))
     local = threading.local()
 
@@ -216,13 +196,7 @@ def backfill_universe(
 def backfill_funding(
     asset: str, start: date, end: date, root: Path, client: httpx.Client | None = None,
 ) -> Progress:
-    """Funding history for one asset, a month per request.
-
-    Funding is the positioning component of the state index (§11.4) and the
-    clearest expression of the differentiation thesis: it settles every eight
-    hours, it is not a price derivative, and it says who is crowded. Resumable by
-    file existence like everything else.
-    """
+    """Funding history for one asset (§11.4), a month per request, resumable by file."""
     from tradelab.collectors.binance.bulk import BinanceFundingBulk
 
     collector = BinanceFundingBulk(client=client)
@@ -294,12 +268,9 @@ def backfill_funding_universe(
 
 
 def listing_dates(limit: int | None = None, min_history_days: int = 365) -> dict[str, date]:
-    """Universe with its listing dates, filtered to contracts old enough to matter.
+    """Universe with listing dates, limited to contracts with enough history.
 
-    Ordered by listing date rather than by current volume: ranking by today's
-    liquidity would select the winners of the last six years, which is
-    survivorship bias introduced while building the universe (§4.4).
-    """
+    Ordered by listing date, not current volume, to avoid survivorship bias (§4.4)."""
     from tradelab.collectors.binance.universe import snapshot
 
     cutoff = datetime.now(UTC) - timedelta(days=min_history_days)

@@ -1,25 +1,8 @@
 """Persisting a study. Plan.md §5.7, §8.3, §16.1.
 
-Where a result lands is not a storage preference, it is the tier boundary of
-§5.7:
-
-**Tier A results go to Parquet**, one partition per study. A screening campaign
-of 10^6 configurations would put five million rows into Postgres and make the
-registry unusable to query, in exchange for referential integrity on results that
-are disposable by design.
-
-**Only tier >= 2 enters Postgres**, enforced by a CHECK constraint on
-`experiments`. A candidate that survived screening has earned integrity; the
-999,999 it beat have not.
-
-Two things must cross that boundary anyway, because the statistics depend on them:
-
-- `studies.executed_trials` counts every tier A configuration, even though their
-  rows are not in Postgres. That number deflates the Sharpe of whatever survives
-  (§8.3); losing it makes every verdict issued afterwards more confident than the
-  evidence supports.
-- Tier A `config_hash` values are kept in the Parquet partition, so deduplication
-  still works across campaigns (§9.6).
+Tier A goes to Parquet (one partition per study); only tier >= 2 enters Postgres (CHECK on
+`experiments`, §5.7). `studies.executed_trials` still counts every tier A configuration
+(§8.3), and tier A `config_hash` stays in Parquet for dedup across campaigns (§9.6).
 """
 
 from __future__ import annotations
@@ -47,12 +30,7 @@ from tradelab.registry.models import (
 
 
 def image_digest() -> str:
-    """Digest of the image this process is running in.
-
-    Recorded on every experiment (§16.1). It read "unpinned" until the base
-    images were pinned, which made the reproducibility contract nominal: an
-    experiment citing a tag cites something that moves.
-    """
+    """Digest of the image this process is running in, recorded on every experiment (§16.1)."""
     import os
 
     for source in (os.environ.get("TRADELAB_IMAGE_DIGEST"), _cgroup_image()):
@@ -85,13 +63,9 @@ def code_version() -> str:
 
 
 def json_safe(value):
-    """Make a metrics dict storable as JSONB.
+    """Make a metrics dict storable as JSONB: +/-inf -> "infinity"/"-infinity", NaN -> None.
 
-    JSON has no Infinity, and `min_trl_obs` is legitimately infinite whenever the
-    observed Sharpe does not exceed the null benchmark — the track record needed
-    is unbounded. Dropping the key would lose that meaning, and coercing it to a
-    large number would invent a finite answer, so it becomes the string
-    "infinity" and stays readable as what it is.
+    `min_trl_obs` is legitimately infinite; never coerce it to a finite number.
     """
     import math
 
@@ -113,12 +87,7 @@ def config_hash(payload: dict) -> str:
 
 
 def write_tier_a(result: StudyResult, study_id: uuid.UUID, root: Path) -> Path:
-    """Every screened configuration, to Parquet. Disposable but not discarded.
-
-    Kept because the trial count has to be auditable after the fact: a verdict
-    citing 1,008 trials should be checkable against 1,008 rows, not taken on
-    trust.
-    """
+    """Every screened configuration, to Parquet, so the trial count stays auditable."""
     target = root / "tier_a" / f"study={study_id}" / "results.parquet"
     target.parent.mkdir(parents=True, exist_ok=True)
     frame = pl.DataFrame(result.tier_a_rows)
@@ -167,9 +136,7 @@ def persist(
     }
     digest = config_hash(payload)
 
-    # Idempotent by configuration (§5.1). Re-running an identical study reuses
-    # its record rather than failing on the unique constraint: that constraint is
-    # there to make repetition free, not to punish it.
+    # Idempotent by configuration (§5.1): an identical study reuses its record.
     existing = session.query(Experiment).filter_by(config_hash=digest).one_or_none()
     if existing is not None:
         return existing.id
@@ -223,10 +190,7 @@ def persist(
         reasons={"reasons": result.gate.reasons,
                  "min_trl_obs": json_safe(result.gate.metrics.get("min_trl_obs"))},
     ))
-    # One transaction for study, experiment, results and verdict. An earlier
-    # version committed each in turn, and a failure partway left an experiment
-    # with no verdict attached — which is not a record, it is debris that later
-    # queries would count.
+    # One transaction, so a failure never leaves an experiment without a verdict.
     session.commit()
     return experiment.id
 

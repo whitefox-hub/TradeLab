@@ -1,21 +1,12 @@
 #!/usr/bin/env python
-"""Every Flash Strike candidate, filled or not, with its features and outcomes.
+"""Every Flash Strike candidate, filled or not, with features and outcomes per exit config.
 
-research/PREREG-008-flash-strike.md, rules 1-3 and the exits. For each asset,
-the 5-minute series is assembled across every downloaded month; shocks are
-taken only in months the asset belongs to the universe, the earlier month
-serving as warm-up. Each filled candidate carries the thirteen features and
-its outcome under all twelve exit configurations.
+research/PREREG-008-flash-strike.md, rules 1-3 and the exits. Shocks only in universe
+member months (prior month is warm-up). Also the registered random-entry baseline: same
+count per asset-month, random side, same limit-at-VWAP entry and exits. Per-trade only;
+aggregation and verdict belong to run_prereg_008.py.
 
-Alongside, the **random-entry baseline** the registration requires: in each
-asset-month, as many random bars as there were shocks, a random side, and the
-same limit-at-VWAP entry and the same exits, with no anomaly and no
-persistence check. It says what the anomaly adds.
-
-Per-trade outcomes are written here; nothing is aggregated. The model, the
-book and the verdict belong to run_prereg_008.py.
-
-    python scripts/build_flash_strike_candidates.py
+    python scripts/build_flash_strike_candidates.py [--only BTC ETH]
 """
 
 from __future__ import annotations
@@ -36,9 +27,8 @@ SEED = 20260927
 
 
 def load(root: Path, asset: str) -> pl.DataFrame | None:
-    """One asset's bars from the archive, assembled by `flash_data.assemble`,
-    which the forward simulation also uses: the model must be traded on inputs
-    assembled the way it was trained on them."""
+    """One asset's bars via `flash_data.assemble`, shared with the forward simulation so
+    the model trades on inputs built exactly as in training."""
     def read(kind: str) -> pl.DataFrame | None:
         files = sorted((root / kind / asset).glob("*.parquet"))
         frames = [f for f in (pl.read_parquet(p) for p in files) if not f.is_empty()]
@@ -56,12 +46,10 @@ def series(bars: pl.DataFrame) -> fs.Series:
 
 
 def funding_per_bar(panel: Path, asset: str, close_ms: np.ndarray) -> tuple[np.ndarray, dict]:
-    """Settlement-level funding, placed on the bar whose close is the settlement.
+    """Per-bar funding at settlement closes, plus each day's funding z (feature 7).
 
-    The panel holds daily sums and settlement counts. Settlements are taken as
-    evenly spaced from 00:00 UTC, which is Binance's schedule for 1, 4 and 8
-    hour contracts alike. Also returns each day's funding z against the
-    asset's previous 30 days, for feature 7.
+    Daily sums are spread over `n` settlements evenly spaced from 00:00 UTC (Binance's
+    schedule for 1/4/8h contracts).
     """
     out = np.zeros(close_ms.size)
     path = panel / f"{asset}.parquet"
@@ -79,8 +67,7 @@ def funding_per_bar(panel: Path, asset: str, close_ms: np.ndarray) -> tuple[np.n
                 out[i] += rate / n
     rates = daily["rate"].to_numpy()
     z = {}
-    # Yesterday's funding against the 30 days before yesterday: known at any
-    # fill today, and not part of its own reference.
+    # Yesterday's funding vs the 30 days before it: known at any fill today.
     for i, day in enumerate(daily["day"].to_list()):
         if i < 2:
             continue
@@ -149,8 +136,7 @@ def candidates_for(root: Path, panel: Path, asset: str, members: set[str],
                 row[f"reason_{c}"] = o.reason
                 row[f"exit_ms_{c}"] = int(s.close_ms[o.exit_bar])
             rows.append(row)
-    # Every shock, filled or not: the fill rate is reported, and a table of
-    # fills alone cannot say what share of shocks it is.
+    # All shocks, filled or not, so the fill rate can be reported.
     counts = pl.DataFrame(shocked, schema=SHOCK_SCHEMA, orient="row") if shocked \
         else pl.DataFrame(schema=SHOCK_SCHEMA)
     return (pl.DataFrame(rows) if rows else pl.DataFrame(), counts)
@@ -162,14 +148,10 @@ SHOCK_SCHEMA = {"asset": pl.Utf8, "month": pl.Utf8, "shock_ms": pl.Int64, "side"
 
 def _shock_row(s: fs.Series, asset: str, month: str, t: int, side: int,
                entry: fs.Fill | None) -> dict:
-    """Every shock, filled or not, for the fill rate and the adverse selection.
+    """One shock row for the fill rate and adverse selection.
 
-    `after_15m` is the side-adjusted move from the limit price to the close 15
-    minutes after the order's decision bar: its fill, or its expiry. Filled
-    limits are expected to do worse than unfilled ones. That gap is what a
-    resting order pays for being the one the market chose to hit, and it is
-    reported. It is not charged, because the backtest's outcomes already run on
-    the prices after each real fill.
+    `after_15m`: side-adjusted move from the limit to the close 15 min after the decision
+    bar (fill or expiry). Reported, not charged: outcomes already use post-fill prices.
     """
     vwap = s.quote_volume[t] / s.volume[t] if s.volume[t] > 0 else np.nan
     decision = entry.fill if entry else min(t + fs.ORDER_LIFE_BARS, s.close.size - 1)
@@ -179,8 +161,7 @@ def _shock_row(s: fs.Series, asset: str, month: str, t: int, side: int,
 
 
 def _random_fill(s: fs.Series, t: int, side: int, atr: float) -> fs.Fill | None:
-    """The same resting limit at the bar's VWAP and the same trade-through,
-    without an anomaly to anchor it or persistence to confirm it."""
+    """Baseline fill: limit at the bar's VWAP, same trade-through rule, no anomaly check."""
     if s.volume[t] <= 0 or not np.isfinite(atr):
         return None
     vwap = s.quote_volume[t] / s.volume[t]
@@ -220,9 +201,7 @@ def main() -> int:
     frames: list[pl.DataFrame] = []
     shock_frames: list[pl.DataFrame] = []
     done = 0
-    # Spawn, not fork: a forked child inherits polars' thread pool mid-state and
-    # waits on it forever. The first run of this sat for ten minutes at 2.6 s
-    # of CPU before anyone noticed it was not working but waiting.
+    # Spawn, not fork: a forked child inherits polars' thread pool mid-state and deadlocks.
     context = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(max_workers=args.workers, mp_context=context) as pool:
         futures = {pool.submit(candidates_for, args.root, args.panel, a, m, btc): a

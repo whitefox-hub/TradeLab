@@ -1,18 +1,9 @@
 """Phase 4b, hypothesis 1: funding extremes as crowded positioning.
 
-Pooled rather than searched (§6.3): each configuration is evaluated on every
-asset and scored on the pooled result, so the trial count is the grid and not
-the grid times the universe. The assets multiply the sample instead of raising
-the bar.
+Pooled (§6.3): trials = the 9-config grid, not grid x universe (§8.3). Select on IS,
+report OOS; never select on OOS.
 
-The grid is nine configurations, declared here before running. Three periods
-with a meaning — one week, two weeks and one month of eight-hourly settlements —
-and three z levels. §8.3's bar rises with every trial spent, and a disciplined
-search is worth more than a large one.
-
-Selection is on the in-sample score; the out-of-sample figure is what gets
-reported. Reversing that is choosing with the test set in hand and then citing
-the test as evidence, which this code did until recently.
+    python scripts/campaign_funding.py [asset_limit]
 """
 
 from __future__ import annotations

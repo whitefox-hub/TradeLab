@@ -1,9 +1,6 @@
 """Parametric cost model for vectorised screening. Plan.md §9.5, §9.2.
 
-An approximation by design: tier A exists to discard 99.9% of candidates cheaply,
-and it is calibrated against the event-driven engine rather than trusted on its
-own. What it must not do is be optimistic, because an optimistic screen promotes
-the wrong survivors and no amount of rigour downstream recovers from that.
+Approximate but must never be optimistic; calibrated against the event-driven engine.
 """
 
 from __future__ import annotations
@@ -20,10 +17,8 @@ class CostModel:
     half_spread: float = 0.00005
     slippage: float = 0.0001           # beyond the spread, taker
     maker_fill_rate: float = 0.0       # tier A assumes taker: the honest default
-    #: Fallback when no funding series is supplied. Longs pay it, shorts receive
-    #: it. Measured on BTCUSDT 2020-2026: 0.0108% per 8h settlement, which is
-    #: 11.8% a year and 78.7% cumulative — a cost on the same scale as the entire
-    #: turnover drag of a three-day hold, and one §0.1's table did not contain.
+    #: Per-bar fallback when no funding series is given; longs pay, shorts receive.
+    #: BTCUSDT 2020-2026 averaged 0.0108%/8h (~11.8%/yr).
     funding_per_bar: float = 0.0
 
     @property
@@ -38,16 +33,9 @@ class CostModel:
 
     def annual_drag(self, bars_per_year: float, avg_holding_bars: float,
                     include_funding: bool = False) -> float:
-        """Cost drag per year for a strategy always in the market.
+        """Cost drag per year for a strategy always in the market (§0.1).
 
-        This is the arithmetic behind §0.1: it is what rules out holding periods
-        below roughly a day, and it is worth being able to compute rather than
-        quote.
-
-        `include_funding` adds the carry a permanently long position pays. It is
-        off by default because the table in §0.1 is about turnover, but for a
-        long-biased perpetual strategy it is the larger term at any holding period
-        beyond a couple of days.
+        `include_funding` adds a permanent long's carry; off by default since §0.1 is turnover.
         """
         round_trips = bars_per_year / max(avg_holding_bars, 1e-9)
         drag = round_trips * self.round_trip
@@ -56,11 +44,8 @@ class CostModel:
         return drag
 
 
-#: Retail Binance USD-M. Deliberately not tier 0: assuming fees you do not have
-#: is the cheapest way to make a losing strategy look profitable.
+#: Retail Binance USD-M (VIP0), deliberately not a better fee tier.
 BINANCE_RETAIL = CostModel()
 
-#: Used in the promotion report alongside the realistic one (§9.5): a strategy
-#: that only works under optimistic fills is a strategy that only works in the
-#: backtest.
+#: Reported alongside the realistic model in promotion (§9.5).
 PESSIMISTIC = CostModel(taker_fee=0.0005, half_spread=0.0002, slippage=0.0005)

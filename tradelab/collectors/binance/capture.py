@@ -1,12 +1,5 @@
-"""Capture of data that cannot be backfilled. Plan.md §4.1, §4.5.
-
-This module is the most time-sensitive code in the project, and the reason is
-arithmetic rather than engineering: liquidations have **no historical REST
-endpoint at all**, and open interest reaches back roughly 30 days. Every week
-these collectors are not running is a week of history that never exists.
-
-Both feeds are public. No account, no API key (§4.7).
-"""
+"""Capture of data that cannot be backfilled (Plan.md §4.1, §4.5): liquidations have no
+history endpoint; open-interest REST history is ~30 days. Public feeds, no key (§4.7)."""
 
 from __future__ import annotations
 
@@ -33,24 +26,16 @@ VENUE = "binance"
 
 
 class _Buffer:
-    """Accumulates rows and flushes whole days as numbered parts.
-
-    Flushing on a day boundary as well as on size keeps every file inside exactly
-    one partition, so a crash costs at most one flush interval rather than
-    corrupting a day.
-    """
+    """Accumulates rows and flushes them as numbered parts, one file per (asset, day)."""
 
     def __init__(self, root: Path, kind: str, schema, flush_rows: int, flush_after: timedelta):
         self.root, self.kind, self.schema = root, kind, schema
-        # Set by the supervisor so progress is recorded on every flush rather
-        # than only at shutdown. A collector meant to run for months must be
-        # observable while it runs, not only once it stops.
+        # Set by the supervisor to record progress on every flush.
         self.on_flush: Callable[[int, datetime], None] | None = None
         self.flush_rows, self.flush_after = flush_rows, flush_after
         self.rows: list[dict] = []
         self.last_flush = datetime.now(UTC)
-        # Counts rows that reached disk, not rows accepted. The watermark may
-        # only ever advance on this number.
+        # Rows that reached disk; the watermark may only advance on this.
         self.flushed_rows = 0
 
     def add(self, row: dict) -> None:
@@ -83,29 +68,20 @@ class _Buffer:
         self.rows.clear()
         self.last_flush = datetime.now(UTC)
         if self.on_flush is not None:
-            # Called only after the files are on disk: write first, advance
-            # second. Reversing it would let the watermark claim data that a
-            # crash never persisted.
+            # Only after files are on disk, so the watermark never claims unpersisted data.
             self.on_flush(frame.height, frame["event_time"].max())
         return written
 
 
 class LiquidationCapture:
-    """`!forceOrder@arr` — every liquidation on USD-M futures, all symbols.
-
-    Not backfillable under any circumstances. This is the differentiating dataset
-    of §11 and the input to the liquidation-asymmetry component of the state
-    index (§11.4).
-    """
+    """`!forceOrder@arr`: every USD-M liquidation, all symbols. Not backfillable (§11.4)."""
 
     kind = "liquidations"
     venue = VENUE
 
     def __init__(self, root: Path, flush_rows: int = 200,
                  flush_after: timedelta = timedelta(seconds=60)) -> None:
-        # A short flush budget because this data is unrecoverable: an unclean kill
-        # costs at most one interval, and the price is more small files, which is
-        # a far cheaper problem than a permanent hole.
+        # Short flush budget: data is unrecoverable, small files are cheap.
         self.buffer = _Buffer(root, self.kind, schemas.LIQUIDATIONS, flush_rows, flush_after)
 
     @staticmethod
@@ -115,8 +91,6 @@ class LiquidationCapture:
         return {
             "event_time": event_time,
             "ingest_time": datetime.now(UTC),
-            # A public stream event is usable the moment it arrives. Unlike news,
-            # there is no publication lag to model here.
             "available_at": datetime.now(UTC),
             "venue": VENUE,
             "asset": order["s"],
@@ -132,10 +106,8 @@ class LiquidationCapture:
         backoff = 1.0
         while not stop.is_set():
             try:
-                # Liveness is the protocol's job: ping/pong detects a dead peer.
-                # Message silence must NOT: liquidations are bursty, and quiet
-                # markets produce none for minutes at a time. Treating silence as
-                # failure produces a reconnect loop that drops the bursts too.
+                # Liveness via ping/pong only: liquidations can be silent for minutes,
+                # so silence must not trigger a reconnect.
                 async with websockets.connect(
                     f"{WS}/!forceOrder@arr", ping_interval=20, ping_timeout=20
                 ) as socket:
@@ -145,7 +117,6 @@ class LiquidationCapture:
                         try:
                             raw = await asyncio.wait_for(socket.recv(), timeout=5)
                         except TimeoutError:
-                            # No liquidations right now. Flush if due, keep listening.
                             if self.buffer.due():
                                 self.buffer.flush()
                             continue
@@ -155,8 +126,7 @@ class LiquidationCapture:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                # A reconnect loses events. The gap is logged so it can be filed
-                # as a data_quality_issue rather than silently disappearing.
+                # A reconnect loses events; logged so the gap can be filed.
                 log.warning("liquidation_stream_reconnect", error=str(exc), backoff=backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
@@ -164,13 +134,8 @@ class LiquidationCapture:
 
 
 class OpenInterestCapture:
-    """Polled, because there is no websocket for open interest.
-
-    REST history reaches about 30 days, so anything older than that simply does
-    not exist unless it was captured. Polling cadence is a deliberate trade-off:
-    5 minutes is fine for the 1-7 day horizon of §0.2 and keeps well inside the
-    public rate limit.
-    """
+    """Polled open interest (no websocket; REST history ~30 days). 5 min suits §0.2's
+    horizon and the public rate limit."""
 
     kind = "open_interest"
     venue = VENUE

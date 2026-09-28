@@ -1,11 +1,9 @@
-"""Evaluate PREREG-004. Sizing from realised breadth, one trial, no knobs.
+"""Evaluate PREREG-004: vol-target sizing of the PREREG-003 portfolio. One trial, no knobs.
 
-Everything here is fixed by research/PREREG-004-breadth-sizing.md, committed
-(and amended) before this file existed. The constants are asserted rather than
-parameterised: a script with options is a grid however it is run.
+Constants fixed by research/PREREG-004-breadth-sizing.md; do not parameterise. The
+unsized portfolio is imported from run_prereg_003 so the two cannot drift.
 
-The unsized portfolio is built by run_prereg_003, imported rather than copied so
-the two studies cannot drift apart.
+    python scripts/run_prereg_004.py
 """
 
 from __future__ import annotations
@@ -57,12 +55,7 @@ def unsized_portfolio(root: Path) -> tuple[np.ndarray, list[str], np.ndarray, in
 
 
 def trailing_vol(series: np.ndarray, window: int) -> np.ndarray:
-    """Standard deviation over the `window` days ending at t-1.
-
-    Ending at t-1 and not t. A window that includes day t sizes the position
-    using the return it is about to earn, which is the leak the synthetic
-    ordering tests exist to catch. Asserted below rather than trusted.
-    """
+    """Std over the `window` days ending at t-1; including t would leak (probed in main)."""
     out = np.full(series.size, np.nan)
     for t in range(window, series.size):
         out[t] = series[t - window:t].std(ddof=1)
@@ -73,10 +66,8 @@ def size(portfolio: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Returns (sized net series, leverage path, evaluation mask)."""
     vol = trailing_vol(portfolio, VOL_WINDOW)
 
-    # sigma_target is the realised volatility of the first CALIBRATION_DAYS of
-    # *live* days, fixed from then on. Known before the evaluated window opens,
-    # so it is causal; it is a scale, and Sharpe is invariant to it except
-    # through the cap.
+    # sigma_target: realised vol of the first CALIBRATION_DAYS live days, fixed before
+    # evaluation opens (causal).
     sigma_target = portfolio[:CALIBRATION_DAYS].std(ddof=1)
 
     leverage = np.zeros(portfolio.size)
@@ -86,9 +77,7 @@ def size(portfolio: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     delta = np.zeros(portfolio.size)
     delta[1:] = np.abs(np.diff(leverage))
     delta[0] = leverage[0]
-    # Charged on every day the notional moves, not only on sign flips. Vol
-    # targeting resizes daily and that traded notional is real; a sizing rule
-    # free to trade is a rule that will look good.
+    # Charge every notional change, not only sign flips.
     sized = leverage * portfolio - delta * RESIZE_LEGS * float(BINANCE_RETAIL.per_side)
 
     evaluated = np.zeros(portfolio.size, dtype=bool)
@@ -125,8 +114,7 @@ def main() -> int:
 
     sized, leverage, evaluated = size(portfolio)
 
-    # The leak check, run rather than asserted in prose: perturbing day t must
-    # not change the leverage applied on day t.
+    # Leak probe: perturbing day t must not change the leverage applied on day t.
     probe = portfolio.copy()
     probe[VOL_WINDOW + 5] += 0.05
     moved = int(np.sum(size(probe)[1][:VOL_WINDOW + 6] != leverage[:VOL_WINDOW + 6]))
@@ -157,9 +145,7 @@ def main() -> int:
     print("\nby quarter, sized vs unsized (trimmed drops the most extreme 1%)")
     qs, qu = quarters(eval_days, live_sized), quarters(eval_days, live_unsized)
     ql = quarters(eval_days, live_lev)
-    # Pairs live per quarter: the registered confound. More pairs mechanically
-    # lowers portfolio volatility and so raises leverage, with no change in
-    # correlation. The leverage column must be read against this one.
+    # Pairs live per quarter: the registered confound (more pairs -> lower vol -> more leverage).
     qp = quarters(eval_days, present[evaluated])
     print(f"{'':8s} {'pairs':>6s} {'lev':>6s} {'unsized':>10s} {'sized':>10s} "
           f"{'unsz trim':>10s} {'sz trim':>10s}")

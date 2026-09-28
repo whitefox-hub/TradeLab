@@ -1,16 +1,7 @@
 """Hard limits and the kill switch. Plan.md §14.1.
 
-Evaluated by a component **independent of the strategy** and able to veto any
-order. Two consequences follow from that word and they are the reason this
-module exists at all:
-
-* Positions and orders are counted **here**, from fills the engine observed, not
-  from anything the strategy reports. A strategy that miscounts its own state is
-  exactly the case these limits exist for, so trusting its count would disable
-  them precisely when they are needed.
-* The limits are enforced in **every** mode, backtest and simulator included
-  (§12.2). A limiter that only activates in production has its first real
-  execution with real money.
+Independent of the strategy: state is counted here from observed fills, never from what the
+strategy reports, and limits apply in every mode (§12.2).
 """
 
 from __future__ import annotations
@@ -49,16 +40,14 @@ class Breach(StrEnum):
     EVENT_CONTEXT = "event_context"
 
 
-#: Breaches that stop the whole run rather than one order. Halting on a loss
-#: limit and then accepting the next order would make the limit decorative.
+#: Breaches that stop the whole run rather than one order.
 HALTING: frozenset[Breach] = frozenset({
     Breach.MAX_DAILY_LOSS,
     Breach.MAX_DRAWDOWN_FROM_PEAK,
     Breach.MAX_CONSECUTIVE_ERRORS,
 })
 
-#: A halt a human must clear. A drawdown limit that resumes by itself has not
-#: been reviewed, and the review is the control (§14.1).
+#: A halt a human must clear; the review is the control (§14.1).
 REQUIRES_HUMAN: frozenset[Breach] = frozenset({Breach.MAX_DRAWDOWN_FROM_PEAK})
 
 
@@ -82,12 +71,7 @@ class RiskLimits:
     max_price_deviation_bps: Decimal = Decimal(50)
 
 
-#: What each limit stops, in one line, next to the limit it describes.
-#:
-#: Here rather than on the screen, so a page cannot describe a limit that no
-#: longer exists or miss one that was added. A test asserts every field of
-#: `RiskLimits` appears, which is what makes adding a limit without explaining
-#: it fail rather than ship.
+#: What each limit stops, one line per `RiskLimits` field (a test enforces full coverage).
 STOPS: dict[str, str] = {
     "max_open_positions":
         "A book wide enough that no single position matters is also one nobody "
@@ -147,11 +131,7 @@ class Decision:
 
     @property
     def damped(self) -> bool:
-        """Allowed, but at a size news cut down.
-
-        A breach on an allowed decision would read as a refusal anywhere that
-        only checks `breach`, so the one case where both are set has a name.
-        """
+        """Allowed, but at a size news cut down (the one case with both allowed and breach)."""
         return self.allowed and self.breach is Breach.EVENT_CONTEXT
 
 
@@ -169,16 +149,10 @@ class RiskEngine:
     ) -> None:
         self.limits = limits
         self.account = account
-        # How news reaches a decision. Injected rather than looked up here, so
-        # the engine stays independent of where events are stored and a
-        # backtest can supply a point-in-time view of its own.
-        #
-        # It conditions size; it does not produce a signal. §11.7 is explicit
-        # that sign is an input to an expected-reaction model and not a signal,
-        # so what an event earns here is a worse prior, not a direction.
+        # Injected so a backtest can supply a point-in-time view. Conditions size only,
+        # never direction (§11.7).
         self.event_context = event_context
-        # Five strategies in one correlation cluster are one bet (§13.1), so a
-        # per-strategy position cap does not cap the exposure that matters.
+        # One correlation cluster is one bet (§13.1).
         self.clusters = clusters or {}
         self._order_times: list[datetime] = []
 
@@ -213,11 +187,7 @@ class RiskEngine:
         account = self.account
         limits = self.limits
 
-        # `reduce_only` first, ahead of the halt check and everything else.
-        # Getting flat is the one action a halted run still needs to take, and
-        # refusing it here left `kill()` as the only exit — which reaches the
-        # adapter directly and so leaves exits entirely unchecked. An order that
-        # can only reduce a position cannot breach a limit by being allowed.
+        # reduce_only first, ahead of the halt check: a halted run must still get flat.
         if order.reduce_only:
             return Decision(allowed=True)
 
@@ -228,19 +198,8 @@ class RiskEngine:
         if not loss_check.allowed:
             return loss_check
 
-        # §14.1: reject orders far from mid, to protect against corrupt data.
-        #
-        # A mid of zero or below is *itself* corrupt data — it is what a broken
-        # feed reports — so it refuses rather than skipping the check. The first
-        # version skipped on `mid_price > 0`, which disabled the guard against
-        # corrupt data using one particular kind of corrupt data: a price ten
-        # times the real one was refused with a good mid and **allowed** with a
-        # mid of zero. Measured, not imagined.
-        #
-        # `None` still skips, and that is a different statement: the caller says
-        # it has no reference, which a backtest without book data legitimately
-        # does. A caller on a path that reaches a venue must supply one, because
-        # "no reference" is not "no deviation".
+        # §14.1: reject orders far from mid. A mid <= 0 is corrupt data and refuses (never
+        # skip). None skips: no reference (backtest); venue paths must supply one.
         if mid_price is not None:
             if mid_price <= 0:
                 return _refuse(
@@ -295,9 +254,7 @@ class RiskEngine:
                 f"last entry {(at - position.last_entry_at).total_seconds():.0f}s ago",
             )
 
-        # News, before size. An event that halves the intended position has to
-        # do so before the minimum-viable check, or an order gets approved at a
-        # size it will never be sent at.
+        # News before size, so min-viable is judged on the damped size.
         context = self.event_context(order.asset, at) if self.event_context else None
         if context is not None and context.size_multiplier < 1.0:
             order = Order(
@@ -309,15 +266,9 @@ class RiskEngine:
                 strategy_id=order.strategy_id,
             )
 
-        # Size, judged on the quantised quantity: the venue will round, so
-        # approving an unrounded size approves something that will not trade.
+        # Size is judged on the quantised quantity, as the venue will round.
         def with_event_reason(detail: str) -> str:
-            """Both size refusals say when news caused them.
-
-            "below min_viable" on an order the strategy sized correctly is
-            otherwise unaccountable — the operator sees a rejection for a size
-            they never chose.
-            """
+            """Append the event damping to a size refusal that news caused."""
             if context is None or context.size_multiplier >= 1.0:
                 return detail
             return (f"{detail} after event damping to "
@@ -395,14 +346,9 @@ class RiskEngine:
     def held_excess(self, prices: dict[str, Decimal]) -> dict[str, Decimal]:
         """How far each held position is over its size cap, in units of the asset.
 
-        The order-time check in `check` sees a position once, at the size it
-        was opened at. A position that grows by itself is never seen again.
-        RESULT-007 is the case: a short opened at 0.87% of equity reached about
-        a third of the book in a week, while every limit reported nothing.
-
-        The cap is the tighter of `max_position_pct_equity` of current equity
-        and `max_position_notional`. With no equity left, every position is
-        over any fraction of it and the whole of it is excess.
+        `check` only sees a position at entry; growth by price is caught here (RESULT-007).
+        Cap = min(max_position_pct_equity x equity, max_position_notional); equity <= 0 means
+        the whole position is excess.
         """
         limits, equity = self.limits, self.account.equity
         excess: dict[str, Decimal] = {}
@@ -421,12 +367,7 @@ class RiskEngine:
         return excess
 
     def enforce(self, at: datetime) -> Decision:
-        """Evaluate account conditions and halt if any has fired.
-
-        Called on every tick, not only when an order is being placed: a daily
-        loss limit that is checked only when the strategy wants to trade does
-        not fire on a losing position the strategy is holding quietly.
-        """
+        """Evaluate account conditions and halt if any has fired. Called every tick."""
         decision = self.check_account(at)
         if not decision.allowed and decision.halts:
             self.halt(f"{decision.breach}: {decision.detail}")

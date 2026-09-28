@@ -1,15 +1,7 @@
-"""Point-in-time asset universe from Binance USD-M futures. Plan.md §4.4.
+"""Asset universe and exchange constraints from Binance USD-M futures (Plan.md §4.4).
 
-The universe is the defence against survivorship bias, and it is also where the
-exchange constraints live. A backtest that sizes orders with today's `min_notional`
-executes trades that would have been rejected at the time.
-
-Caveat, stated because it matters: `exchangeInfo` is a *snapshot*. It lists what
-exists now, with current tick/lot sizes, and says nothing about delisted contracts
-or past parameter values. So this collector seeds the universe and must be run on
-a schedule from now on — each run is a new `valid_from` row. Listing dates are
-recovered separately from the first day of available kline data.
-"""
+`exchangeInfo` is a snapshot (current constraints, no past values), so each scheduled run
+is a new `valid_from` row."""
 
 from __future__ import annotations
 
@@ -50,8 +42,7 @@ def snapshot(client: httpx.Client | None = None) -> list[dict]:
                 "asset": symbol["symbol"],
                 "venue": VENUE,
                 "valid_from": observed_at,
-                # onboardDate is the venue's own listing timestamp. Where it is
-                # absent, the first kline day is the fallback (see module docstring).
+                # onboardDate is the venue's listing timestamp.
                 "listed_at": datetime.fromtimestamp(symbol["onboardDate"] / 1000, UTC)
                 if symbol.get("onboardDate")
                 else observed_at,
@@ -69,12 +60,7 @@ def snapshot(client: httpx.Client | None = None) -> list[dict]:
 
 
 def liquid_subset(rows: list[dict], quote: str = "USDT", limit: int | None = None) -> list[str]:
-    """Deterministic asset selection for phase 1.
-
-    Ordered by listing date, not by current volume: ranking by today's volume
-    would pick the winners of the last six years, which is survivorship bias
-    introduced at the moment of universe construction (§4.4).
-    """
+    """Deterministic phase-1 selection, ordered by listing date, not current volume (§4.4)."""
     eligible = [
         r for r in rows
         if r["quote_asset"] == quote and r["status"] == "TRADING"

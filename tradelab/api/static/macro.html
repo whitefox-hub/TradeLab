@@ -110,11 +110,8 @@ function card(s) {
 
 async function load() {
   const series = await api("/api/macro/series");
-  // The ones asked for by name first, then the rest. A screen that sorts
-  // alphabetically buries the rate behind the CPI.
-  // Grouped by where money would go, not alphabetically: the short end and the
-  // dollar first because they are cash's alternatives, then the risk assets it
-  // would be leaving, then credit, then what sets the whole level.
+  // Fixed order, not alphabetical: cash alternatives, risk assets, credit, level-setters;
+  // unlisted series follow.
   const order = ["DGS2", "DTWEXBGS", "SP500", "VIX", "GOLD", "WTI",
                  "HYSPREAD", "DGS10", "FEDFUNDS", "CPIAUCSL"];
   const rank = (code) => { const i = order.indexOf(code); return i < 0 ? 999 : i; };

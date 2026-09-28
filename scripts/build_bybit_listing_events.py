@@ -1,9 +1,8 @@
 """Bybit half of the PREREG-002 cohort.
 
-Bybit publishes `launchTime` on the instrument itself, so unlike Binance there
-is no announcement parser between the hypothesis and the data. The listing day
-is still taken as the first available kline, for the same reason and so the two
-venues are measured the same way.
+Listing day is the first available kline, as for Binance, so both venues match.
+
+    python scripts/build_bybit_listing_events.py
 """
 
 from __future__ import annotations
@@ -68,8 +67,7 @@ def main() -> int:
                         "start": start, "limit": WINDOW_DAYS},
             ).json()
             bars = payload.get("result", {}).get("list") or []
-            # Bybit returns newest first; the rest of this pipeline assumes the
-            # opposite, and a reversed window silently inverts every return.
+            # Bybit returns newest first; unreversed, every return inverts silently.
             bars = list(reversed(bars))
             if len(bars) < 9:
                 return {"_drop": "short_history" if bars else "no_klines"}

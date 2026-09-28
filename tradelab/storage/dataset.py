@@ -1,8 +1,6 @@
 """Dataset version construction and registration. Plan.md §5.1, §16.1.
 
-A dataset version is the hash of its manifest. Every experiment records that hash,
-which is what makes "which data produced this number" a query rather than an
-investigation.
+A dataset version is the hash of its manifest; every experiment records that hash.
 """
 
 from __future__ import annotations

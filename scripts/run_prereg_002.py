@@ -1,7 +1,6 @@
-"""Evaluate PREREG-002: the PREREG-001 configuration on both venues.
+"""Evaluate PREREG-002: the PREREG-001 configuration, unchanged, on Binance and Bybit.
 
-Unchanged from PREREG-001 in every respect that could be tuned. The only
-difference is the sample.
+    python scripts/run_prereg_002.py
 """
 
 from __future__ import annotations
@@ -50,8 +49,7 @@ def main() -> int:
     bybit = pl.read_parquet(args.bybit).select(COLUMNS)
     pooled = pl.concat([binance, bybit]).sort("listing_day_ms")
 
-    # Per venue first, because a pooled number that hides a sign flip between
-    # venues is not one result but two disagreeing ones.
+    # Per venue first: a pooled number can hide a sign flip between venues.
     report("binance", binance)
     report("bybit", bybit)
     print()

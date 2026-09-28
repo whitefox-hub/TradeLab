@@ -1,21 +1,9 @@
-"""What the five-venue panel was missing. Plan.md §4.4, RESULT-007.
+"""Compare the survivorship-neutral Binance panel with the five-venue one. §4.4, RESULT-007.
 
-Compares the survivorship-neutral Binance panel against the five-venue one it
-replaces, and describes what was added. Reads prices and funding per asset and
-nothing conditioned on a signal, so it spends no trial.
+Reports agreement on shared asset-days (fewer old settlements = rate-limited truncation),
+cross-section removed per day, and delisted names' exit behaviour. No signal, no trial.
 
-Three questions:
-
-1. **Agreement.** Where both panels hold an asset-day, do they say the same
-   thing? The older collector broke out of its funding loop on any non-list
-   answer, so a rate-limited asset would have come back short and looked whole.
-   This is where that would show: fewer settlements in the old panel than in
-   the new one on the same day.
-2. **Composition.** How much of the tradeable cross-section, day by day, the
-   five-venue filter and the survivors-only filter removed.
-3. **The dead.** What the delisted names did on the way out. This is the part
-   of the distribution a short book is exposed to, and the old panel had none
-   of it.
+    python scripts/check_panel_survivorship.py
 """
 
 from __future__ import annotations

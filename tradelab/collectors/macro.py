@@ -1,28 +1,9 @@
-"""Macro series and their release calendar. Plan.md §4.7, §20.6.
+"""Macro series and release calendar (Plan.md §4.7, §20.6). Keyless: FRED CSV, plus Yahoo
+(FRED has no usable gold; stooq CSV returns a web page).
 
-Two sources, chosen by what is reachable without a key rather than by
-preference. FRED's public CSV endpoint serves rates, yields, WTI, the dollar
-index and CPI; it has no usable gold series and stooq's CSV endpoint now returns
-a web page, so gold comes from Yahoo.
-
-The distinction this module exists to preserve is **when a number became
-knowable**, not what it is. Three fields carry it and they are not
-interchangeable:
-
-* `scheduled_for` — when the market expected the print.
-* `actual_at` — the publication instant. Not the date: a daily timestamp on an
-  intraday release puts the event at midnight, and every reaction measured from
-  it is measured from the wrong moment.
-* `available_at` — `actual_at` plus the feed's own delay, which is when a
-  subscriber could have acted.
-
-A series that is revised (`is_revised`) carries a further trap. The value FRED
-serves today for a month two years ago is not the value that was published then,
-and using it as if it were real-time answers a different question — what we know
-now rather than what was known then. `has_vintages` marks the series where that
-distinction is recoverable; results depending on one that is revised but has no
-vintages are flagged rather than quietly reported.
-"""
+Timing fields: `scheduled_for` (expected), `actual_at` (publication instant, not date),
+`available_at` (actual_at + feed delay). FRED serves revised values today; results on a
+series with `is_revised` and no `has_vintages` must be flagged."""
 
 from __future__ import annotations
 
@@ -46,14 +27,10 @@ class SeriesSpec:
     has_vintages: bool
     is_revised: bool
     session_close: str | None = None
-    #: Seconds between the release instant and the moment the feed carries it.
-    #: Zero where the series is a market price rather than a scheduled print.
+    #: Seconds from release to the feed carrying it; zero for market prices.
     publish_lag_s: int = 0
 
 
-#: The catalogue. Each entry states whether it is revised and whether the
-#: revisions are recoverable, because those two facts decide whether a study
-#: using the series is answering the question it thinks it is.
 CATALOGUE: tuple[SeriesSpec, ...] = (
     SeriesSpec("FEDFUNDS", "Federal funds effective rate", "rate", "fred",
                "FEDFUNDS", has_vintages=True, is_revised=True,
@@ -71,10 +48,6 @@ CATALOGUE: tuple[SeriesSpec, ...] = (
                "CL=F", has_vintages=False, is_revised=False),
     SeriesSpec("GOLD", "Gold front month", "price", "yahoo",
                "GC=F", has_vintages=False, is_revised=False),
-    # Where money goes when it leaves a risk asset, which is the question this
-    # catalogue exists to let an operator ask. Rates and the dollar were here
-    # already; equities, the price of fear and the short end were not, and
-    # without them "is money flowing elsewhere" has no elsewhere to point at.
     SeriesSpec("SP500", "S&P 500", "index", "yahoo",
                "^GSPC", has_vintages=False, is_revised=False),
     SeriesSpec("VIX", "CBOE volatility index", "index", "yahoo",
@@ -82,9 +55,6 @@ CATALOGUE: tuple[SeriesSpec, ...] = (
     SeriesSpec("DGS2", "US 2-year treasury yield", "yield", "fred",
                "DGS2", has_vintages=False, is_revised=False,
                session_close="17:00 America/New_York", publish_lag_s=57_600),
-    # Credit. A widening high-yield spread is money leaving risk before it
-    # shows up anywhere else, and it is the one series here that says so
-    # without being a price somebody is already watching.
     SeriesSpec("HYSPREAD", "US high-yield option-adjusted spread", "rate", "fred",
                "BAMLH0A0HYM2", has_vintages=False, is_revised=True,
                session_close="17:00 America/New_York", publish_lag_s=86_400),
@@ -99,8 +69,7 @@ def _fred(symbol: str, client: httpx.Client) -> list[tuple[date, float]]:
     rows: list[tuple[date, float]] = []
     for line in text.strip().splitlines()[1:]:
         day, _, value = line.partition(",")
-        # FRED writes "." for a missing observation. Skipped rather than zeroed:
-        # a holiday is an absence, and a zero rate is a different claim.
+        # FRED writes "." for missing; skip, never zero.
         if value.strip() in {".", ""}:
             continue
         try:
@@ -137,16 +106,9 @@ def observations(code: str, client: httpx.Client | None = None) -> list[tuple[da
 
 
 def surprise_sigma(actual: float, consensus: float, dispersion: float) -> float | None:
-    """Surprise on the same scale as everything else the system measures.
+    """Surprise in sigma (comparable with §11.3 reactions and §20.5 ratings).
 
-    In sigma rather than in the series' own units, so a CPI surprise and a rate
-    surprise are comparable, and so that a macro reaction sits on the same scale
-    as §11.3's event reactions and §20.5's human ratings.
-
-    `None` when dispersion is unknown or zero: a surprise with no scale is not a
-    small surprise, it is an unmeasured one, and reporting it as zero would put
-    every such release at the centre of the distribution.
-    """
+    `None` when dispersion is unknown or zero: unmeasured, not zero."""
     if dispersion is None or dispersion <= 0:
         return None
     return (actual - consensus) / dispersion

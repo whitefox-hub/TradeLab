@@ -1,15 +1,7 @@
-"""Durable resume points. Plan.md §4.2, §5.2.
+"""Durable resume points (Plan.md §4.2, §5.2).
 
-One rule governs this module, and it is the difference between a restart that
-loses nothing and one that loses data without saying so:
-
-    **Write the data, then advance the watermark. Never the other way round.**
-
-Advancing first means a crash between the two leaves a watermark claiming data
-that was never persisted, and the next run resumes past a hole it will never know
-about. Advancing last means a crash re-reads a little — which is harmless,
-because partitions are immutable and re-reads are deduplicated.
-"""
+Write the data, then advance the watermark, never the reverse: advancing first lets a crash
+hide a hole; advancing last only causes a harmless deduplicated re-read."""
 
 from __future__ import annotations
 
@@ -61,11 +53,7 @@ def start(session: Session, source: uuid.UUID, mode: str, period_start: datetime
 
 def advance(session: Session, run: IngestionRun, upto: datetime, rows: int,
             output_uri: str | None = None) -> None:
-    """Record progress. Call this ONLY after the data is durably on disk.
-
-    `rows` accumulates, so this is safe to call on every flush — which is what
-    makes a long-running collector observable while it runs.
-    """
+    """Record progress. Call ONLY after the data is durably on disk; `rows` accumulates."""
     run.watermark = upto
     run.rows_written = (run.rows_written or 0) + rows
     if output_uri:

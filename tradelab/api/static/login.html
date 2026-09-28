@@ -76,8 +76,7 @@ $("form").addEventListener("submit", async (event) => {
       $("err").textContent = (await response.json()).detail || "sign in failed";
       return;
     }
-    // Only ever a path on this origin. An open redirect on a login page is how a
-    // session gets handed to somewhere else.
+    // Same-origin paths only: prevents an open redirect.
     location.href = next.startsWith("/") && !next.startsWith("//") ? next : "/trade_lab";
   } catch {
     $("err").textContent = "could not reach the server";
@@ -86,7 +85,6 @@ $("form").addEventListener("submit", async (event) => {
   }
 });
 
-// Already signed in? Then this page has nothing to do.
 fetch("/api/me", { credentials: "same-origin" })
   .then((r) => { if (r.ok) location.replace("/trade_lab"); });
 </script>

@@ -1,18 +1,7 @@
 """What a risk limit may be set to. Plan.md §14.1, §12.4, §20.4.
 
-Server side, and that is the point rather than a detail: a bound in the form is
-a suggestion, because the endpoint is reachable without the form.
-
-**These are bounds on the bounds.** A risk limit is the thing that stops a bad
-decision, so a limit set loosely enough is a limit that has been removed while
-still appearing on the screen — `max_daily_loss` at 1.0 is "halt after losing
-everything", which reads like a configured control and is not one. The ceilings
-below are what keeps a limit a limit.
-
-They are deliberately not tight. §12.4 puts sizing and risk limits in the
-operator's hands on purpose, and a bound that forces one value is a setting
-pretending to be a choice. What is refused is the value that disables the
-control, not the value that is merely aggressive.
+Server-side bounds on the bounds: refuse values that disable a control, not merely
+aggressive ones (§12.4 leaves sizing to the operator).
 """
 
 from __future__ import annotations
@@ -41,9 +30,7 @@ def _d(value: Any, field: str) -> Decimal:
         raise Invalid(f"{field}: {value!r} is not a number") from None
 
 
-#: One entry per field of `RiskLimits`. A field with no bound cannot be set,
-#: which is the safe direction: a limit nobody bounded is one anybody can
-#: disable. A test asserts the two lists match.
+#: One entry per `RiskLimits` field (a test asserts they match); unbounded fields cannot be set.
 BOUNDS: dict[str, Bound] = {
     "max_open_positions": Bound(
         Decimal(1), Decimal(200), True,
@@ -104,8 +91,7 @@ BOUNDS: dict[str, Bound] = {
 def validate(values: dict[str, Any]) -> dict[str, Decimal]:
     """Refuse anything the engine cannot act on. Raises `Invalid` with the why.
 
-    Returns the parsed values, so a caller cannot validate one representation
-    and store another.
+    Returns the parsed values, so the caller stores what was validated.
     """
     import dataclasses
 
@@ -117,8 +103,7 @@ def validate(values: dict[str, Any]) -> dict[str, Decimal]:
         raise Invalid(f"missing {missing}: a configuration sets every limit, "
                       "because one left out would silently take a default "
                       "nobody chose")
-    # An unknown field is a typo or a misunderstanding, and accepting it
-    # silently is how an operator comes to believe a limit exists.
+    # An unknown field is a typo; accepting it fakes a limit.
     unknown = sorted(set(values) - expected)
     if unknown:
         raise Invalid(f"unknown {unknown}: no such limit")
@@ -134,9 +119,7 @@ def validate(values: dict[str, Any]) -> dict[str, Decimal]:
                           f"{bound.high}. {bound.describes}")
         parsed[name] = number
 
-    # Pairs that are individually fine and jointly meaningless. A minimum above
-    # its maximum refuses every order, which is a halt that reports itself as a
-    # sizing rule.
+    # Pairs individually fine but jointly meaningless (min >= max refuses every order).
     for low_name, high_name in (
         ("min_position_notional", "max_position_notional"),
         ("min_position_pct_equity", "max_position_pct_equity"),

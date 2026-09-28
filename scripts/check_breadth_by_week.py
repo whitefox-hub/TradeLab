@@ -1,20 +1,9 @@
-"""Does the neutral book's breadth survive week to week? §13.1, §0.4a.
+"""Does the neutral book's breadth (FEASIBILITY-008) survive period by period? §13.1, §0.4a.
 
-FEASIBILITY-008 measured a dollar-neutral book at breadth ~150 of 150 over the
-whole panel, and said plainly what was missing: **that is an average, and it may
-span zero.** §13.1 says correlations converge toward one under stress, and
-FINDING-004 is this project's record of what skipping that check costs — a
-pooled breadth of 151 that ran 11 / 0 / 103 / 4 by quarter.
+Breadth = mean asset variance / mean fixed-portfolio variance: realised variances, since a
+100x100 covariance is not estimable from a week. No return hypothesis read; no trial.
 
-So this runs the same measurement period by period. No rule is tested and no
-return hypothesis is read, so it costs no trial.
-
-**Why realised variance and not a covariance.** Estimating a 100x100 covariance
-needs far more days than assets, and a week is seven. But breadth is a ratio of
-two variances — the average asset's against the portfolio's — and both are
-estimable from a handful of days for a *fixed* portfolio. So the portfolios are
-drawn once, held across every period, and their realised variance is measured
-in each. Drawing fresh weights per period would measure the draw.
+    python scripts/check_breadth_by_week.py [--assets 100]
 """
 
 from __future__ import annotations
@@ -25,13 +14,11 @@ from pathlib import Path
 import numpy as np
 from check_cross_sectional_breadth import returns_matrix
 
-#: Held across every period. A portfolio redrawn each week would make the
-#: measurement about the draw rather than about the market.
+#: Portfolios drawn once and held across periods; redrawing would measure the draw.
 DRAWS = 200
 SEED = 20260926
 
-#: Days of history the trailing beta is fitted on. One quarter, the window this
-#: project has used since PREREG-003, rather than one chosen here.
+#: Trailing-beta fit window: one quarter, inherited from PREREG-003.
 BETA_WINDOW = 90
 
 
@@ -43,8 +30,7 @@ def _full_sample(block: np.ndarray, market: np.ndarray) -> np.ndarray:
 
 
 def _trailing(block: np.ndarray, market: np.ndarray) -> np.ndarray:
-    """Beta fitted on the days before, applied forward. Never inside its own
-    window, so the hedge is one a strategy could actually have put on."""
+    """Causal hedge: beta fitted on the prior BETA_WINDOW days, applied forward."""
     out = np.full(block.shape, np.nan)
     for t in range(BETA_WINDOW, block.shape[1]):
         past_market = market[t - BETA_WINDOW:t]
@@ -106,15 +92,8 @@ def main() -> int:
     market = block.mean(axis=0)
     weights = fixed_portfolios(count, DRAWS, SEED)
 
-    # Two ways of removing the factor, and the difference is the point.
-    #
-    # Full-sample beta is what FEASIBILITY-008 used, and it is a lookahead
-    # inside every window: the beta applied in week three was fitted using week
-    # ninety. It is kept as the upper bound, labelled.
-    #
-    # Trailing beta is what a strategy can actually have — estimated on the
-    # BETA_WINDOW days before the period and applied forward, never refitted
-    # inside the window it hedges. If breadth survives that, it is real.
+    # Full-sample beta (FEASIBILITY-008's) is a lookahead, kept only as an upper bound;
+    # trailing beta is the causal one.
     residuals = {"full-sample beta (lookahead)": _full_sample(block, market),
                  "trailing beta (causal)": _trailing(block, market)}
 
@@ -131,8 +110,7 @@ def main() -> int:
     residual = np.nan_to_num(
         residuals["trailing beta (causal)"][:, BETA_WINDOW:])
 
-    # The worst periods, named, because an average that spans them is the
-    # figure FINDING-004 was wrong about.
+    # Name the worst periods: an average hiding them is what FINDING-004 got wrong.
     size = 30
     values = [(s, breadth_over(residual[:, s:s + size], weights))
               for s in range(0, residual.shape[1] - size + 1, size)]

@@ -1,15 +1,7 @@
 """The intent log. Plan.md §14.3.
 
-Append-only, and it records **what the strategy wanted**, not only what was
-executed. Two things depend on that distinction:
-
-* Reconstructing why a position was opened. An order book of executions says
-  what happened; only the intent says what the decision was, and a refused order
-  is a decision too.
-* Recovery. State is persisted *before* the order is sent, never after, so a
-  process that dies between send and acknowledgement knows on startup that the
-  order might exist and goes looking for it. A log written after the fact cannot
-  answer that question, which is exactly when it is asked.
+Append-only; records what the strategy wanted (vetoes included), not only executions.
+SENT is persisted before the order goes out, so a crash leaves something to resolve.
 """
 
 from __future__ import annotations
@@ -35,8 +27,7 @@ class IntentState(StrEnum):
     ABSENT = "absent"          # resolved on restart: the venue never saw it
 
 
-#: States a process can die in while an order may exist at the venue. On
-#: startup these are resolved against the venue before anything else is sent.
+#: An order may exist at the venue; resolved on startup before anything is sent.
 UNRESOLVED: frozenset[IntentState] = frozenset({IntentState.SENT, IntentState.UNKNOWN})
 
 
@@ -52,9 +43,7 @@ class Intent:
     state: IntentState
     reason: str = ""
     venue_order_id: str = ""
-    #: Carried on FILLED records only. A restart rebuilds positions from these,
-    #: and a position rebuilt without the price has the right size and the
-    #: wrong average — reconciliation compares sizes and would not notice.
+    #: FILLED records only; needed to rebuild the average price (reconcile checks size only).
     price: Decimal | None = None
     fee: Decimal | None = None
 
@@ -85,12 +74,7 @@ class Intent:
 
 @dataclass
 class IntentLog:
-    """Append-only. Nothing here is ever updated in place.
-
-    A later record supersedes an earlier one for the same `client_order_id`; the
-    earlier one stays, because the sequence of states is the audit trail and
-    overwriting it would erase the moment the process died.
-    """
+    """Append-only; a later record for a `client_order_id` supersedes, the earlier stays."""
 
     path: Path | None = None
     records: list[Intent] = field(default_factory=list)
@@ -99,14 +83,8 @@ class IntentLog:
     def load(cls, path: Path) -> IntentLog:
         """Read a log back, as a restarted process must before it sends anything.
 
-        Only the last line may be damaged, because only the last line can be
-        torn by a process dying mid-write. It never formed a record, so it is
-        dropped and cut from the file: left there, the next append would join
-        it and turn a torn tail into a corrupt middle. That is the one edit
-        this log ever receives, and it removes bytes, never a record.
-
-        Damage anywhere else is not a crash and is refused. Skipping it would
-        rebuild a position from part of its history.
+        A torn final line (crash mid-write) is truncated from the file so the next append
+        does not join it. Damage anywhere else is refused.
         """
         if not path.exists():
             return cls(path=path)
@@ -164,9 +142,5 @@ class IntentLog:
         return out
 
     def unresolved(self) -> list[Intent]:
-        """Orders that may exist at the venue and whose fate is unknown.
-
-        This is the list a restart has to settle before it sends anything, and
-        it is why `SENT` is written before the call rather than after it.
-        """
+        """Orders that may exist at the venue with unknown fate; settled before a restart sends."""
         return [i for i in self.latest_state().values() if i.state in UNRESOLVED]

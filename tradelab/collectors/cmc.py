@@ -1,20 +1,7 @@
-"""One way in to CoinMarketCap. Plan.md §4.3, §11.4.
+"""Single access point to CoinMarketCap via the official SDK (Plan.md §4.3, §11.4).
 
-Every CMC series here goes through the official SDK in its keyless `public`
-mode, so throttling and error shape are handled once rather than per collector.
-
-**Why the SDK and not the twenty lines of httpx it replaced.** The hand-rolled
-version had to recognise two different throttles by matching their English
-messages — "You've reached the limit for anonymous access" is a ceiling a key
-lifts, "You've hit an IP rate limit" is a speed to wait out — because both
-arrive as a 200 with the message inside the payload. That works until CMC
-rewords one. The SDK raises `RateLimitError` and `ForbiddenError` instead, which
-is the same information as a type.
-
-What did **not** move here is the domain: how a reading is stamped, what counts
-as a change, which band names are the same band. That is where the errors this
-project cares about live, and it stays in the collectors that own it.
-"""
+Uses the SDK because CMC throttles arrive as HTTP 200 with a message; the SDK raises
+typed errors. Domain logic (stamping, bands) stays in the collectors."""
 
 from __future__ import annotations
 
@@ -26,30 +13,15 @@ from typing import Any
 import httpx
 from coinmarketcap import CoinMarketCap, RateLimitError
 
-#: Bounded, because a retry loop that never gives up is a hang with a reason.
-#: The documentation's own advice is to back off and retry on a rate limit.
 MAX_RETRIES = 5
 BACKOFF_SECONDS = 2.0
 
-#: The free plan allows 50 requests a minute. Paced to stay under it rather
-#: than discovered by hitting it: backing off after a rejection wastes the
-#: request that was rejected, and a backfill of a hundred pages would spend
-#: most of its time in retries. 1.3s leaves headroom for clock drift.
+#: Free plan: 50 requests/minute. Paced proactively; 1.3s leaves headroom.
 MIN_INTERVAL_SECONDS = 1.3
 _last_call = 0.0
 
-#: Requests one run may make before it is stopped.
-#:
-#: **A credit is spent per request, not per row** — measured, not assumed. So a
-#: page size is a price: the fear-and-greed history is 1185 days for 3 credits
-#: at 500 a page, and CMC100 is 1000 days for 100 credits at ten a page. The
-#: expensive one is expensive because of a cap, not because of its size.
-#:
-#: The ceiling exists for the run that should have stopped. A full CMC100
-#: backfill is about a hundred requests, so 200 clears the largest legitimate
-#: operation with room, and a loop that gets away costs a bad afternoon rather
-#: than the month. It is a ceiling and not a budget: the budget is the vendor's,
-#: and `budget()` reads it for free.
+#: Per-run request ceiling against runaway loops. One credit per request, not per row
+#: (measured); a full CMC100 backfill is ~100 requests.
 MAX_REQUESTS_PER_RUN = 200
 _spent = 0
 
@@ -72,12 +44,7 @@ class Budget:
 
 
 def budget() -> Budget | None:
-    """What the vendor says is left. None without a key.
-
-    Free to call — measured at zero credits — so checking costs nothing and
-    there is no reason for a script not to report it. Everything else costs one
-    credit a request.
-    """
+    """Vendor-reported credit usage; None without a key. Costs zero credits (measured)."""
     key = os.environ.get(KEY_VAR, "").strip()
     if not key:
         return None
@@ -105,13 +72,8 @@ def reset_budget() -> None:
 
 
 class QuotaReached(RuntimeError):
-    """Anonymous access ran out. Carries whatever was collected before it did.
-
-    A ceiling, not a speed: waiting does not move it, and only a key does. It
-    carries the partial result because the first version of the backfill let
-    the error escape and threw away ninety pages of work with it, so every
-    re-run restarted from inception and hit the same wall in the same place.
-    """
+    """Anonymous quota exhausted (only a key lifts it). Carries the partial result so a
+    backfill keeps what it fetched."""
 
     def __init__(self, collected: list[Any] | None = None) -> None:
         super().__init__(
@@ -120,25 +82,14 @@ class QuotaReached(RuntimeError):
         self.collected = collected or []
 
 
-#: Read from the environment, never from a repo file. §14.4 keeps credentials
-#: out of the tree, and this one is loaded the same way the operator password
-#: is: `set -a && . secrets/api.env`, which is git-ignored.
+#: Environment only, never a repo file (§14.4); loaded from git-ignored secrets/api.env.
 KEY_VAR = "CMC_API_KEY"
 
 
 def client() -> CoinMarketCap:
-    """Keyed when a key is in the environment, keyless otherwise.
+    """Keyed when a key is in the environment, keyless otherwise; both must keep working.
 
-    Both modes are kept working on purpose. The keyless path is what a fresh
-    checkout gets, and a collector that only runs with a credential is one that
-    stops silently on a machine that does not have it — so the fallback is a
-    working mode and not a degraded one. What the key changes is the quota and
-    the catalogue: `globalmetrics_quotes_historical` answers ForbiddenError
-    without it.
-
-    The key is never logged. It is a value that grants access, and a collector
-    that prints one puts it in every log that collector ever writes.
-    """
+    Keyless lacks e.g. `globalmetrics_quotes_historical` (ForbiddenError). Never log the key."""
     key = os.environ.get(KEY_VAR, "").strip()
     if key:
         return CoinMarketCap(api_key=key)
@@ -155,12 +106,9 @@ def _pace() -> None:
 
 
 def call(fn: Any, collected: list[Any] | None = None, **kwargs: Any) -> Any:
-    """One SDK call, paced under the rate limit, retried through it, stopped by
-    a quota, and counted against the run's ceiling.
+    """One SDK call: paced, retried on rate limit, counted against the run ceiling.
 
-    Counted before the request rather than after, so a call that fails and
-    retries still costs what it cost. The vendor charges for the attempt.
-    """
+    Counted before the request: the vendor charges for attempts."""
     global _spent
     if _spent >= MAX_REQUESTS_PER_RUN:
         raise BudgetExceeded(
@@ -174,9 +122,7 @@ def call(fn: Any, collected: list[Any] | None = None, **kwargs: Any) -> Any:
             _pace()
             return fn(**kwargs)
         except RateLimitError:
-            # The SDK reports both throttles this way, so the two are told
-            # apart by whether waiting helps: retries that all fail are a
-            # ceiling in practice, whatever the message called it.
+            # Both throttles raise this; exhausting retries is treated as the quota.
             if attempt == MAX_RETRIES - 1:
                 raise QuotaReached(collected) from None
             time.sleep(delay)

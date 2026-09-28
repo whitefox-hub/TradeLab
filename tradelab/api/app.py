@@ -1,18 +1,7 @@
-"""The operator interface. Plan.md §20.
+"""The operator interface (FastAPI). Plan.md §20.
 
-Two rules shape every route here, and both are refusals.
-
-**It computes nothing.** Every figure returned was computed by a worker and
-persisted. A number that exists only on screen is a number nobody can reproduce,
-so this application reads the registry and reports what is in it — it does not
-calculate a Sharpe, a drawdown or a utilisation. Time series belong to Grafana;
-this surface exists because a decision needs an actor and a timestamp.
-
-**It cannot start live trading.** There is no route that switches a strategy's
-mode, and there is no venue credential in this process. The interface *requests*
-a transition; the gate evaluates it and the executor acts. Mode is displayed,
-never edited, and displayed prominently, because mistaking simulator for live is
-the error this design is most concerned with.
+Invariants: it computes no figure (reads only worker-persisted values; time series belong to
+Grafana, §20.1), and it cannot start live trading (no mode-switch route, no venue credential).
 """
 
 from __future__ import annotations
@@ -49,13 +38,10 @@ from tradelab.config import Settings
 from tradelab.scenario import run as scenario_run
 from tradelab.scenario.tilt import direction as trend_direction
 
-#: Shared chrome and the screens live here. Mounted rather than served per file,
-#: so adding a stylesheet does not mean adding a route.
+#: Static screens and shared chrome, mounted at /static.
 STATIC = Path(__file__).parent / "static"
 
-#: Routes that write. Everything else is a read, and the list is short on
-#: purpose: §20.1 allows this surface to write approvals and lifecycle
-#: transitions, and nothing else.
+#: The only writes §20.1 allows this surface; everything else is a read.
 WRITABLE = frozenset({"approval", "transition_request"})
 
 
@@ -65,11 +51,9 @@ class SignIn(BaseModel):
 
 
 class ConsensusRequest(BaseModel):
-    """What the market expected, entered where no feed supplies it. §20.6.
+    """Operator-entered consensus for a macro release. §20.6.
 
-    No `consensus_at` field, deliberately. It is set to now by the handler and
-    the database refuses any row where it does not precede `scheduled_for`, so a
-    consensus can only ever be recorded for a release that has not happened.
+    No `consensus_at` field: the handler sets it to now and the DB refuses it after `scheduled_for`.
     """
 
     consensus: float
@@ -77,77 +61,40 @@ class ConsensusRequest(BaseModel):
 
 
 class SettingRequest(BaseModel):
-    """A change to an operator setting. Plan.md §12.4, §20.4.
-
-    `rationale` is required and not a formality. §20.3 makes the same demand of
-    gate thresholds, for the same reason: a change with no stated reason is one
-    nobody can review, and six months later the audit log can only say what
-    happened if the reason is next to it.
-    """
+    """A change to an operator setting. Plan.md §12.4, §20.4. `rationale` is required."""
 
     value: dict[str, Any]
     rationale: str = Field(min_length=8)
 
 
 class ScenarioRequest(BaseModel):
-    """The conditions a simulation is told to run under. Plan.md §20.
+    """The market conditions a scenario simulation runs under. Plan.md §20.
 
-    Three fields and no fourth. No asset, because there is one set of conditions
-    and they are the market's; no date, because none of this happened —
-    everything that did is dated and point-in-time and lives in `events`.
-
-    `extra="forbid"` so a client sending a field this does not have gets an
-    error instead of having it dropped. A silently ignored field is how an
-    operator comes to believe a setting took effect.
+    Deliberately no asset or date. `extra="forbid"`: unknown fields error, not dropped.
     """
 
     model_config = {"extra": "forbid"}
 
-    #: The operator's reading of the news. 1 to 10, **5 neutral**: 5 is
-    #: what is held when nothing has happened, and it leaves every
-    #: position exactly as it was. Direction is which side of 5 it sits
-    #: on, derived and never stored - two fields that can disagree is what
-    #: this replaced, and the arithmetic reading magnitude as distance
-    #: from zero tilted the book by a quarter at the value meaning "I
-    #: have heard nothing".
+    #: Operator's news reading, 1-10 with **5 neutral** (leaves positions unchanged). Direction is
+    #: derived from the side of 5, never stored; do not read magnitude as distance from zero.
     trend: int = Field(ge=1, le=10)
-    #: Where on the 1-100 scale to assume the rest of the market sits. An
-    #: assumption, and deliberately a different field from the measured reading
-    #: in `sentiment_readings` — holding both in one number would make an
-    #: opinion indistinguishable from a measurement.
+    #: Assumed market sentiment, 1-100. Kept separate from measured `sentiment_readings`.
     sentiment: int = Field(ge=1, le=100)
-    #: Who decided this. 'manual' is a person's own reading, 'adopted' is a
-    #: computed value a person accepted, 'derived' is written without a person.
-    #:
-    #: PREREG-005 measures whether the *operator's* reading of the news predicts
-    #: anything, and filters on this. A hit credited to a person that was
-    #: computed from a trade count would confirm the wrong hypothesis, and after
-    #: the fact the log could not tell them apart.
+    #: 'manual' = person's reading, 'adopted' = computed value a person accepted, 'derived' = no
+    #: person. PREREG-005 filters on this to test only the operator's own reading.
     source: str = Field(default="manual", pattern="^(manual|derived|adopted)$")
 
 class RiskConfigRequest(BaseModel):
     """A new risk limit configuration. Plan.md §14.1, §12.4, §20.
 
-    §12.4 puts sizing and risk limits in the operator's hands — unlike signal
-    parameters, which cannot be edited anywhere because changing one creates a
-    new strategy that re-enters the funnel.
-
-    A configuration is **created, never edited**. §14.1 versions them and has
-    runs reference one rather than embed it, so a change is traceable and a
-    limit is never altered beneath a position opened under it.
-
-    `extra="forbid"` so an unknown field is refused rather than dropped: a
-    silently ignored limit is one the operator believes is in force.
+    Created, never edited (§14.1: runs reference a version). `extra="forbid"`.
     """
 
     model_config = {"extra": "forbid"}
 
     name: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9 _.-]+$")
-    #: Every limit, because one left out would take a default nobody chose.
-    #: Bounds live in tradelab.risk.bounds and are checked on the way in.
+    #: Every limit (none may fall back to a default); bounds in tradelab.risk.bounds.
     limits: dict[str, Any] = Field(min_length=1)
-    #: Why. A limit change with no stated reason is one nobody can review, and
-    #: §14.1's whole argument for versioning them is that a change is traceable.
     rationale: str = Field(min_length=10, max_length=1000)
 
 
@@ -166,8 +113,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     secret = os.environ.get("TRADELAB_SESSION_SECRET", "")
     if len(secret) < 32:
-        # Generated rather than defaulted to a constant: a shared default secret
-        # is worse than no session at all, because it looks like security.
+        # Random per process, never a constant default secret.
         from tradelab.api.security import new_secret
 
         secret = new_secret()
@@ -179,13 +125,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.middleware("http")
     async def no_stale_chrome(request, call_next):
-        """Keep the browser from serving an old menu.
-
-        The sidebar lives in one file, so a cached app.js means a screen that
-        exists is missing from the navigation — which reads as the screen not
-        having been built. Revalidation costs one conditional request and
-        removes a class of confusion that is indistinguishable from a bug.
-        """
+        """Force revalidation of /static so a cached app.js cannot hide new sidebar entries."""
         response = await call_next(request)
         if request.url.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
@@ -195,12 +135,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         with make_session() as session:
             yield session
 
-    # Written as a default rather than as an `Annotated` alias on purpose. This
-    # module uses `from __future__ import annotations`, which turns every
-    # annotation into a string, and a local alias is not resolvable from the
-    # module namespace — FastAPI read `session` as a query parameter and every
-    # route 422'd. The 401 tests still passed, because the operator dependency
-    # raised first, so the suite was green against a broken API.
+    # A default, not a local `Annotated` alias: with `from __future__ import annotations` FastAPI
+    # cannot resolve a local alias, treats `session` as a query param, and every route 422s.
     session_dep = Depends(db)
 
     def audit(session: Session, actor: str, action: str, kind: str,
@@ -239,8 +175,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         expected = os.environ.get("TRADELAB_ADMIN_HASH", "")
         salt = os.environ.get("TRADELAB_ADMIN_SALT", "")
         if row is None or not expected or not verify_password(body.password, salt, expected):
-            # One message for both failures. Distinguishing them tells an
-            # attacker which half they got right.
+            # Same message for unknown user and bad password (no user enumeration).
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
         response.set_cookie(
             SESSION_COOKIE, sessions.issue(row.email), httponly=True, samesite="strict",
@@ -276,11 +211,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/api/runs")
     def runs(who: Operator = operator, session: Session = session_dep) -> list[dict]:
-        """Mode is returned on every row and is never accepted on any.
-
-        There is no PATCH for this resource and no field that would change it.
-        §20.2: production is reached through the capital ramp, not entered.
-        """
+        """Runs, newest first. Mode is read-only: no route changes it (§20.2)."""
         rows = session.execute(sa.text(
             "SELECT id, strategy_id, mode, venue, status, capital_tier, halt_reason, "
             "started_at, ended_at FROM runs ORDER BY started_at DESC LIMIT 200"
@@ -310,13 +241,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/strategies/{strategy_id}")
     def strategy_detail(strategy_id: uuid.UUID, who: Operator = operator,
                         session: Session = session_dep) -> dict:
-        """One strategy with the studies and verdicts issued under it.
-
-        Parameters are displayed and never editable: §12.4 puts them in the
-        column that creates a new strategy, and `runs.params` is immutable in
-        the schema so an edit would produce a different run rather than change
-        this one.
-        """
+        """One strategy with its studies and verdicts. Parameters are read-only (§12.4)."""
         row = session.execute(sa.text(
             "SELECT id, name, kind, status, code_hash, param_space, constraints "
             "FROM strategies WHERE id = :i"), {"i": strategy_id}).mappings().first()
@@ -328,8 +253,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "       min_detectable_sharpe, hold_days_min, hold_days_max, created_at "
             "FROM studies WHERE strategy_id = :i ORDER BY created_at DESC"
         ), {"i": strategy_id}).mappings().all()
-        # Reached through experiments, because a verdict belongs to a
-        # configuration rather than to the strategy as a whole.
+        # Via experiments: a verdict belongs to a configuration, not the strategy.
         reports = session.execute(sa.text(
             "SELECT v.experiment_id, v.verdict, v.deflated_sharpe, v.pbo, "
             "       v.trials_considered, v.min_trl_days, v.reasons, "
@@ -343,20 +267,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return {
             **dict(row),
             "studies": [dict(r) for r in studies],
-            # Every verdict carries the bar it cleared, because a threshold that
-            # was lowered travels with the results issued under it (§20.3).
+            # Each verdict carries the gate it was judged under (§20.3).
             "validation_reports": [dict(r) for r in reports],
         }
 
     @app.get("/api/experiments")
     def experiments(who: Operator = operator, session: Session = session_dep,
                     limit: int = 200) -> list[dict]:
-        """Tier B and above only.
-
-        Tier A is disposable mass screening written to Parquet, never here
-        (§5.7): a campaign produces millions of rows and putting them in the
-        registry would make it unusable to query.
-        """
+        """Tier B+ experiments; Tier A screening lives in Parquet, not the registry (§5.7)."""
         rows = session.execute(sa.text(
             "SELECT e.id, e.study_id, e.tier, e.params, e.timeframe, e.status, "
             "       e.realised_hold_days, e.created_at, "
@@ -383,8 +301,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/api/gates")
     def gates(who: Operator = operator, session: Session = session_dep) -> list[dict]:
-        """Every gate with its age, because the age is what decides whether an
-        approval may cite it (§20.3)."""
+        """Active gates with age; `citable` once 24h old (§20.3)."""
         rows = session.execute(sa.text(
             "SELECT id, transition, thresholds, rationale, valid_from, "
             "       now() - valid_from AS age, "
@@ -416,12 +333,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.post("/api/approvals", status_code=status.HTTP_201_CREATED)
     def record_approval(body: ApprovalRequest, who: Operator = operator,
                         session: Session = session_dep) -> dict[str, Any]:
-        """Record a decision. The gate decides whether it can be acted on.
+        """Record an approval decision.
 
-        The 24-hour cooling-off is enforced by a database trigger, not here.
-        Validating it in this handler as well would be duplicate logic that can
-        drift; the API's job is to report the refusal legibly, not to be the
-        second place the rule lives.
+        The 24h cooling-off is enforced by a DB trigger only; this maps its error to a 409.
         """
         user = session.execute(
             sa.text("SELECT id FROM users WHERE email = :e"), {"e": who.email}
@@ -457,14 +371,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     # -- parameters ----------------------------------------------------------
 
-    #: Settings the operator may change, and what each one does NOT reach.
-    #:
-    #: §12.4 draws a hard line: signal parameters, entry and exit rules, feature
-    #: selection, label definitions and a strategy's asset universe cannot be
-    #: tuned, because touching any of them creates a new strategy that re-enters
-    #: screening. This surface exposes only the other column, and the read-only
-    #: half is shown beside it rather than hidden — knowing why you cannot change
-    #: something is the useful part.
+    #: Operator-editable settings. LOCKED lists what §12.4 forbids tuning (it would be a new
+    #: strategy); keys here must each have a rule in settings_rules.RULES.
     EDITABLE = {
         "research_universe": "Which assets are collected and studied. Not a "
                              "strategy's universe, which is part of its identity.",
@@ -488,11 +396,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/settings")
     def settings_list(who: Operator = operator,
                       session: Session = session_dep) -> dict[str, Any]:
-        """Current value per key, with its reason and when it was set.
-
-        Read from the newest row rather than from a mutable column: settings are
-        appended, so every result issued under an older value stays readable.
-        """
+        """Current value per key (newest row; settings are append-only), plus locked items."""
         rows = session.execute(sa.text(
             "SELECT DISTINCT ON (s.key) s.key, s.value, s.rationale, s.valid_from, "
             "       u.email AS changed_by "
@@ -526,12 +430,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.post("/api/settings/{key}", status_code=status.HTTP_201_CREATED)
     def record_setting(key: str, body: SettingRequest, who: Operator = operator,
                        session: Session = session_dep) -> dict[str, Any]:
-        """Append a new value. Nothing is updated in place.
-
-        A key outside the editable set is refused by name rather than ignored: a
-        request to change a signal parameter is a request the system should
-        answer, not swallow.
-        """
+        """Append a new setting value (never update in place); non-editable keys get a 403."""
         if key not in EDITABLE:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
@@ -539,8 +438,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 f"that creates a new strategy, which returns to screening and "
                 f"adds its trials to the counter — it cannot be edited here.",
             )
-        # Checked here, not in the form. A rule in the form is a suggestion,
-        # because this endpoint is reachable without it.
+        # Validated server side: the endpoint is reachable without the form.
         try:
             validate_setting(key, body.value)
         except InvalidSetting as error:
@@ -567,16 +465,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/macro/series")
     def macro_series(who: Operator = operator,
                      session: Session = session_dep) -> list[dict]:
-        """The catalogue with freshness, which is the column that matters.
+        """Macro series catalogue with `days_old` on every row (stale feeds fail silently).
 
-        A stale macro feed fails silently — the number is simply old, and old
-        numbers look exactly like current ones. So the age of the newest
-        observation is returned on every row rather than left to be noticed.
+        Returns the latest and previous stored values only; time series belong to Grafana (§20.1).
         """
-        # The latest value and the one before it, so the screen can show where a
-        # series stands. Both are stored numbers read back, not a series drawn:
-        # §20.1 keeps time series in Grafana, and a current reading is a fact
-        # rather than a chart.
         rows = session.execute(sa.text(
             "WITH ranked AS ("
             "  SELECT series, actual, scheduled_for, "
@@ -599,14 +491,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return [
             dict(r) | {
                 "days_old": float(r["days_old"]) if r["days_old"] is not None else None,
-                # The change between the last two prints, in the series' own
-                # units. Not annualised, not normalised — that would be a
-                # computed figure, and this surface does not compute.
+                # Last-two-prints difference in the series' own units; nothing further derived.
                 "change": (float(r["value"]) - float(r["previous"]))
                 if r["value"] is not None and r["previous"] is not None else None,
-                # A revised series with no vintages cannot be read as it was
-                # known at the time, and a study using it is answering a
-                # different question (§4.7). Surfaced, not buried in a column.
+                # Revised series without vintages are not point-in-time (§4.7).
                 "point_in_time_safe": bool(r["has_vintages"]) or not r["is_revised"],
             }
             for r in rows
@@ -627,11 +515,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/macro/upcoming")
     def macro_upcoming(who: Operator = operator,
                        session: Session = session_dep) -> list[dict]:
-        """Releases still ahead, which are the only ones a consensus can attach to.
-
-        The anticipation window of §11.6 made visible: for a scheduled event the
-        tradeable object is the approach, not the arrival.
-        """
+        """Future releases, the only ones a consensus can attach to (§11.6)."""
         rows = session.execute(sa.text(
             "SELECT id, series, scheduled_for, consensus, consensus_at, "
             "       EXTRACT(EPOCH FROM (scheduled_for - now()))/86400 AS days_ahead "
@@ -644,15 +528,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def record_consensus(release_id: uuid.UUID, body: ConsensusRequest,
                          who: Operator = operator,
                          session: Session = session_dep) -> dict[str, Any]:
-        """Record what the market expected, before the print. §20.6.
+        """Record consensus before the release. §20.6.
 
-        The whole value of macro as an event class is that expectations existed
-        *before* the release, so surprise is a number rather than a story told
-        afterwards. A consensus entered once the actual is known is that story,
-        and it would make every macro surprise look predictive.
-
-        Refused by the database, not here — the third place this system declines
-        to trust a control that can be clicked past.
+        A post-release consensus is refused by the DB check `ck_consensus_precedes_the_release`.
         """
         try:
             updated = session.execute(sa.text(
@@ -688,13 +566,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/scenario")
     def read_scenario(who: Operator = operator,
                       session: Session = session_dep) -> dict[str, Any]:
-        """The conditions a simulation runs under. Always present.
-
-        Seeded by the migration rather than created on first write, so "no
-        pressure, neutral sentiment" and "nobody has set this" cannot come back
-        as the same empty result. They are different facts and only one of them
-        is a decision.
-        """
+        """The single market_conditions row (id=1, seeded by migration 0013)."""
         row = session.execute(sa.text(
             "SELECT trend, sentiment, source FROM market_conditions WHERE id = 1"
         )).mappings().first()
@@ -708,23 +580,14 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.put("/api/scenario")
     def set_scenario(body: ScenarioRequest, who: Operator = operator,
                      session: Session = session_dep) -> dict[str, Any]:
-        """Set the conditions. An update, never an insert — there is one row.
-
-        PUT and not POST for the same reason: this names something that already
-        exists and replaces its contents, and sending it twice leaves the same
-        state. A POST would imply a second set of conditions could be created.
-        """
-        # Read in the same transaction as the UPDATE below, so the "from" it
-        # records is the value this write actually replaced.
+        """Update the single conditions row (idempotent PUT); a real change starts a run."""
+        # Locked read in the same transaction, so the audited "from" is what was replaced.
         before = session.execute(sa.text(
             "SELECT trend, sentiment FROM market_conditions WHERE id = 1 FOR UPDATE"
         )).mappings().first()
 
-        # The UPDATE carries its own no-op test, so a save that changes nothing
-        # touches no row and writes no log line. Done in the WHERE rather than
-        # by reading first and comparing in Python: between those two statements
-        # another request can change the value, and the comparison would then be
-        # against something that is no longer there.
+        # No-op test lives in the WHERE (not a Python compare) to avoid a race; unchanged
+        # saves touch no row and write no log.
         row = session.execute(sa.text(
             "UPDATE market_conditions SET trend = :t, sentiment = :s, "
             "source = :src WHERE id = 1 AND ("
@@ -734,9 +597,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "src": body.source}).mappings().first()
 
         if row is None:
-            # Either nothing moved, or the row is missing. Told apart by asking,
-            # because returning "unchanged" for a missing row would hide the one
-            # state that is actually broken.
+            # Nothing moved, or the row is missing; the latter must surface as a 500.
             current = session.execute(sa.text(
                 "SELECT trend, sentiment, source FROM market_conditions WHERE id = 1"
             )).mappings().first()
@@ -744,37 +605,19 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 raise HTTPException(
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
                     "the conditions row is missing; migration 0013 seeds it")
-            # Idempotent, and honest about it: the same values sent twice leave
-            # one entry in the log, not two. A change log that records
-            # non-changes cannot answer when something was last changed, which
-            # is the only question it exists for.
             return {"trend": current["trend"],
                     "direction": trend_direction(current["trend"]),
                     "sentiment": current["sentiment"],
                     "source": current["source"], "changed": False}
 
-        # Audited because these are inputs someone chose. Which conditions a
-        # simulation was run under last month is a question the log has to be
-        # able to answer after the values have been changed — so the entry says
-        # what they moved from as well as to, and which run it started.
-        #
-        # Save is what starts the algorithm. Only on a real change, for the
-        # same reason the log only records one: re-running an identical scenario
-        # produces an identical answer, and a second copy of it is noise in the
-        # list the operator reads.
-        #
-        # Synchronous because it is milliseconds on the archive this holds, and
-        # because a run the operator does not wait for is one they will not
-        # connect to the button they pressed. If the archive grows this has to
-        # move off the request, and the timing is reported so that is visible
-        # before it becomes a problem rather than after.
+        # Runs synchronously (ms on the current archive); `seconds` is reported to show growth.
+        # The audit entry records from/to and the run id.
         started = time.perf_counter()
         try:
             outcome = scenario_run.execute(
                 body.trend, body.sentiment)
         except FileNotFoundError as missing:
-            # The scenario is saved either way. A run that cannot start is not a
-            # reason to discard a setting the operator made.
+            # Keep the saved scenario even if the run cannot start.
             audit(session, who.email, "scenario.set", "scenario", "market",
                   {"trend": body.trend, "sentiment": body.sentiment,
                    "source": body.source,
@@ -816,23 +659,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/scenario/history")
     def scenario_history(limit: int = 40, who: Operator = operator,
                          session: Session = session_dep) -> list[dict[str, Any]]:
-        """Every change to the conditions, newest first.
+        """Scenario changes, newest first, read from `audit_log` (no second history table).
 
-        Read out of `audit_log` rather than from a second table written
-        alongside it. A history kept in its own table is a second writer, and
-        two records of the same fact drift — the one nobody reads is the one
-        that goes wrong. This is the same rows the Audit screen shows, asked a
-        narrower question.
-
-        Every entry here is a change, because `set_scenario` does not write when
-        nothing moved. That is what makes the list readable: a log that records
-        non-changes cannot answer when something was last changed, which is the
-        only question it exists for.
-
-        Entries carry what they changed *from*, so the screen can say which of
-        the two dials moved. Rows written before that was recorded come back
-        with `from` null and are shown as changes to both, which is the honest
-        reading of an entry that does not say.
+        `from` is null on older entries; the screen treats those as changing both dials.
         """
         rows = session.execute(sa.text(
             "SELECT actor, occurred_at, payload FROM audit_log "
@@ -855,13 +684,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/scenario/runs")
     def scenario_runs(limit: int = 10, who: Operator = operator,
                       session: Session = session_dep) -> list[dict[str, Any]]:
-        """What the algorithm did under each set of conditions, newest first.
-
-        The conditions are columns on the row rather than a join to
-        `market_conditions`, which holds one mutable row — a join would report
-        every past run as having used today's settings, which is the shape of
-        error that makes a backtest look prescient.
-        """
+        """Scenario runs, newest first. Conditions stored per run; never join market_conditions."""
         rows = session.execute(sa.text(
             "SELECT id, ran_at, actor, trend, sentiment, "
             "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
@@ -883,17 +706,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/fear-greed")
     def read_fear_greed(who: Operator = operator,
                         session: Session = session_dep) -> dict[str, Any]:
-        """Both indices, and the comparisons from whichever has the history.
-
-        They are different indices, not two opinions about one: different
-        methods and different numbers — 72 against 74 on the day CMC was added.
-        Reported side by side rather than averaged, because an average of two
-        methods is a third method nobody can decompose.
-
-        Read back, never computed. §20.1 puts the boundary at the application
-        deriving figures, and picking stored rows is not deriving one — but the
-        chart the vendors draw is a time series, and §20.1 puts those in Grafana.
-        """
+        """CMC and alternative.me fear/greed side by side (never averaged), plus stored history
+        points from the deeper series. Read back only (§20.1)."""
         def latest(source: str) -> dict[str, Any] | None:
             row = session.execute(sa.text(
                 "SELECT day, value, classification, source, available_at "
@@ -906,8 +720,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "source": row["source"], "day": row["day"].isoformat(),
                 "value": row["value"], "classification": row["classification"],
                 "available_at": row["available_at"].isoformat(),
-                # Said plainly, because a stale feed fails silently: the number
-                # is simply old, and old numbers look exactly like current ones.
                 "days_old": (datetime.now(UTC).date() - row["day"]).days,
             }
 
@@ -916,10 +728,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             return {"available": False}
         other = latest(FNG_SOURCE if primary["source"] == CMC_SOURCE else CMC_SOURCE)
 
-        # The comparisons come from the series that has depth. CMC serves only
-        # its latest value, so its history starts the day it was first collected
-        # — naming the series the dates come from stops them reading as the
-        # headline's own past.
+        # History from the deepest series (CMC serves only its latest value); `source` names it.
         deep = session.execute(sa.text(
             "SELECT source, count(*) AS n, max(day) AS newest "
             "FROM sentiment_readings GROUP BY source ORDER BY n DESC LIMIT 1"
@@ -936,9 +745,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "day": row["day"].isoformat(), "value": row["value"],
                 "classification": row["classification"]}
 
-        # "On or before" rather than exact, so a missing day gives the most
-        # recent value before it instead of an empty cell. A gap in a daily
-        # series is a collection failure, and a blank would read as calm.
+        # "On or before", so a missing day yields the prior value rather than a blank.
         history |= {"yesterday": at(1), "last_week": at(7), "last_month": at(30)}
 
         extremes = session.execute(sa.text(
@@ -962,52 +769,30 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/trade_lab", include_in_schema=False)
     def old_home() -> RedirectResponse:
-        """The entry point moved to /home. Kept so an existing bookmark lands
-        somewhere rather than on a 404."""
+        """Legacy path; redirects to /home."""
         return RedirectResponse("/home", status_code=308)
 
     @app.get("/login", include_in_schema=False)
     def login_screen() -> FileResponse:
-        """The sign-in page. Unauthenticated screens send visitors here.
-
-        It carries a `next` parameter so a deep link survives the detour, and
-        honours it only when it is a path on this origin — an open redirect on a
-        login page is how a session gets handed to somewhere else.
-        """
+        """Sign-in page. Its `next` param must be honoured only for same-origin paths."""
         return FileResponse(STATIC / "login.html")
 
     @app.get("/home", include_in_schema=False)
     def home() -> FileResponse:
-        """The entry point. Screens hang off the sidebar rather than being
-        reached by knowing their paths."""
+        """Home screen."""
         return FileResponse(STATIC / "index.html")
 
     @app.get("/market-sentiment", include_in_schema=False)
     def market_sentiment_screen() -> FileResponse:
-        """The market trend the operator sets, and the index the market prints. §20.
-
-        Both on one page because they answer the same question from opposite
-        sides — what the book is leaning into, and what everyone else is doing —
-        and reading either one alone is how a lean gets mistaken for a consensus.
-
-        Kept plain on purpose. The market trend has two fields and the index has one, so
-        anything else this page offered would be an input nothing consumes, and
-        an input nothing consumes is one an operator eventually believes in.
-        """
+        """Operator's market trend and the measured fear/greed index on one page. §20."""
         return FileResponse(STATIC / "market_sentiment.html")
 
     @app.get("/audit", include_in_schema=False)
     def audit_screen() -> FileResponse:
         return FileResponse(STATIC / "audit.html")
 
-    #: The decision sequence, in the order it runs. Plan.md §8, §9, §12, §14.
-    #:
-    #: Every step carries the invariant that has to hold when it runs and, where
-    #: one exists, the defect that proved the invariant was needed. That pairing
-    #: is the point: a rule with no story behind it reads as a preference, and
-    #: someone reorders it. Four of the five below were real defects in this
-    #: codebase, found by tests built so the wrong behaviour produces a visibly
-    #: wrong answer.
+    #: The decision sequence in run order, shown on /algorithm. Plan.md §8, §9, §12, §14.
+    #: Each step has its invariant ("rule") and, where one exists, the defect behind it ("cost").
     ALGORITHM = [
         {
             "phase": "Research · one study",
@@ -1138,18 +923,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/risk-limits")
     def risk_limits(who: Operator = operator,
                     session: Session = session_dep) -> dict[str, Any]:
-        """Every limit the engine enforces, and every breach it has recorded.
+        """Every enforced limit and recorded breach.
 
-        The list is **derived from the engine**, not written here: the fields of
-        `RiskLimits`, the `HALTING` set and `REQUIRES_HUMAN`. A page with its
-        own copy of the limits is a page that keeps showing one after it is
-        removed, and misses the one that was added — and this is the screen
-        where that would matter most.
-
-        Values come from the newest stored configuration when there is one, and
-        from the engine's defaults when there is not. Which of the two is in
-        force is reported rather than left to be inferred, because a default
-        displayed as a configuration is a limit nobody chose.
+        Derived from the engine (`RiskLimits`, `HALTING`, `REQUIRES_HUMAN`), never a local copy.
+        Values from the newest stored config, else defaults; `source` says which.
         """
         import dataclasses
 
@@ -1163,9 +940,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         )
 
         defaults = RiskLimits()
-        # The one in force. The same row the limits below are read from, so
-        # the badge and the values on the page cannot disagree about which
-        # configuration is active.
+        # The config in force; the single source for both values and the active badge.
         stored = session.execute(sa.text(
             "SELECT * FROM risk_limit_configs ORDER BY valid_from DESC LIMIT 1"
         )).mappings().first()
@@ -1176,10 +951,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         limits = []
         for field in dataclasses.fields(RiskLimits):
             name = field.name
-            # The breach a limit raises is named after it, except the price one:
-            # `max_price_deviation_bps` raises `price_deviation`. Matched by
-            # membership rather than assumed equal, so a rename shows up as a
-            # limit that halts nothing instead of a crash.
+            # Breach name = limit name, except `max_price_deviation_bps` -> `price_deviation`.
+            # Membership match, so a rename shows as "halts nothing" rather than a crash.
             breach = name if name in halting or name in human else (
                 "price_deviation" if name.startswith("max_price_deviation") else name)
             limits.append({
@@ -1188,18 +961,15 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                          else str(getattr(defaults, name)),
                 "default": str(getattr(defaults, name)),
                 "stops": STOPS.get(name, ""),
-                # A breach that halts the whole run, not just this order.
+                # Halts the whole run, not just this order.
                 "halts": breach in halting,
-                # And one a person has to clear before it resumes.
+                # Requires a person to clear before resuming.
                 "needs_a_person": breach in human,
-                # What it may be set to, from the same place the endpoint
-                # checks, so the form cannot offer a value the server refuses.
+                # Same bounds the POST checks, so the form matches the server.
                 "low": str(BOUNDS[name].low), "high": str(BOUNDS[name].high),
                 "whole": BOUNDS[name].whole, "bound": BOUNDS[name].describes,
             })
 
-        # Every configuration ever created, so a change is visible as a change
-        # rather than as a value that is simply different from last time.
         history = session.execute(sa.text(
             "SELECT c.id, c.name, c.valid_from, "
             "  (SELECT a.payload->>'rationale' FROM audit_log a "
@@ -1224,14 +994,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "limits": limits,
             "halting": sorted(halting),
             "needs_a_person": sorted(human),
-            # Every breach the engine can raise, including the ones that are not
-            # a configured number: a halt already in force, a position below the
-            # minimum viable size, and news cutting a size down.
+            # All Breach kinds, including those not tied to a configured limit.
             "breach_kinds": sorted(b.value for b in Breach),
-            # ACTIVE is the newest by valid_from, so exactly one row carries
-            # it — by construction and not by a flag somebody has to keep
-            # correct. A flag can be set on two rows; a maximum cannot be
-            # reached twice, and a tie is refused by a unique constraint.
+            # Active = newest valid_from (unique constraint prevents ties); no stored flag.
             "history": [{
                 "id": str(h["id"]), "name": h["name"],
                 "valid_from": h["valid_from"].isoformat(),
@@ -1249,18 +1014,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.post("/api/risk-limits", status_code=status.HTTP_201_CREATED)
     def add_risk_config(body: RiskConfigRequest, who: Operator = operator,
                         session: Session = session_dep) -> dict[str, Any]:
-        """Create a risk limit configuration. Never edit one.
-
-        §14.1 versions these and has runs reference one rather than embed it,
-        precisely so a limit cannot change beneath a position opened under it.
-        An UPDATE here would undo that: every past run would silently report
-        limits it never ran under.
-
-        The bounds are checked server side because the endpoint is reachable
-        without the form, and they are bounds *on the bounds* — a risk limit is
-        what stops a bad decision, so one set loosely enough has been removed
-        while still appearing on the screen.
-        """
+        """Create (INSERT, never UPDATE) a risk limit config (§14.1); bounds checked here."""
         from tradelab.risk.bounds import Invalid as InvalidLimit
         from tradelab.risk.bounds import validate as validate_limits
 
@@ -1279,9 +1033,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         ), {"id": config_id, "name": body.name,
             **{k: str(v) for k, v in parsed.items()}})
 
-        # The rationale lives in the audit entry rather than in a column: the
-        # configuration is the numbers, and why they were chosen is a thing a
-        # person said, at a time, which is what the log is for.
+        # Rationale is stored in the audit entry, not a column.
         audit(session, who.email, "risk_config.create", "risk_limit_config",
               str(config_id), {"name": body.name, "rationale": body.rationale,
                                "limits": {k: str(v) for k, v in parsed.items()}})
@@ -1292,22 +1044,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/positions")
     def open_positions(who: Operator = operator,
                        session: Session = session_dep) -> dict[str, Any]:
-        """Every position currently held, with its own profit and loss.
+        """Open positions with stored P&L (read, never computed; §20.1).
 
-        **Read, never computed.** `positions` stores `unrealised_pnl`,
-        `realised_pnl` and `funding_paid` as the execution engine folded them
-        from fills, and §20.1 puts the boundary exactly here: a figure this
-        screen derived would be one nobody else can reproduce, and it would
-        disagree with the engine's the moment either changed.
-
-        `positions` is a snapshot series keyed on (run, asset, as_of), so the
-        current position is the newest row per run and asset. Taking the newest
-        row overall would report one asset's position as the whole book, and
-        taking every row would count a position once per snapshot ever written.
-
-        A flat position is not an open one, so rows at zero quantity are left
-        out — they are the record of a position that closed, and their realised
-        P&L is still counted in the totals below.
+        `positions` is a snapshot series: current = newest row per (run, asset). Zero-qty rows are
+        excluded from the list but their realised P&L still counts in the totals.
         """
         rows = session.execute(sa.text(
             "SELECT DISTINCT ON (p.run_id, p.asset) "
@@ -1330,14 +1070,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "unrealised_pnl": number(r["unrealised_pnl"]),
             "realised_pnl": number(r["realised_pnl"]),
             "funding_paid": number(r["funding_paid"]),
-            # Shown, never editable. §20.2 is the most important thing in that
-            # section, and a book whose mode is not on screen is one where
-            # nobody can see which money it is.
+            # Mode must always be displayed, never editable (§20.2).
             "mode": r["mode"], "venue": r["venue"], "status": r["status"],
             "currency": r["base_currency"],
-            # Who sized it (PREREG-009): the operator's reading when the trend
-            # was not 5, the algorithm's rule when it was. Null for a book with
-            # no notion of a guide.
+            # PREREG-009: operator guided if trend != 5, else the algorithm; null if no guide.
             "guide": r["guide"], "trend": r["trend"], "trend_source": r["trend_source"],
             "book": r["book"],
         } for r in rows if (r["qty"] or 0) != 0]
@@ -1354,8 +1090,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return {
             "positions": open_rows,
             "open_count": len(open_rows),
-            # Across the latest snapshot of every position, closed ones
-            # included: realised P&L does not stop counting when a position does.
+            # Totals over the latest snapshot of every position, closed ones included.
             "unrealised_pnl": float(totals["unrealised"]),
             "realised_pnl": float(totals["realised"]),
             "funding_paid": float(totals["funding"]),
@@ -1367,8 +1102,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 sa.text("SELECT count(*) FROM risk_events")).scalar() or 0),
             "fills": int(session.execute(
                 sa.text("SELECT count(*) FROM fills")).scalar() or 0),
-            # Forward books fold fills in their own intent logs rather than the
-            # `fills` table, so a count of zero there is not "nothing has run".
+            # Forward books log fills outside `fills`, so fills == 0 does not mean nothing ran.
             "snapshots": int(session.execute(
                 sa.text("SELECT count(*) FROM positions")).scalar() or 0),
         }
@@ -1376,12 +1110,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/algorithm")
     def algorithm(who: Operator = operator,
                   session: Session = session_dep) -> dict:
-        """The decision sequence, with live counts where a step has them.
-
-        Counts read from tables, never computed — §20.1. They are here so the
-        sequence is not an illustration: the trial number is the one that
-        deflates the next verdict.
-        """
+        """The decision sequence with stored counts and the last scenario run (§20.1)."""
         def scalar(query: str) -> int:
             try:
                 return int(session.execute(sa.text(query)).scalar() or 0)
@@ -1389,8 +1118,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 session.rollback()
                 return 0
 
-        # The last scenario run, so the sequence shows where it got to rather
-        # than describing a path nobody has walked. Read back, never recomputed.
         last = session.execute(sa.text(
             "SELECT id, ran_at, trend, sentiment, "
             "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
@@ -1407,16 +1134,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "passed": scalar(
                     "SELECT count(*) FROM validation_reports WHERE verdict='pass'"),
                 "scenario_runs": scalar("SELECT count(*) FROM scenario_runs"),
-                # Execution runs, which is a different thing from a scenario
-                # run and is the count that says whether steps 8 to 13 have
-                # ever executed. Zero is the honest answer and the screen says
-                # so rather than leaving them looking merely unreached.
+                # Execution runs (steps 8-13), distinct from scenario runs.
                 "runs": scalar("SELECT count(*) FROM runs"),
                 "risk_events": scalar("SELECT count(*) FROM risk_events"),
             },
-            # Which steps a scenario run executes and which it substitutes a
-            # reference for. Declared by the runner rather than assumed by the
-            # screen, so the two cannot disagree about what ran.
+            # Declared by the scenario runner, not assumed by the screen.
             "scenario_steps": {
                 "executed": list(scenario_run.EXECUTED_STEPS),
                 "substituted": list(scenario_run.SUBSTITUTED_STEPS),
@@ -1440,13 +1162,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/risk-limits", include_in_schema=False)
     def risk_limits_screen() -> FileResponse:
-        """What the engine refuses, and what it has refused.
-
-        Read only. A risk limit defines behaviour, so §12.4 keeps it out of the
-        operator's editable settings: changing one creates a new configuration
-        and a run records which it ran under, so a limit is never edited beneath
-        a position opened under it.
-        """
+        """Risk limits screen; limits are versioned configs, not editable settings (§12.4)."""
         return FileResponse(STATIC / "risk_limits.html")
 
     @app.get("/algorithm", include_in_schema=False)
@@ -1455,8 +1171,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.get("/pipeline", include_in_schema=False)
     def old_pipeline() -> RedirectResponse:
-        """Renamed. It showed project status; the question it was asked was
-        about the decision sequence."""
+        """Legacy path; redirects to /algorithm."""
         return RedirectResponse("/algorithm", status_code=308)
 
     @app.get("/api/health")

@@ -1,21 +1,7 @@
 """The market trend is one scale, 1 to 10, with 5 meaning nothing. Plan.md §20.
 
-It was a direction and a magnitude. Two fields that can disagree, and they did:
-NORMAL had to be kept in step with a zero by a CHECK constraint, and there was
-no way to say "nothing has happened" at a magnitude of 5 — which is what the
-operator actually holds when they have read no news.
-
-Worse, the old arithmetic read magnitude as distance from zero, so a 5 tilted
-the book by a quarter. The system leaned hard in a direction at the exact
-moment the operator meant to say they had heard nothing.
-
-One column now, mirroring the fear-and-greed scale beside it: 1 to 10, 5
-neutral, direction derived from which side of 5 it sits on. A single field
-cannot disagree with itself.
-
-Existing rows are mapped rather than reset, so nothing silently becomes neutral:
-NORMAL lands on 5, and a direction with a magnitude lands the same proportion
-along its half of the new scale.
+Replaces direction + magnitude with one `trend` column; direction is the side of 5.
+Existing rows are mapped proportionally, not reset.
 """
 
 from __future__ import annotations

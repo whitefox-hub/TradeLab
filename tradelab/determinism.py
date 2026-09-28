@@ -1,9 +1,7 @@
 """Determinism guards and the golden run. Plan.md §2.2, §9.4, §16.6.
 
-Float reduction order depends on thread count, so the same code in the same image
-produces different results on a 4-core and a 16-core machine. That breaks the
-bit-identical golden run and surfaces as non-determinism in the statistics, which
-is the last place anyone looks. These guards make the failure loud and early.
+Float reduction order depends on thread count; these guards pin it so the golden run is
+bit-identical across machines.
 """
 
 from __future__ import annotations
@@ -45,12 +43,7 @@ def check_environment(strict: bool = True) -> list[str]:
 
 
 def golden_run(n_rows: int = 500_000, n_groups: int = 997, seed: int = 20260101) -> str:
-    """A deterministic, parallel-reduction-heavy computation.
-
-    Exercises exactly the code paths whose results depend on thread count:
-    parallel group-by aggregation over float columns. The returned digest must be
-    identical on every machine, which is what proves the thread pinning works.
-    """
+    """Parallel float group-by whose digest must be identical on every machine."""
     idx = pl.int_range(0, n_rows, eager=True)
     # Deterministic pseudo-random floats without depending on a RNG implementation.
     x = ((idx * 6364136223846793005 + seed) % 2147483647).cast(pl.Float64) / 2147483647.0

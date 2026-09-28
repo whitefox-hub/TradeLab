@@ -1,10 +1,4 @@
-"""Backtest ↔ simulator reconciliation. Plan.md §12.5.
-
-Knowing *that* two return series diverge is useless. The decomposition is the
-part that pays: 80% of the gap coming from worse-than-modelled fills tells you
-what to fix, and a large divergence is evidence the backtest was wrong rather
-than evidence the simulator is broken.
-"""
+"""Backtest ↔ simulator reconciliation, with the gap decomposed by cause. Plan.md §12.5."""
 
 from __future__ import annotations
 
@@ -30,11 +24,7 @@ class Attribution:
         return self.costs + self.timing + self.fills + self.data
 
     def shares(self) -> dict[str, float]:
-        """Fraction of the *absolute* divergence each bucket explains.
-
-        Absolute, because two large offsetting causes are not a small problem
-        and a signed share would report them as one.
-        """
+        """Fraction of the absolute divergence each bucket explains (offsets must not cancel)."""
         magnitude = abs(self.costs) + abs(self.timing) + abs(self.fills) + abs(self.data)
         if magnitude == 0:
             return dict.fromkeys(("costs", "timing", "fills", "data"), 0.0)
@@ -69,11 +59,7 @@ def attribute(
     expected_signal_return: np.ndarray, actual_signal_return: np.ndarray,
     expected_data: np.ndarray, actual_data: np.ndarray,
 ) -> Attribution:
-    """Split the gap into the four buckets §12.5 names.
-
-    Each is the mean of (actual minus expected) for one component, signed so that a
-    positive number means the simulator did *better* than the backtest expected.
-    """
+    """Split the gap into the four buckets §12.5 names. Positive: simulator did better."""
     return Attribution(
         costs=float(np.mean(expected_costs - actual_costs)),
         fills=float(np.mean(actual_fill - expected_fill)),
@@ -86,24 +72,15 @@ def reconcile(
     backtest_returns: np.ndarray, simulator_returns: np.ndarray,
     attribution: Attribution, n_samples: int = 2_000,
 ) -> Reconciliation:
-    """Paired comparison with a bootstrap interval on the difference.
-
-    Paired, not two independent samples: both series are driven by the same
-    market over the same period, so their common movement is not the question.
-    The difference series is, and treating them as independent would widen the
-    interval until nothing was ever significant.
-    """
+    """Paired comparison (same market, same period) with a bootstrap interval on the difference."""
     if backtest_returns.shape != simulator_returns.shape:
         raise ValueError(
             f"paired comparison needs equal lengths, got "
             f"{backtest_returns.shape} and {simulator_returns.shape}"
         )
     difference = simulator_returns - backtest_returns
-    # An interval on the *Sharpe* of the difference series. Since Sharpe is
-    # mean/std and the standard deviation is positive, excluding zero is the
-    # same statement as the mean difference excluding zero — and it inherits the
-    # stationary bootstrap, which preserves the serial dependence a daily
-    # divergence series certainly has.
+    # Sharpe excluding zero == mean excluding zero; reuses the stationary bootstrap
+    # (preserves serial dependence).
     interval = sharpe_interval(difference, n_samples=n_samples)
     return Reconciliation(
         n_periods=int(difference.size),
@@ -140,14 +117,7 @@ def capital_for_tier(
 ) -> TierPlan:
     """Capital at a tier, with §14.1's floor applied.
 
-    §14.5 as originally written set L0 at 1% of target. For a 5,000 target that
-    is 50, and BTC cannot be opened at all at that size — a tier you cannot
-    stand on is not a tier. The floor is the capital needed to hold the intended
-    number of positions at the largest asset's minimum viable size.
-
-    Where the floor exceeds the target, the honest answer is that the strategy
-    is not deployable at that capital, said before the ramp starts rather than
-    after L0 fails to fill.
+    Floor = positions_target x the largest min viable size; above target, not deployable.
     """
     fraction, days = next(
         (f, d) for name, f, d in TIERS if name == tier
@@ -172,10 +142,7 @@ def capital_for_tier(
 def sizing_is_a_control(capital: Decimal, increment: Decimal, minimum: int = 20) -> bool:
     """Whether position sizing still does anything at this capital (§14.1).
 
-    Positions quantise to `lot_size x price`. Wanting 150 of BTC when the
-    increment is 84.53 yields 84.53 or 169.06 — realised risk differs from
-    intended risk by up to 44%. Below roughly twenty increments of headroom,
-    sizing has stopped being a control and become a rounding artefact.
+    Below ~`minimum` increments (`lot_size x price`), sizing is a rounding artefact.
     """
     if increment <= 0:
         return True

@@ -1,13 +1,8 @@
 """The trend book, as registered. research/PREREG-009-trend-book.md.
 
-One book, two guides. When the operator's trend is not 5, their reading sizes
-the book and it is held until a barrier or a change. When the trend is 5, the
-algorithm's rule does: seven-day momentum at a fixed ±20%. Every decision says
-which guide made it, because PREREG-009 is judged by guide.
-
-Pure: no network, no database, no clock of its own. The runner feeds it bars
-and the current setting, and it returns the exposure the book should hold.
-That is what lets every rule be tested on a constructed path.
+Trend != 5: the operator's reading sizes the book until a barrier or a change. Trend 5:
+seven-day momentum at a fixed ±20%. Each decision records its guide (PREREG-009 judges by
+guide). Pure: no network, database or clock.
 """
 
 from __future__ import annotations
@@ -29,11 +24,7 @@ ALGORITHM_EXPOSURE = 0.20
 
 @dataclass(frozen=True, slots=True)
 class Setting:
-    """The operator's slider as recorded, and the moment it was last changed.
-
-    `changed_at` is the key that ends a post-exit flat spell: a view that hit
-    its barrier is not re-entered until the operator records a new one.
-    """
+    """The operator's slider and when it last changed; a barrier exit waits for a new change."""
 
     trend: int
     source: str
@@ -73,8 +64,7 @@ class Decision:
 
 
 def basket(prices: dict[str, np.ndarray], anchor: dict[str, float]) -> np.ndarray:
-    """0.6 x BTC/BTC_0 + 0.4 x ETH/ETH_0. The anchor only scales; returns and
-    barriers, being ratios, do not depend on it."""
+    """0.6 x BTC/BTC_0 + 0.4 x ETH/ETH_0. The anchor only scales; ratios ignore it."""
     out = np.zeros_like(next(iter(prices.values())), dtype=np.float64)
     for symbol, weight in WEIGHTS.items():
         out = out + weight * prices[symbol] / anchor[symbol]
@@ -101,10 +91,8 @@ def momentum(daily_close: np.ndarray) -> int:
 def step(state: State, setting: Setting, bar: Bar, atr: float, signal: int) -> Decision:
     """The book after one closed 5-minute bar.
 
-    Order of precedence: a new operator setting, then the operator's barriers,
-    then the algorithm's daily rule. Barriers are judged on this bar against
-    levels fixed at entry; the stop is checked first, and a bar that opens
-    through the stop exits at the bar's worst price.
+    Precedence: new operator setting, operator barriers, algorithm daily rule. Barrier levels
+    are fixed at entry; the stop wins a bar that touches both; a gap through it exits at worst.
     """
     new_setting = setting.changed_at != state.setting_at
 

@@ -1,14 +1,10 @@
 """Evaluate PREREG-007. One trial, no knobs.
 
-Everything here is fixed by research/PREREG-007-funding-carry-neutral.md,
-committed (7e98c31) before this file existed. The constants are asserted rather
-than parameterised, because a script with options is a grid however it is run.
+Constants fixed by research/PREREG-007-funding-carry-neutral.md (7e98c31); do not
+parameterise. A preflight (noise panel, planted panel, lookahead probe) must pass before
+the real panel is read.
 
-Before the panel is read, the book is run on two synthetic panels and a
-perturbed copy of itself: one where funding carries nothing, one where it is
-planted to predict, and one probe that must not move a single past weight. A
-construction that finds an edge in noise, misses a planted one, or sees the day
-it trades has no business being pointed at the real data.
+    python scripts/run_prereg_007.py
 """
 
 from __future__ import annotations
@@ -71,9 +67,8 @@ def matrices(root: Path) -> tuple[np.ndarray, np.ndarray, list]:
 def target_weights(close: np.ndarray, rate: np.ndarray, t: int) -> np.ndarray | None:
     """Weights to hold from day t, from data through t-1 only.
 
-    Rank of the trailing mean funding, lowest longest. Demeaned, so the book is
-    dollar-neutral; scaled to unit gross. None where the cross-section is below
-    the registered minimum, which means standing flat.
+    Rank of trailing mean funding, lowest longest; demeaned (dollar-neutral), unit gross.
+    None (stand flat) below the registered minimum cross-section.
     """
     if t < ELIGIBLE_DAYS:
         return None
@@ -233,9 +228,7 @@ def report(book: Book, days: list) -> None:
 
     beta = float(np.cov(net, book.market)[0, 1] / np.var(book.market, ddof=1))
     print(f"\nrealised beta to the equal-weighted market : {beta:+.3f}")
-    # (Σσᵢ)² / var(Σcᵢ): one if every position moved together, the count of
-    # positions if none did. The first run printed Σσᵢ² / var(Σcᵢ) instead,
-    # which is one for *independent* positions — the opposite reading.
+    # (Σσᵢ)² / var(Σcᵢ): 1 if positions co-move, N if independent. Not Σσᵢ², which inverts it.
     spread = float(np.sum(np.std(book.contributions, axis=1, ddof=1)))
     portfolio = float(np.var(book.contributions.sum(axis=0), ddof=1))
     print(f"realised breadth (price leg)             : "
@@ -244,7 +237,7 @@ def report(book: Book, days: list) -> None:
     print(f"skew / kurtosis                          : "
           f"{stats.skew:+.2f} / {stats.kurtosis:.2f}")
 
-    # Rule 1 of the registration, before anything else is read as an answer.
+    # Registration rule 1.
     top = np.sort(net)[::-1][:CONCENTRATION_DAYS]
     weekly = np.array([net[i:i + 7].sum() for i in range(0, net.size - 6, 7)])
     if total > 0:
@@ -275,12 +268,8 @@ def verdict(book: Book) -> None:
     for reason in gate.reasons:
         print(f"    - {reason}")
 
-    # The registration's order, applied as written.
-    # Rule 2 is read from the moments and not from the gate, because the gate
-    # can stop earlier — here on its 100-trade minimum — without reaching them.
-    # The first run of this script tested rule 5 before rule 2, which is not
-    # the order registered, and called REFUTED what the registration calls
-    # INCONCLUSIVE.
+    # Rules in registered order (1, 2, 5, 3, 4). Rule 2 reads the moments directly: the
+    # gate can stop earlier (100-trade minimum) without reaching them.
     top = np.sort(net)[::-1][:CONCENTRATION_DAYS].sum()
     if total > 0 and top / total > CONCENTRATION_LIMIT:
         answer = "INCONCLUSIVE — rule 1: the return is a few days, not frequent small gains"

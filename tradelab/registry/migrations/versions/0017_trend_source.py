@@ -1,14 +1,7 @@
 """Who set the trend. Plan.md §20, PREREG-005.
 
-The trend is about to become settable by something other than a person, and a
-log that cannot say which is one PREREG-005 cannot read: that study measures
-whether *the operator's* reading of the news predicts anything, and a hit
-attributed to the operator that was actually computed from a trade count would
-confirm the wrong hypothesis.
-
-Added before anything can write to it, which is the only time this is free.
-Defaulting to `manual` is correct for every row that exists, because until now
-nothing else could.
+Adds `source` (manual/derived/adopted): PREREG-005 measures the operator only.
+Default `manual` is correct for all existing rows.
 """
 
 from __future__ import annotations

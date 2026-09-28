@@ -1,13 +1,6 @@
 """Dataset quality report. Plan.md §17 phase 1, §4.2.
 
-The phase 1 exit criterion is a versioned dataset with **zero undocumented
-gaps** — undocumented being the operative word. A gap that is known and recorded
-is a fact about the market or the venue; a gap nobody counted is a silent hole
-that a backtest will step over without noticing, producing a result for a period
-that does not exist.
-
-So this counts what is present against what should be present, per asset and per
-kind, and reports the difference rather than smoothing it.
+Counts present vs expected days per asset and kind; phase 1 exits on zero undocumented gaps.
 """
 
 from __future__ import annotations
@@ -87,12 +80,7 @@ def _days_for(paths: list[Path]) -> set[date]:
 
 
 def scan_coverage(root: Path, kinds: tuple[str, ...] = ("ohlcv", "funding")) -> QualityReport:
-    """Coverage per asset and kind, from the partition layout alone.
-
-    Reads file names rather than file contents: a 600,000-file archive would take
-    hours to open, and the question here is which days exist, which the layout
-    already answers.
-    """
+    """Coverage per asset and kind, from partition file names alone (not contents)."""
     by_series: dict[tuple[str, str], list[Path]] = defaultdict(list)
     file_counts: dict[str, int] = {}
 
@@ -129,18 +117,9 @@ def record_gaps(
     report: QualityReport, session, source_name: str = "binance-archive",
     venue: str = "binance", shared_threshold: int = 3,
 ) -> int:
-    """Persist gaps as `data_quality_issues`. Plan.md §4.2, §4.6.
+    """Persist gaps as `data_quality_issues` (§4.6 bars promotion on them). Plan.md §4.2.
 
-    This is what "documented" means: a gap in the table is a fact anyone can
-    query and that §4.6 uses to bar promotion of anything validated on the
-    affected window. A gap only visible by rerunning this report is not
-    documented, it is merely discoverable.
-
-    Severity follows the shape rather than the size. A date missing across many
-    contracts at once is a venue event — the archive simply does not have those
-    days — and is recorded as `info`, because no amount of re-running will
-    produce them. A gap in a single series is `warn`: it is more likely a
-    collection failure, and it is worth another attempt.
+    A day missing across >= `shared_threshold` series is a venue gap (`info`); otherwise `warn`.
     """
     from collections import Counter
 

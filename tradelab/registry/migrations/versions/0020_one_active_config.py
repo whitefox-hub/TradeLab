@@ -1,14 +1,6 @@
 """Exactly one risk configuration is in force. Plan.md §14.1.
 
-The one in force is the newest by `valid_from`, so "only one is active" holds by
-construction rather than by a flag somebody has to keep correct. A flag can be
-set on two rows; a maximum cannot be reached twice.
-
-What could go wrong is a tie. Two configurations sharing a timestamp make
-"newest" ambiguous, and the engine would take whichever the planner returned —
-the same limits screen showing ACTIVE against a row that is not the one a run
-would pick up. Unique on `valid_from` removes the case rather than ordering it
-by a second column nobody would think to look at.
+The one in force is the newest by `valid_from`; unique `valid_from` rules out a tie.
 """
 
 from __future__ import annotations

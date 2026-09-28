@@ -3,12 +3,10 @@
 
     python scripts/build_intraday_dataset.py            # all three phases, resumable
 
-1. Daily quote volume for every contract in the survivorship-neutral universe
-   (FINDING-011), cut at delisting.
-2. The monthly point-in-time universe: top 100 by the previous 30 days' volume.
-3. For every member month, and the month before it as warm-up for the trailing
-   24-hour and 30-day windows: 5-minute klines, premium-index klines and
-   metrics, cut at delisting, one parquet per asset, kind and month.
+1. Daily quote volume, survivorship-neutral universe (FINDING-011), cut at delisting.
+2. Monthly PIT universe: top 100 by the previous 30 days' volume.
+3. Per member month plus the prior month (warm-up): 5m klines, premium-index klines,
+   metrics; one parquet per asset/kind/month.
 """
 
 from __future__ import annotations
@@ -99,9 +97,8 @@ def main() -> int:
         frame = cut(frame, START, END, delisted.get(asset))
         target = args.out / kind / asset / f"{month:%Y-%m}.parquet"
         target.parent.mkdir(parents=True, exist_ok=True)
-        # Written even when empty: an answer, not a gap. Written to a temporary
-        # name and renamed, so an interrupted run cannot leave half a file that
-        # the next run's resume would take for a finished one.
+        # Written even when empty (an answer, not a gap); via rename so resume never
+        # mistakes a half-written file for a finished one.
         partial = target.with_suffix(".partial")
         frame.write_parquet(partial)
         partial.replace(target)

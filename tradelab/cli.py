@@ -54,13 +54,7 @@ def capture(
 ) -> None:
     """Capture data that cannot be backfilled. Run this permanently (§4.1).
 
-    Liquidations have no historical REST endpoint and open interest reaches back
-    about 30 days, so this history exists only if something is recording. The
-    liquidation stream is all-market, so it does not depend on which assets are
-    configured and nothing is wasted if the universe changes later.
-
-    Stop it with SIGTERM or Ctrl-C: buffers are flushed before exit. A SIGKILL
-    loses whatever is buffered, permanently.
+    Stop with SIGTERM or Ctrl-C to flush buffers; SIGKILL loses them.
     """
     import asyncio
 
@@ -104,9 +98,7 @@ def backfill_universe_cmd(
 ) -> None:
     """Backfill klines for the whole universe, from each contract's listing date.
 
-    Interruptible and resumable: partitions are immutable, so a partition that
-    exists is complete, and a restart simply skips it. Expect tens of GB and
-    hours to days — it is bandwidth-bound, not CPU-bound.
+    Resumable: an existing (immutable) partition is complete and skipped.
     """
     from datetime import date as _date
     from datetime import timedelta as _td
@@ -158,11 +150,7 @@ def materialise_cmd(
     force: bool = False,
     root: Path | None = None,
 ) -> None:
-    """Derive and persist coarser bars from the 1m archive (§9.6).
-
-    Deriving 4h from 1m costs ~30s per asset and reading the result costs 0.03s.
-    A campaign that pays the former per study cannot iterate.
-    """
+    """Derive and persist coarser bars from the 1m archive (§9.6)."""
     from tradelab.orchestration.pooled import funding_universe
     from tradelab.storage.materialise_bars import materialise_universe
 

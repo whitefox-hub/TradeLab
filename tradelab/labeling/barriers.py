@@ -1,29 +1,8 @@
 """Triple-barrier labelling. Plan.md §7.
 
-Labels are the one part of the pipeline that legitimately looks forward — that is
-what a target is. The discipline is not to avoid the future but to record exactly
-*when* each label became knowable, because that instant is what the purge in
-§8.2 must cover.
-
-Two details that naive implementations get wrong, both of which flatter results:
-
-**Determination time, not horizon.** A label whose take-profit is touched after
-three hours is known after three hours, not after the five-day maximum. Purging
-on the horizon is needlessly wasteful; purging on the determination time is
-correct and tighter. Both are recorded.
-
-**Intrabar ordering is unknowable.** When a bar's high reaches the profit barrier
-and its low reaches the stop, bar data cannot say which came first. Assuming the
-favourable one is how a backtest invents profit it never had, so the adverse
-barrier is assumed to win. It is pessimistic on purpose and it is stated here
-rather than buried.
-
-**Barrier width must match the holding period.** Volatility is measured per bar,
-so a barrier set at one per-bar sigma is crossed within a few bars regardless of
-the horizon: labelling a five-day trade that way resolved in three minutes in
-practice. Barriers therefore scale by `sigma * sqrt(max_holding)`, the expected
-move over the intended holding period, which is what makes the horizon barrier
-reachable at all.
+Records when each label became knowable (determination time, not horizon); the purge
+(§8.2) covers that. The adverse barrier wins an ambiguous bar. Barriers scale by
+`sigma * sqrt(max_holding)` since per-bar sigma is crossed within a few bars.
 """
 
 from __future__ import annotations
@@ -43,20 +22,14 @@ class Barrier(IntEnum):
 
 @dataclass(frozen=True, slots=True)
 class BarrierSpec:
-    """Barriers are multiples of recent volatility, never fixed percentages.
-
-    A fixed 2% stop is a different trade in a calm market than in a violent one,
-    so a strategy labelled that way is really several strategies wearing one name.
-    """
+    """Barriers are multiples of recent volatility, never fixed percentages."""
 
     profit_mult: float = 2.0
     stop_mult: float = 1.0
     max_holding: int = 120          # bars; bounded to the §0.2 band
     vol_period: int = 100
     min_vol: float = 1e-6
-    # Barriers widen with the square root of the holding period. Disable only to
-    # study the per-bar behaviour; leaving it off makes the horizon barrier
-    # effectively unreachable.
+    # Scale barriers by sqrt(max_holding); off makes the horizon barrier ~unreachable.
     scale_to_horizon: bool = True
 
 
@@ -69,11 +42,7 @@ def _first_touch(
     close: np.ndarray, high: np.ndarray, low: np.ndarray,
     upper: np.ndarray, lower: np.ndarray, horizon: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """First barrier touched, and how many bars it took.
-
-    Walks the horizon one offset at a time: `horizon` vectorised passes rather
-    than a Python loop per event.
-    """
+    """First barrier touched, and how many bars it took (one vectorised pass per offset)."""
     n = close.size
     label = np.full(n, Barrier.HORIZON, dtype=np.int8)
     bars_held = np.full(n, horizon, dtype=np.int32)
@@ -89,8 +58,7 @@ def _first_touch(
         hit_stop = valid & (low[j] <= lower)
         hit_profit = valid & (high[j] >= upper)
 
-        # Both barriers inside one bar: the order is unknowable from bar data, so
-        # the adverse one is taken. Any other choice manufactures profit.
+        # Both barriers in one bar: order unknowable, so the adverse one wins.
         stop_wins = hit_stop
         profit_wins = hit_profit & ~hit_stop
 
@@ -100,8 +68,7 @@ def _first_touch(
         bars_held[newly] = step
         settled |= newly
 
-    # Events whose horizon runs past the end of the data have no determined
-    # outcome and must be dropped, not labelled HORIZON.
+    # Horizon past end of data: undetermined, dropped rather than labelled HORIZON.
     incomplete = np.arange(n) + horizon >= n
     bars_held[incomplete & ~settled] = -1
     return label, bars_held
@@ -110,22 +77,15 @@ def _first_touch(
 def triple_barrier(
     bars: pl.DataFrame, spec: BarrierSpec | None = None, side: int = 1,
 ) -> pl.DataFrame:
-    """Label every bar. Returns labels with their determination times.
+    """Label every bar with its determination time.
 
-    `side` is +1 for long, -1 for short; with a primary model supplying direction
-    this is where meta-labelling attaches (§7).
+    `side`: +1 long, -1 short; meta-labelling attaches here (§7).
     """
     spec = spec if spec is not None else BarrierSpec()
     frame = bars.sort("event_time")
 
-    # Exponentially weighted, not rolling. A rolling window has two edges: it
-    # takes an observation and, `vol_period` bars later, drops it — and the drop
-    # moves the estimate as much as the take did, on a bar where nothing
-    # happened. Barrier width is a decision, so that echo mislabels: a bar is
-    # recorded as having touched nothing because the barrier widened for a shock
-    # a full window in the past. RESULT-004 measured what the same edge costs
-    # when it drives position size, and tests/unit/test_estimator_echo.py holds
-    # the line here. An EWM has no trailing edge, only decay.
+    # EWM, not rolling: a rolling window's trailing edge moves the estimate on a quiet bar,
+    # widening barriers for an old shock (RESULT-004; tests/unit/test_estimator_echo.py).
     vol = (
         frame.select(
             (pl.col("close") / pl.col("close").shift(1)).log()
@@ -157,12 +117,8 @@ def triple_barrier(
     return frame.select("event_time", "available_at", "close").with_columns(
         label=pl.Series(label, dtype=pl.Int8),
         bars_held=pl.Series(bars_held, dtype=pl.Int32),
-        # When the outcome became knowable. This is what the purge must cover —
-        # not the maximum horizon, and certainly not the entry time.
-        #
-        # Gathered rather than taken through numpy: a round trip through
-        # `to_numpy` strips the timezone, and a naive timestamp here would
-        # compare silently wrongly against the tz-aware archive (§5).
+        # When the outcome became knowable; what the purge must cover. Gathered, not via
+        # numpy: `to_numpy` strips the timezone and breaks tz-aware comparisons (§5).
         determined_at=frame["event_time"].gather(exit_idx),
         exit_price=pl.Series(close[exit_idx]),
         vol=pl.Series(vol),

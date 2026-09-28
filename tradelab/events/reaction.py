@@ -1,27 +1,9 @@
 """What actually happened after an event. Plan.md §11.3.
 
-"The market moved after the news" is meaningless without a counterfactual, so
-each reaction is measured against one and then normalised so reactions can be
-pooled across assets at all.
-
-**The benchmark.** For an asset-specific event — a listing, a hack, an unlock —
-the counterfactual is cross-sectional: the asset's return less beta times the
-market's, with beta estimated on a pre-event window that is embargoed so it
-never touches the event itself. For a market-wide event there is no unaffected
-asset to difference against, so the benchmark falls back to the time series and
-that fact is recorded rather than hidden, because the two are not equally
-trustworthy.
-
-**The normalisation.** `z = CAR(h) / (sigma_pre * sqrt(h))`. Without it a 2% move
-in a quiet altcoin and a 6% move in a volatile one are not comparable, and
-pooling them produces garbage. `z` is the poolable quantity, and it is also the
-unit a human rating is given in — which is what makes a rating scoreable against
-what happened rather than merely recorded.
-
-**What is deliberately not here.** No decay is fitted and no signal is produced.
-This module measures; §11.5 fits and §11.10 differences. Keeping them apart
-means a measurement can be checked without re-running a model, and a model can
-be refitted without re-measuring.
+Asset-specific events: cross-sectional benchmark (return - beta x market, beta from an
+embargoed pre-event window). Market-wide: time-series fallback, recorded as such.
+`z = CAR(h) / (sigma_pre * sqrt(h))`, h in bars; z is poolable and the unit of human ratings.
+Measures only: §11.5 fits, §11.10 differences.
 """
 
 from __future__ import annotations
@@ -31,17 +13,12 @@ from enum import StrEnum
 
 import numpy as np
 
-#: Horizons in minutes, per §11's `event_reactions` grid. The negatives are the
-#: pre-event window and they are not decoration: a reaction that had already
-#: begun before the announcement was public is leakage, not a reaction, and the
-#: only way to see it is to measure there too.
+#: Horizons in minutes (§11 `event_reactions` grid); negatives detect pre-event leakage.
 HORIZONS: tuple[int, ...] = (-60, -15, 5, 15, 60, 240, 1440, 4320, 10080)
 
 #: Days of history used to estimate beta and the pre-event volatility.
 ESTIMATION_DAYS = 30
-#: Bars between the estimation window and the event. Without it the last bars of
-#: the window contain the event's own run-up and beta absorbs the thing being
-#: measured.
+#: Bars between the estimation window and the event, so beta excludes the run-up.
 EMBARGO_BARS = 1
 
 
@@ -82,9 +59,7 @@ def estimate_beta(
 ) -> tuple[float | None, float]:
     """Beta and pre-event volatility, from an embargoed window before the event.
 
-    Returns `(None, sigma)` when the market series is flat or the window is too
-    short — a beta estimated on a handful of bars is noise, and substituting 1.0
-    would quietly turn a cross-sectional benchmark into a raw return.
+    `(None, sigma)` when the market is flat or the window too short; never substitute 1.0.
     """
     stop = max(0, event_index - embargo)
     start = max(0, stop - ESTIMATION_DAYS * bars_per_day)
@@ -108,18 +83,14 @@ def measure(
 ) -> list[Reaction]:
     """Cumulative abnormal return and its z, at each horizon.
 
-    Horizons that run past the end of the data are skipped rather than truncated
-    to what exists: a 7-day figure computed over 3 days is not a 7-day figure,
-    and reporting it as one is how a horizon quietly becomes whatever the data
-    happened to hold.
+    Horizons past the end of the data are skipped, never truncated.
     """
     beta, sigma = estimate_beta(
         window.asset_returns, window.market_returns, window.event_index, bars_per_day)
 
     kind = BenchmarkKind.TIME_SERIES if market_wide else BenchmarkKind.CROSS_SECTIONAL
     if beta is None and not market_wide:
-        # No usable beta means no cross-sectional counterfactual, so the
-        # benchmark is downgraded and says so rather than pretending.
+        # No usable beta: downgrade to time series, recorded.
         kind = BenchmarkKind.TIME_SERIES
 
     bars_per_minute = bars_per_day / (24 * 60)
@@ -138,15 +109,12 @@ def measure(
         if kind is BenchmarkKind.CROSS_SECTIONAL:
             abnormal = asset_leg - beta * window.market_returns[start:stop]
         else:
-            # Without a cross-section the counterfactual is the asset's own
-            # mean outside the event, which is weaker and recorded as such.
+            # Counterfactual: the asset's own pre-event mean.
             abnormal = asset_leg - float(
                 window.asset_returns[:max(1, window.event_index - EMBARGO_BARS)].mean())
 
         car = float(abnormal.sum())
-        # sqrt(h) in bars, because sigma is a per-bar standard deviation and a
-        # CAR accumulated over n bars scales with its square root under
-        # independence. Using h in minutes would scale by the wrong quantity.
+        # sqrt(h) in bars, not minutes: sigma is per bar.
         denominator = sigma * np.sqrt(span)
         out.append(Reaction(
             asset=asset, horizon_minutes=horizon, car=car,
@@ -157,25 +125,13 @@ def measure(
 
 
 def leakage_flag(reactions: list[Reaction], threshold: float = 1.5) -> bool:
-    """Whether the move had already begun before the event was public.
-
-    A pre-event z of any size is a warning; one past the threshold means the
-    reaction being measured is partly something the market already knew, and the
-    post-event figure is not what it appears to be. Reported rather than
-    subtracted out, because the honest handling of a contaminated measurement is
-    to mark it.
-    """
+    """Whether the move had already begun before the event was public. Flagged, not removed."""
     return any(abs(r.z) > threshold for r in reactions if r.is_pre_event)
 
 
 def scored_against(rating_sigma: float, reactions: list[Reaction],
                    horizon_minutes: int = 1440) -> float | None:
-    """How far a human rating sat from what happened, in sigma. Plan.md §20.5.
-
-    This is the whole reason ratings are stored in sigma. A rating of +2 against
-    a measured z of +0.3 is not merely optimistic, it is 1.7 sigma optimistic —
-    a number that accumulates into a calibration curve rather than an impression.
-    """
+    """How far a human rating sat from what happened, in sigma. Plan.md §20.5."""
     match = next((r for r in reactions if r.horizon_minutes == horizon_minutes), None)
     return None if match is None else rating_sigma - match.z
 

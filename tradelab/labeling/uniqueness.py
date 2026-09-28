@@ -1,22 +1,7 @@
-"""Label concurrency and sample uniqueness. Plan.md §7, §8.8.
+"""Label concurrency and sample uniqueness (López de Prado). Plan.md §7, §8.8.
 
-The correction this makes is unglamorous and affects everything downstream.
-
-A label opened at t and determined at t+3d spans three days. So does the one
-opened an hour later. They are not two independent observations of the market —
-they mostly observe the *same* three days. Counting them as two inflates the
-sample, and every significance figure computed from that count inherits the
-inflation: the Deflated Sharpe, the Minimum Track Record Length, the detectable
-floor in §8.8. All of them become more confident than the data supports.
-
-López de Prado's correction: a label's **uniqueness** is the average, over the
-bars it spans, of one divided by how many labels span that bar. Summing the
-uniqueness of every label gives the **effective** number of observations, which
-is the number the statistics should have been using all along.
-
-For a strategy holding for days on hourly bars the difference is not marginal.
-It is the difference between believing you have 20,000 observations and knowing
-you have 800.
+Uniqueness = mean over a label's bars of 1/concurrency; the sum is the effective sample
+size that significance figures (DSR, MinTRL, §8.8 floor) must use instead of raw count.
 """
 
 from __future__ import annotations
@@ -41,10 +26,7 @@ class UniquenessResult:
 
 
 def concurrency(start_idx: np.ndarray, end_idx: np.ndarray, n_bars: int) -> np.ndarray:
-    """Labels active at each bar, by index.
-
-    A difference array rather than a loop over labels: O(n) instead of O(labels x span).
-    """
+    """Labels active at each bar, by index (difference array, O(n))."""
     counts = np.zeros(n_bars + 1, dtype=np.int64)
     np.add.at(counts, start_idx, 1)
     np.add.at(counts, np.minimum(end_idx + 1, n_bars), -1)
@@ -72,9 +54,7 @@ def average_uniqueness(start_idx: np.ndarray, end_idx: np.ndarray, n_bars: int) 
 def from_labels(labels: pl.DataFrame, n_bars: int | None = None) -> UniquenessResult:
     """Uniqueness from a triple-barrier output (§7).
 
-    Uses `bars_held`, which is the determination time — how long the label was
-    actually open — rather than the maximum horizon. Overlap is a property of
-    what happened, not of what was permitted.
+    Uses `bars_held` (determination time), not the maximum horizon.
     """
     start = np.arange(labels.height)
     held = labels["bars_held"].to_numpy().astype(np.int64)
@@ -89,9 +69,7 @@ def sequential_bootstrap(
 ) -> np.ndarray:
     """Draw samples favouring labels that overlap what is already drawn least.
 
-    Ordinary bootstrap over overlapping labels resamples the same few periods
-    repeatedly and understates variance — which makes confidence intervals
-    narrower than the data earns.
+    Ordinary bootstrap over overlapping labels understates variance.
     """
     rng = np.random.default_rng(seed)
     n_labels = start_idx.size

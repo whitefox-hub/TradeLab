@@ -1,10 +1,5 @@
-"""Backfill orchestration: collect, validate, persist, record. Plan.md §4.2.
-
-The invariant this enforces: **nothing is written that has not been validated, and
-no anomaly is dropped.** A batch with blocking issues is not silently skipped and
-not silently repaired — it is refused, and the reason is recorded so the gap in
-the archive is explainable later.
-"""
+"""Backfill orchestration (Plan.md §4.2): nothing is written unvalidated; a batch with
+blocking issues is refused (not repaired) and its issues are kept."""
 
 from __future__ import annotations
 
@@ -52,8 +47,7 @@ def run_backfill(
         day = batch.frame["event_time"].min().date()  # type: ignore[union-attr]
 
         if not report.ok:
-            # Refused, not repaired. The archive stays honest and the hole is
-            # documented in data_quality_issues.
+            # Refused, not repaired; the hole is documented in data_quality_issues.
             result.refused_days.append(day)
             log.warning("batch_refused", asset=asset, day=str(day),
                         issues=[i.kind for i in report.blocking])

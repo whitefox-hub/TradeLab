@@ -1,12 +1,10 @@
 #!/usr/bin/env python
-"""Move every downloaded metrics snapshot to the moment it became available.
+"""One-off: shift downloaded metrics snapshots by `METRICS_STAMP_LAG_MS` to availability time.
 
-The archive stamps a snapshot five minutes before the reading it describes
-(`intraday.METRICS_STAMP_LAG_MS`, measured 2026-09-27). Files built before the
-parser knew that are shifted here once rather than downloaded again, and then
-cut at delisting and at the window's end exactly as the builder cuts them. A
-marker file makes a second run a no-op, because shifting twice is a leak the
-other way.
+Then cut at delisting and window end as the builder does. The marker file makes a re-run
+a no-op: shifting twice would leak the other way.
+
+    python scripts/fix_metrics_stamp.py
 """
 
 from __future__ import annotations

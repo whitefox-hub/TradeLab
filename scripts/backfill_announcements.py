@@ -1,8 +1,9 @@
 """Backfill the Binance announcement history into the Parquet archive.
 
-The feed is venue-wide, so every partition uses the `_all` asset key (§3.2).
-Partitioned by the month of the announcement, not of the run, so a re-run
-rewrites the same files rather than accumulating duplicates at today's date.
+Venue-wide feed, so the `_all` asset key (§3.2). Partitioned by announcement month, not
+run date, so a re-run rewrites the same files instead of duplicating.
+
+    python scripts/backfill_announcements.py [--since 2019-01-01]
 """
 
 from __future__ import annotations

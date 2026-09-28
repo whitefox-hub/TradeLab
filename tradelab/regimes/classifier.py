@@ -1,22 +1,7 @@
 """Market regime classification. Plan.md §10.
 
-The trap this module is written around is easy to fall into and invisible
-afterwards: **the thresholds must not know the future.**
-
-Calling a period "high volatility" because it sits above the median of the whole
-sample uses data from years later to label a day in 2020. Nothing raises, the
-labels look entirely sensible, and every per-regime result computed from them is
-contaminated. Worse, the contamination flatters: regimes defined with hindsight
-separate outcomes better than regimes anyone could have identified at the time.
-
-So every threshold here is an **expanding-window quantile over past data only**.
-The classification of a bar depends on that bar and its history, never on what
-came after. §16.3's truncation invariance covers it, because a regime label is a
-feature in every sense that matters.
-
-The cost is real and worth stating: the first `warmup` bars cannot be classified
-at all, because there is no history to set a threshold against. They are returned
-as UNKNOWN rather than guessed.
+Thresholds must not know the future: each is an expanding-window quantile over strictly
+past data (covered by §16.3 truncation invariance). The first `warmup` bars are UNKNOWN.
 """
 
 from __future__ import annotations
@@ -55,18 +40,14 @@ class RegimeSpec:
     vol_high_quantile: float = 0.66
     vol_low_quantile: float = 0.33
     trend_quantile: float = 0.60    # |trend| above this is directional
-    # Efficiency ratio: net move divided by total path travelled. High means the
-    # market went somewhere; low means it wandered.
+    # Efficiency ratio: net move / total path travelled.
     efficiency_quantile: float = 0.60
 
 
 def _expanding_quantile(values: np.ndarray, q: float, warmup: int) -> np.ndarray:
-    """Quantile of everything strictly BEFORE each point.
+    """Quantile of everything strictly BEFORE each point (excludes the current bar).
 
-    The whole module turns on this being exclusive of the current bar and of
-    everything after it. A vectorised sort-based version would be faster; this
-    is written for auditability, since being obviously correct matters more here
-    than being quick.
+    Deliberately a plain loop for auditability over speed.
     """
     out = np.full(values.size, np.nan)
     for i in range(warmup, values.size):
@@ -87,12 +68,8 @@ def classify(bars: pl.DataFrame, spec: RegimeSpec | None = None) -> pl.DataFrame
     log_returns = np.zeros(n)
     log_returns[1:] = np.log(close[1:] / close[:-1])
 
-    # Exponentially weighted, for the reason given in labeling/barriers.py: a
-    # rolling window drops an observation as sharply as it took it, so a shock
-    # is paid for twice and the second time lands on a bar where nothing
-    # happened. Here that files a day under the wrong regime — and §13.1's point
-    # is that correlation is a property of the regime, which FINDING-004
-    # confirmed the expensive way.
+    # EWM, not rolling: a rolling window's trailing edge moves the estimate on a quiet bar
+    # and mislabels its regime (§13.1, FINDING-004; see labeling/barriers.py).
     vol = (
         pl.Series(log_returns)
         .ewm_std(span=spec.vol_period, min_samples=spec.vol_period)
@@ -144,12 +121,7 @@ def classify(bars: pl.DataFrame, spec: RegimeSpec | None = None) -> pl.DataFrame
 
 
 def coverage(labels: pl.DataFrame, min_bars: int = 200) -> dict[str, int]:
-    """Bars per regime. A regime below `min_bars` cannot support a conclusion.
-
-    §15 requires a strategy to be positive in at least two regimes; that means
-    two regimes with enough observations to say anything, not two labels that
-    happen to appear.
-    """
+    """Bars per regime, dropping regimes below `min_bars` and unknown (§15)."""
     counts = labels.group_by("regime").len().sort("len", descending=True)
     return {
         row["regime"]: row["len"]

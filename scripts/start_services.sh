@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Start the operator interface and the forward trend book, detached from any
-# terminal, each with a pidfile. Stops the previous instance by its pidfile
-# rather than by matching a process name, which also matches the shell that
-# runs this.
-#
+# Start the operator interface and the forward trend book, detached, each with a pidfile.
+# Stop by pidfile, not process-name match: a name match also hits this shell.
 #   ./scripts/start_services.sh          # (re)start both
 #   ./scripts/start_services.sh stop     # stop both
 set -euo pipefail

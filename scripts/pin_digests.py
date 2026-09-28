@@ -1,9 +1,8 @@
-"""Resolve base image tags to sha256 digests. Plan.md §2.2.
+"""Pin Dockerfile base image tags to sha256 digests (tags move; §16.1 reproducibility).
 
-A tag moves. `python:3.12-slim-bookworm` is a different image today than it was
-last month, so an experiment recording a tag records nothing reproducible — and
-§16.1 promises that re-running an experiment reproduces it. Digests make that
-promise real instead of nominal.
+Plan.md §2.2.
+
+    python scripts/pin_digests.py
 """
 
 from __future__ import annotations

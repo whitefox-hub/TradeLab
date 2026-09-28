@@ -1,12 +1,6 @@
-"""Consistency checks over Plan.md. Run before committing a plan change.
+"""Consistency checks over Plan.md: undefined tables named in prose, dangling § references.
 
-Three kinds of drift, all of which have happened at least once:
-
-- A table named in prose and never defined in §5. Foreign-key checking misses it
-  entirely, because nothing references a table that does not exist.
-- A cross-reference to a section that is not there.
-- A `sed`-style edit whose anchor stopped matching, which fails silently and
-  leaves the document describing something it does not contain.
+    python scripts/check_plan.py
 """
 
 from __future__ import annotations
@@ -16,7 +10,6 @@ import sys
 from pathlib import Path
 
 PLAN = Path(__file__).resolve().parent.parent / "Plan.md"
-# Words that look like table names in prose but are columns, types or prose.
 IGNORE = {"information_schema", "pg_extension"}
 
 
@@ -29,7 +22,6 @@ def main() -> int:
     if missing := sorted(referenced - defined):
         problems.append(f"foreign keys to undefined tables: {missing}")
 
-    # Backticked snake_case identifiers in prose that look like table names.
     prose = set(re.findall(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+){1,3})`", text))
     columns = set(re.findall(r"^\s{2,}(\w+)\s+\w", text, re.M))
     candidates = {
@@ -37,7 +29,6 @@ def main() -> int:
         if name.endswith(("s", "_log")) and name not in columns and name not in IGNORE
     }
     if orphans := sorted(candidates - defined - columns):
-        # Only flag ones that read like tables: plural and used with a table verb.
         likely = [
             n for n in orphans
             if re.search(rf"(records?|table|rows? in|into|from) `{n}`", text)

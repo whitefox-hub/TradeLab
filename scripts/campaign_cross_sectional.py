@@ -1,12 +1,8 @@
-"""Phase 4b, hypothesis 2: funding ranked across the universe.
+"""Phase 4b, hypothesis 2: funding z ranked across the universe.
 
-A different hypothesis from the threshold study, not a variant of it. A funding
-z-score of 1.5 means one thing when the market is calm and another when
-everything sits at 2; ranking asks which asset is most crowded *right now*.
+Long-short and long-only both run; long-only mostly measures market beta.
 
-Long-short is the honest form. A long-only basket of top-k crypto assets is
-mostly long crypto, so its Sharpe measures beta to a market that rose. Both are
-run, and the difference between them is itself the finding.
+    python scripts/campaign_cross_sectional.py [asset_limit]
 """
 
 from __future__ import annotations

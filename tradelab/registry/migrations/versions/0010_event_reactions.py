@@ -1,8 +1,6 @@
 """Measured event reactions. Plan.md §11.3.
 
-One row per event, asset and horizon. A reaction is not one number: a move that
-is large at an hour and gone by a day is a different object from one that
-persists, and that distinction is what §11.5 fits a decay to.
+One row per event, asset and horizon; §11.5 fits a decay across horizons.
 """
 
 from __future__ import annotations

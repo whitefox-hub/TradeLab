@@ -1,11 +1,8 @@
-"""Evaluate PREREG-006. One trial, no knobs.
+"""Evaluate PREREG-006 (PREREG-003's position plus a breadth gate). One trial, no knobs.
 
-Everything here is fixed by research/PREREG-006-breadth-gated.md, committed
-before this file existed. The constants are asserted rather than parameterised,
-because a script with options is a grid however it is run.
+Constants fixed by research/PREREG-006-breadth-gated.md; do not parameterise.
 
-The position is PREREG-003's, unchanged. This is the same strategy with a switch
-on it, so any difference is the switch.
+    python scripts/run_prereg_006.py
 """
 
 from __future__ import annotations
@@ -28,12 +25,7 @@ YEAR = 365.25
 
 
 def breadth_series(matrix: np.ndarray, window: int) -> np.ndarray:
-    """Trailing variance-ratio breadth, ending at t-1.
-
-    Ending at t-1 and not t. A window including day t gates the position using
-    the return it is about to earn, which is the leak the synthetic ordering
-    tests exist to catch, and it is checked below rather than assumed.
-    """
+    """Trailing variance-ratio breadth ending at t-1; including t would leak (probed in main)."""
     out = np.full(matrix.shape[1], np.nan)
     for t in range(window, matrix.shape[1]):
         chunk = np.nan_to_num(matrix[:, t - window:t])
@@ -48,12 +40,7 @@ def breadth_series(matrix: np.ndarray, window: int) -> np.ndarray:
 
 
 def gate(breadth: np.ndarray) -> np.ndarray:
-    """Held where breadth is above the expanding median of what came before.
-
-    Expanding and not rolling: the registration says "every reading observed so
-    far", which has nothing in it to fit. The median at t uses readings up to
-    t-1, so the comparison is against a past the day itself did not shape.
-    """
+    """Held where breadth > expanding median of readings up to t-1 (registered; not rolling)."""
     held = np.zeros(breadth.size, dtype=bool)
     seen: list[float] = []
     for t, value in enumerate(breadth):
@@ -96,8 +83,7 @@ def main() -> int:
     breadth = breadth_series(matrix, BREADTH_WINDOW)
     held = gate(breadth)
 
-    # The leak check, run rather than asserted: perturbing day t must not change
-    # whether day t is held.
+    # Leak probe: perturbing day t must not change whether day t is held.
     probe = matrix.copy()
     probe[:, BREADTH_WINDOW + 5] += 0.05
     moved = int(np.sum(gate(breadth_series(probe, BREADTH_WINDOW))[:BREADTH_WINDOW + 6]

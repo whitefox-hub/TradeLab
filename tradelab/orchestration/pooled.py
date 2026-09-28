@@ -1,26 +1,8 @@
 """Pooled multi-asset studies. Plan.md §6.3, §8.3, §8.8.
 
-The distinction this module exists for is subtle and decides whether a study can
-conclude anything.
-
-**Searching across assets**: run a grid on each of 50 assets and keep whichever
-asset it worked on. That is 50 x grid trials, the bar rises with all of them, and
-the survivor has to clear a height set by the whole search.
-
-**Pooling across assets**: evaluate each configuration on all 50 assets and score
-it by the pooled result. That is grid trials — the asset count does not enter it,
-because no choice was made between assets — and the effective sample multiplies.
-
-The second is what §6.3 means by "validate wide, deploy narrow", and the
-arithmetic is decisive. Measured on a real study: at 2,843 effective
-observations, the required annualised Sharpe is 4.14 after 532 trials and 2.78
-after nine. The study produced 2.29, so trimming the grid alone would not have
-been enough. Required Sharpe falls as 1/sqrt(n), so pooling is the lever that
-moves it: crypto assets correlate around 0.75, and fifty of them behave like six
-or eight independent ones — enough to drop the bar by a factor of roughly 2.6.
-
-Pooling is also the more honest claim. "This works on BTC" invites the question
-of how many assets were tried; "this works across the universe" does not.
+Pooling scores each configuration on all assets at once: trials = grid size (no choice
+between assets is made), and the effective sample multiplies. Searching per asset would
+cost assets x grid trials. §6.3 "validate wide, deploy narrow".
 """
 
 from __future__ import annotations
@@ -40,11 +22,7 @@ from tradelab.features.materialise import materialise
 class PooledConfig:
     """One configuration, scored separately in and out of sample.
 
-    Both are kept because they answer different questions and mixing them is how
-    selection leakage enters. `is_sharpe` is what a configuration may be CHOSEN
-    on; `sharpe` is what the chosen one is REPORTED as. Picking the best
-    out-of-sample score and then quoting that score is choosing with the test set
-    in hand and then citing the test as evidence.
+    Choose on `is_sharpe`, report `sharpe` (OOS); mixing them leaks selection.
     """
 
     params: dict
@@ -66,13 +44,7 @@ class PooledConfig:
 
     @property
     def breadth(self) -> float:
-        """Share of assets where the configuration was positive.
-
-        The number that separates a configuration that works from one that was
-        carried by a single asset. A pooled Sharpe can look respectable while
-        forty-nine assets lose and one wins enormously, and breadth is what makes
-        that visible.
-        """
+        """Share of assets where the configuration was positive (exposes one-asset carries)."""
         if not self.per_asset_sharpe:
             return 0.0
         return float(np.mean([s > 0 for s in self.per_asset_sharpe.values()]))
@@ -181,19 +153,13 @@ def run_pooled(
 
     return PooledResult(
         configs=configs, assets=sorted(loaded),
-        # The grid, not the grid times the assets: no choice was made between
-        # assets, so none is paid for (§8.3).
+        # The grid, not grid x assets: no choice between assets was made (§8.3).
         trials=len(values) * len(entries),
     )
 
 
 def _assets_under(root: Path, kind: str) -> set[str]:
-    """Asset names from the partition directories.
-
-    Walks directories rather than files: the archive holds 439,000 parquet files
-    and the layout already answers which assets exist, so listing them is a few
-    hundred stats instead of half a million.
-    """
+    """Asset names from the partition directories (not files: the archive is huge)."""
     base = root / kind
     if not base.exists():
         return set()

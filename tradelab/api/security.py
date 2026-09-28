@@ -1,13 +1,6 @@
-"""Authentication for one operator. Plan.md §20.3.
+"""Single-operator authentication and short-lived signed sessions. Plan.md §20.3.
 
-With a single identity this is not establishing *who*. It is a deliberate act
-before a decision can be recorded, and it keeps the surface closed if the port
-ever stops being local. Sessions are short-lived and every write reaches
-`audit_log` with an actor, an action and a time.
-
-What is lost by collapsing the roles is stated in §20.3 and is not nothing:
-nothing here prevents lowering a gate and approving under it. That is handled in
-the database, by a trigger, so it cannot be clicked past — see migration 0004.
+Lowering a gate then approving under it is blocked by a DB trigger (migration 0004), not here.
 """
 
 from __future__ import annotations
@@ -32,14 +25,14 @@ class Operator:
 
 
 def hash_password(password: str, salt: str) -> str:
-    """PBKDF2 rather than a bare digest. One credential is still a credential."""
+    """PBKDF2-SHA256 hex digest of `password` with `salt`."""
     return hashlib.pbkdf2_hmac(
         "sha256", password.encode(), salt.encode(), 200_000
     ).hex()
 
 
 def verify_password(password: str, salt: str, expected: str) -> bool:
-    # Constant time: a timing oracle on one account is still a timing oracle.
+    # Constant-time compare: avoids a timing oracle.
     return hmac.compare_digest(hash_password(password, salt), expected)
 
 
@@ -67,7 +60,7 @@ def new_secret() -> str:
 
 
 def operator_dependency(sessions: Sessions):
-    """Builds the dependency, so the session signer is injected rather than global."""
+    """FastAPI dependency yielding the signed-in Operator; the signer is injected, not global."""
 
     def current_operator(
         token: str | None = Cookie(default=None, alias=SESSION_COOKIE),

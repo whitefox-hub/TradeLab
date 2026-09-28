@@ -1,8 +1,8 @@
 """Evaluate PREREG-001 exactly as registered. One trial, whole sample.
 
-Nothing here is tunable. The direction, entry, holding period, weighting and
-costs come from research/PREREG-001-listing-reversal.md and are asserted rather
-than parameterised, because a script with knobs is a grid however it is run.
+Nothing is tunable: every choice comes from research/PREREG-001-listing-reversal.md.
+
+    python scripts/run_prereg_001.py [--events data/parquet/listing_events.parquet]
 """
 
 from __future__ import annotations
@@ -34,8 +34,7 @@ def main() -> int:
     exit_ = events["exit_close"].to_numpy()
     funding = events["funding_received"].to_numpy()
 
-    # Short: the position gains when price falls, and receives funding when it is
-    # positive, which is the second half of the registered mechanism.
+    # Short: gains when price falls and receives positive funding (registered mechanism).
     gross = -(exit_ / entry - 1.0)
     cost = np.full(n, BINANCE_RETAIL.round_trip)
     net = gross + funding - cost

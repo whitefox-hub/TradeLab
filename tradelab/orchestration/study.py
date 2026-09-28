@@ -1,20 +1,7 @@
 """End-to-end study execution. Plan.md §9.1, §8, §15.
 
-This is the funnel as one callable: load data, build features, label, screen,
-validate, judge. Every component it uses was tested in isolation; what this adds
-is the wiring, and the wiring is where the trial counter and the effective sample
-size have to survive the journey intact.
-
-Two invariants it exists to hold:
-
-**Every configuration evaluated counts as a trial**, including the ones tier A
-discards. That number is what deflates the Sharpe of whatever survives (§8.3),
-and losing it anywhere between the grid and the verdict silently inflates the
-result.
-
-**The observation count that reaches the statistics is the effective one** (§7),
-never the number of bars. A strategy holding for days produces serially dependent
-returns, and treating them as independent overstates every significance figure.
+Invariants: every configuration evaluated counts as a trial (deflates Sharpe, §8.3), and
+statistics use the effective observation count, never the bar count (§7).
 """
 
 from __future__ import annotations
@@ -39,11 +26,7 @@ from tradelab.validation.stability import Surface, analyse, plateau_width
 class StudySpec:
     """One hypothesis and the grid that tests it.
 
-    `param_name` and `params` describe the feature's own axis; `entries` the
-    threshold the signal is compared against. Keeping them separate is what lets
-    a single study test any registered feature rather than only the one it was
-    written for — and testing only the feature it was written for is how a lab
-    ends up having judged nothing but RSI.
+    `param_name`/`params` are the feature's own axis; `entries` the signal threshold.
     """
 
     name: str
@@ -57,20 +40,14 @@ class StudySpec:
     min_detectable_sharpe: float | None = None
     oos_fraction: float = 0.3
     years: float | None = None      # None uses the whole archive
-    # Configurations below this are excluded from SELECTION, not merely rejected
-    # afterwards (§8.7). A surface scored on Sharpe alone is won by whichever
-    # configuration traded least: few trades give a noisy Sharpe, and the maximum
-    # of a noisy quantity is what a search finds. The gate would then reject it
-    # and the whole study is spent on a configuration that was never eligible.
+    # Below this, excluded from selection, not merely rejected afterwards (§8.7):
+    # otherwise the noisiest low-trade Sharpe wins.
     min_trades: int = 100
-    # Target annualised Sharpe the study is looking for. Checked against the
-    # design's power BEFORE the grid runs (§8.8): a study that cannot resolve
-    # its own target still spends its trials, and the counter is monotonic, so
-    # it raises the bar for every study after it.
+    # Target annualised Sharpe; power is checked before the grid runs (§8.8), since
+    # trials spent are never refunded.
     target_sharpe_annual: float = 1.0
     require_power: bool = True
-    # Long above the threshold, or short below it. Funding extremes are read
-    # short-side more naturally than momentum is.
+    # 1: long above the threshold; -1: short.
     direction: int = 1
 
     @property
@@ -99,19 +76,13 @@ class StudyResult:
     best: BacktestResult | None
     best_params: dict
     gate: GateEvaluation
-    # The held-out evaluation, kept rather than discarded into the gate. The
-    # gate short-circuits below the trade minimum and its metrics dict then has
-    # no `sharpe_annualised` at all, so anything reading the out-of-sample
-    # figure through `gate.metrics.get(...)` silently reads its own default.
-    # Two leak regression tests did exactly that and passed with the leak
-    # reinstated, which is a worse state than having no test.
+    # Held-out evaluation. Read OOS figures from here, not `gate.metrics`, which lacks
+    # them when the gate short-circuits below the trade minimum.
     oos: BacktestResult | None = None
     stability: dict = field(default_factory=dict)
     robustness: dict = field(default_factory=dict)
     pbo: float | None = None
-    # Every screened configuration. Written to Parquet, never to Postgres (§5.7),
-    # but retained so a verdict citing N trials can be checked against N rows
-    # rather than taken on trust.
+    # Every screened configuration; to Parquet, never Postgres (§5.7).
     tier_a_rows: list[dict] = field(default_factory=list)
 
     @property
@@ -124,28 +95,14 @@ def load_bars(
     years: float | None = None, limit_days: int | None = None,
     with_funding_series: bool = True,
 ):
-    """Resample the 1m archive to the study timeframe.
+    """Resample the 1m archive to the study timeframe (derived, §5.7; UTC day boundary).
 
-    Derived, not stored (§5.7), and the day boundary is UTC because funding
-    settles on UTC marks.
-
-    `years` trims to the most recent span. It is offered because the tension is
-    real — 2020 crypto is not the market of 2026, and a strategy validated
-    against a regime that no longer exists is validated against nothing — but it
-    is worth knowing what it costs. The detectable floor of §8.8 scales roughly
-    as 1/sqrt(n): halving the history raises the smallest resolvable effect by
-    about 40%, on a search that already came back underpowered at seven years.
-
-    Shortening the window is therefore not the way to make a study easier. The
-    resolution for non-stationarity is walk-forward (§8.1), which uses all the
-    history without ever assuming one regime spans it.
+    `years` trims to the recent span; the §8.8 detectable floor scales ~1/sqrt(n).
     """
     from tradelab.storage.materialise_bars import load_materialised
     from tradelab.storage.query import aggregate_bars
 
-    # A materialised view if one exists and is fresh: deriving 4h from 1m costs
-    # minutes per asset, and a campaign that pays that per study cannot iterate
-    # (§9.6).
+    # Prefer a fresh materialised view: deriving from 1m costs minutes per asset (§9.6).
     cached = load_materialised(root, asset, timeframe)
     if cached is not None:
         bars = cached.sort("event_time")
@@ -173,10 +130,7 @@ def load_bars(
 def with_funding(root: Path, asset: str, bars: pl.DataFrame) -> pl.DataFrame:
     """Attach the funding rate, aligned to the bar containing each settlement.
 
-    Settlements land at 00:00, 08:00 and 16:00 UTC, so on hourly bars most bars
-    carry zero. Left-joined and filled rather than forward-filled: funding is a
-    payment at an instant, not a level that persists, and carrying it forward
-    would charge it every bar.
+    Zero-filled, never forward-filled: funding is a payment at an instant, not a level.
     """
     from tradelab.storage.query import scan
 
@@ -198,15 +152,9 @@ def with_funding(root: Path, asset: str, bars: pl.DataFrame) -> pl.DataFrame:
 
 def _check_power(spec: StudySpec, features: pl.DataFrame, close: np.ndarray,
                  funding: np.ndarray | None) -> None:
-    """Size the study from one pilot evaluation, before committing to the grid.
+    """Size the study from one pilot at the median parameter and threshold.
 
-    The pilot reads the holding structure and nothing else — no return, no
-    Sharpe. A pilot whose performance is looked at is a trial and would have to
-    be counted; one that only measures how often the design trades makes no
-    selection and costs nothing against §8.3.
-
-    The median parameter and threshold are used, so the estimate reflects the
-    grid rather than its most or least active corner.
+    Reads holding structure only, never returns, so it is not a trial (§8.3).
     """
     from tradelab.engines.tier_a.engine import BARS_PER_YEAR
     from tradelab.validation.power import pilot_effective_n, require_power
@@ -224,11 +172,7 @@ def _check_power(spec: StudySpec, features: pl.DataFrame, close: np.ndarray,
 
 
 def _funding_series(bars: pl.DataFrame) -> np.ndarray | None:
-    """Per-bar funding, zero where no settlement falls in that bar.
-
-    Costs 11.8% a year on a long perpetual position (§9.5), so a study that omits
-    it understates a long-biased result by roughly half its cost.
-    """
+    """Per-bar funding, zero where no settlement falls in that bar (§9.5)."""
     if "funding_rate" not in bars.columns:
         return None
     return bars["funding_rate"].fill_null(0.0).to_numpy().astype(np.float64)
@@ -264,14 +208,8 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
         signal = features[spec.column(value)].to_numpy().astype(np.float64)
         for entry in spec.entries:
             position = threshold_position(signal, float(entry)) * spec.direction
-            # Scored on the TRAINING window only. An earlier version passed the
-            # full series here while the comment below asserted it did not,
-            # which is the worst shape a defect can take: the documentation
-            # states the invariant and the code violates it, so a reader who
-            # checks the comment concludes it holds. Every result produced
-            # before this was selection-contaminated — the evaluation was out of
-            # sample, but the configuration had been chosen with the test set in
-            # hand.
+            # Scored on the TRAINING window only; the full series leaks the test set
+            # into selection.
             result = run(close[:split], position[:split], spec.costs, spec.timeframe,
                          funding=funding[:split] if funding is not None else None)
             results.append(result)
@@ -280,28 +218,14 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             lagged = np.concatenate([[0.0], position[:-1]])
             traded = np.abs(np.diff(np.concatenate([[0.0], lagged])))
             gross_matrix.append(lagged * returns)
-            # Net is kept alongside gross and they are not interchangeable.
-            # PBO takes gross (§8.3); the verdict takes net, because net is what
-            # the strategy earns.
+            # PBO takes gross (§8.3); the verdict takes net.
             net_row = lagged * returns - traded * spec.costs.per_side
             if funding is not None:
                 net_row = net_row - lagged * funding
             net_matrix.append(net_row)
             turnover.append(float(traded.sum()))
-            # Scored NET, because net is what gets traded. Gross selection
-            # picks whatever costs destroy: measured on 4,000 synthetic bars, a
-            # configuration at gross +1.10 and net -7.55 outranked one at gross
-            # +1.00 and net +0.94.
-            #
-            # This is a different question from the one PBO answers. PBO takes
-            # gross (§8.3) because it measures whether *selection* is reliable
-            # independent of turnover; selection takes net because it is
-            # choosing what to hold. Conflating them is how a study promotes a
-            # configuration that only works before fees.
-            #
-            # Configurations below the trade minimum are scored -inf rather than
-            # omitted, so the surface keeps its shape for the stability analysis
-            # (§8.5) while remaining unselectable.
+            # Selection scores NET (gross picks what costs destroy); PBO stays on gross.
+            # Below min_trades: -inf, not omitted, so the surface keeps its shape (§8.5).
             eligible = result.n_trades >= spec.min_trades
             surface_points.append((
                 {spec.param_name: value, "entry": float(entry)},
@@ -312,8 +236,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     if not executed:
         raise ValueError("study evaluated nothing")
 
-    # Selection on the smoothed surface: the centre of the best region rather
-    # than the luckiest single draw (§8.5).
+    # Select the centre of the best smoothed region, not the luckiest point (§8.5).
     surface = Surface.build(surface_points, [spec.param_name, "entry"])
     if not np.isfinite(surface.scores).any():
         raise ValueError(
@@ -324,10 +247,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     chosen = params.index(stability.peak_params)
     best = results[chosen]
 
-    # NET, not gross. An earlier version took `gross_matrix[chosen]` into a
-    # variable named `net` and judged on it, so every verdict was reached on
-    # returns that had paid neither fees nor funding — and two cost models gave
-    # Sharpe ratios identical to sixteen digits, which is what exposed it.
+    # NET, not gross: the verdict must pay fees and funding.
     oos = net_matrix[chosen][split:]
     chosen_signal = features[spec.column(stability.peak_params[spec.param_name])]
     oos_result = run(
@@ -384,11 +304,7 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
 
 
 def cost_sensitivity(bars: pl.DataFrame, spec: StudySpec) -> dict[str, Verdict]:
-    """The same study under realistic and pessimistic fills (§9.5).
-
-    Promotion requires surviving the pessimistic column; a strategy that only
-    works under optimistic fills only works in the backtest.
-    """
+    """The same study under realistic and pessimistic fills (§9.5); promotion needs both."""
     out = {}
     for label, costs in (("realistic", BINANCE_RETAIL), ("pessimistic", PESSIMISTIC)):
         variant = StudySpec(**{**spec.__dict__, "costs": costs})

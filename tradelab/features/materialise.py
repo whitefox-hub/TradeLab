@@ -1,8 +1,6 @@
 """Feature materialisation. Plan.md §6, §9.6.
 
-Features are lazy Polars expressions so the planner fuses thousands of variants
-into one pass over the data: computing forty RSI periods should cost close to
-what one costs, not forty times as much.
+Features are lazy Polars expressions so all variants fuse into one pass over the data.
 """
 
 from __future__ import annotations
@@ -32,11 +30,9 @@ def materialise(
 
 
 def feature_set_hash(feature_set: FeatureSet, registry: Registry | None = None) -> str:
-    """Identity of a feature set: names, parameters and the code behind them.
+    """Identity of a feature set: names, parameters and each definition's `code_hash`.
 
-    Includes each definition's `code_hash`, so editing a feature's implementation
-    produces a different set even when the name and parameters are unchanged —
-    which is what stops a silent recomputation being mistaken for a cache hit.
+    Including code_hash means editing an implementation invalidates cached results.
     """
     reg = registry if registry is not None else REGISTRY
     payload = sorted(

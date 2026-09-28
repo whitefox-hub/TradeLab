@@ -1,8 +1,6 @@
 """Binance USD-M futures, over the wire. Plan.md §12.1, §14.1, §14.2, §14.3, §14.4.
 
-Rungs three and four of the ladder, and the reason §12.1 makes testnet
-non-optional: a whole family of failures exists only past this boundary and the
-local simulator cannot produce any of them.
+Venue error codes handled by name (operator response differs per code):
 
     -1021  timestamp outside recvWindow (clock drift)
     -1022  invalid signature
@@ -16,26 +14,8 @@ local simulator cannot produce any of them.
     -1121  invalid symbol
     -4164  order notional below the minimum
 
-Each is handled by name rather than as a generic failure, because the operator
-response differs: drift needs the host clock fixed, a signature error needs the
-key checked, a margin rejection is the strategy asking for something the account
-cannot do.
-
-**Credentials come from the environment, never from the tree** (§14.4), and the
-adapter refuses to start in LIVE with a key that can withdraw. Trading needs no
-withdrawal permission, so a key that has one is a key whose worst mistake is
-irreversible rather than embarrassing.
-
-**An acknowledgement is not a fill.** Positions are folded from `fills` alone,
-and a fill here always comes from a trade record — never from having sent an
-order successfully, and never from the order response, which carries no fee and
-no realised price. Conflating the two is how a system comes to believe it holds
-a position the venue never opened (§14.2).
-
-This module replaces the pair that preceded it: one written against mocks, with
-the rounding and the dead man's switch, and one written against the sandbox,
-with what the sandbox turned out to say. Neither was whole and keeping both
-meant the tested half and the true half were never the same object.
+Credentials come from the environment (§14.4); LIVE refuses a withdraw-capable key.
+An acknowledgement is not a fill: fills come only from trade records (§14.2).
 """
 
 from __future__ import annotations
@@ -66,9 +46,7 @@ from tradelab.execution.types import (
 LIVE_BASE = "https://fapi.binance.com"
 TESTNET_BASE = "https://testnet.binancefuture.com"
 
-#: Binance tells "key unknown" and "signature invalid" apart, and so should we.
-#: An adapter reporting both as "authentication failed" sends whoever is
-#: debugging it to check the wrong one of the two.
+#: Unknown key and bad signature are kept distinct so debugging checks the right one.
 UNKNOWN_KEY = -2015
 BAD_SIGNATURE = -1022
 TIMESTAMP_DRIFT = -1021
@@ -81,23 +59,18 @@ BAD_PRECISION = -1111
 UNKNOWN_SYMBOL = -1121
 BELOW_MIN_NOTIONAL = -4164
 
-#: Codes meaning "this order will never work as sent" rather than "try again".
-#: Retrying one of these burns rate limit and the error counter for nothing.
+#: "Will never work as sent": retrying burns rate limit and the error counter.
 PERMANENT: frozenset[int] = frozenset({
     BAD_SIGNATURE, INSUFFICIENT_MARGIN, POSITION_OVER_BRACKET, BAD_PRECISION,
     UNKNOWN_SYMBOL, BELOW_MIN_NOTIONAL, -2010, -4003, -4131,
 })
 
-#: Codes indicating an environment fault rather than a bad order. Worth
-#: separating because the fix is operational, not strategic.
+#: Environment faults rather than bad orders; the fix is operational.
 ENVIRONMENTAL: frozenset[int] = frozenset({TIMESTAMP_DRIFT, RATE_LIMITED})
 
-#: Sent on every signed request. Short, because a long window is a wider gap in
-#: which a replayed request is still accepted.
+#: Short: a long window widens the gap in which a replayed request is accepted.
 RECV_WINDOW_MS = 5_000
 
-#: Everything this adapter sends is a string or a number. Narrower than `dict`
-#: so the http client can type-check what reaches it.
 Params = Mapping[str, str | int]
 
 
@@ -124,13 +97,7 @@ class UnsafeCredentials(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class Credentials:
-    """Separate keys per mode, never shared between testnet and live (§14.4).
-
-    The mode travels with the key so a live key cannot be handed to a testnet
-    adapter or the reverse. Checked at construction rather than trusted,
-    because the failure is silent in one direction and catastrophic in the
-    other.
-    """
+    """Keys bound to their mode, never shared between testnet and live (§14.4)."""
 
     api_key: str
     api_secret: str
@@ -152,10 +119,7 @@ class Credentials:
 class BinanceFuturesAdapter(VenueAdapter):
     """Signed REST against Binance USD-M futures. Rounds before sending.
 
-    Rounding client-side is not an optimisation. The venue rejects an unrounded
-    order, and a system that learns its own tick size only from rejections has
-    made the venue its validator — at the cost of the error counter and, in
-    LIVE, of the position it failed to open.
+    Rounding client-side keeps the venue from being the validator (error counter, lost fills).
     """
 
     credentials: Credentials
@@ -165,15 +129,10 @@ class BinanceFuturesAdapter(VenueAdapter):
     rejections: list[Ack] = field(default_factory=list)
     _fills: list[Fill] = field(default_factory=list)
     _seen_trades: set[int] = field(default_factory=set)
-    #: Venue order id -> the client order id we sent it under. The trade record
-    #: names the order but not our name for it, so without this a fill cannot
-    #: be attributed to the decision that caused it and the §14.3 log loses the
-    #: thread exactly where it matters.
+    #: Venue order id -> our client order id; trade records lack ours (§14.3 attribution).
     _our_orders: dict[str, str] = field(default_factory=dict)
     _weight_used: int = 0
-    #: Difference between our clock and the venue's, learned at startup. Drift
-    #: is the commonest cause of -1021 and it is silent until an order is
-    #: refused.
+    #: Venue clock minus ours, ms; drift is the usual cause of -1021.
     _clock_offset_ms: int = 0
 
     @classmethod
@@ -182,9 +141,7 @@ class BinanceFuturesAdapter(VenueAdapter):
     ) -> BinanceFuturesAdapter:
         """Build from the environment, then check the key before trading.
 
-        Defaults to TESTNET. Reaching LIVE takes a deliberate argument and a
-        different pair of variables, so the two cannot be confused by an unset
-        one falling back to the other.
+        Defaults to TESTNET; LIVE uses different variables so an unset one never falls back.
         """
         prefix = "BINANCE_TESTNET" if mode is ExecutionMode.TESTNET else "BINANCE"
         key = os.environ.get(f"{prefix}_KEY", "").strip()
@@ -228,9 +185,7 @@ class BinanceFuturesAdapter(VenueAdapter):
         return int(time.time() * 1000) + self._clock_offset_ms
 
     def _read(self, response: httpx.Response) -> object:
-        # Weight is reported per response and is the only reliable view of how
-        # close the account is to a ban. Counting our own calls undercounts,
-        # because weights differ per endpoint.
+        # Venue-reported weight; counting our own calls undercounts (per-endpoint weights).
         for header in ("x-mbx-used-weight-1m", "X-MBX-USED-WEIGHT-1M"):
             if header in response.headers:
                 self._weight_used = int(response.headers[header])
@@ -249,9 +204,8 @@ class BinanceFuturesAdapter(VenueAdapter):
                 params: Params | None = None) -> object:
         """One signed request, resynced and resent once if the clock drifted.
 
-        -1021 is refused before the venue reads the request, so resending is
-        safe even for an order. Once, and not in a loop: drift that survives a
-        fresh offset is the host's clock, and it has to be raised to be fixed.
+        -1021 is refused before the venue reads the request, so one resend is safe even
+        for an order. Not a loop: drift surviving a resync is the host clock; raise it.
         """
         try:
             return self._send_signed(method, path, params)
@@ -270,11 +224,7 @@ class BinanceFuturesAdapter(VenueAdapter):
         )
 
     def sync_clock(self) -> int:
-        """Measure our offset against the venue and carry it on every request.
-
-        Without this, a host whose clock has drifted past `recvWindow` fails
-        every signed call with -1021 and the cause is invisible from the error.
-        """
+        """Measure our clock offset against the venue and carry it on every request."""
         server = self._public("/fapi/v1/time")
         assert isinstance(server, dict)
         self._clock_offset_ms = int(server["serverTime"]) - int(time.time() * 1000)
@@ -283,10 +233,7 @@ class BinanceFuturesAdapter(VenueAdapter):
     def load_instruments(self, symbols: list[str] | None = None) -> dict[str, Instrument]:
         """Read tick size, lot size and minimum notional from the venue.
 
-        Asked rather than written down. A hard-coded floor is wrong the day the
-        venue changes it and wrong immediately if it was mistyped — BTCUSDT sat
-        at 100 in this tree while Binance was asking 50, which silently doubled
-        the smallest position any sizing rule could take.
+        Asked, never hard-coded: a stale floor silently distorts the smallest position.
         """
         info = self._public("/fapi/v1/exchangeInfo")
         assert isinstance(info, dict)
@@ -314,16 +261,9 @@ class BinanceFuturesAdapter(VenueAdapter):
     # -- the safety check that only matters in LIVE --------------------------
 
     def check_credentials(self) -> None:
-        """Refuse a withdrawal-capable key on a path that trades real money.
+        """Refuse a withdrawal-capable key on a path that trades real money (§14.4).
 
-        Trading needs no withdrawal permission. A key that has one turns the
-        worst available mistake from "lost money on a bad trade" into "lost the
-        money". §14.4 keeps credentials out of the tree; this keeps the wrong
-        credential out of production.
-
-        Run on testnet too, and reported rather than refused there: the testnet
-        grants withdrawal to every key, and refusing would make the check
-        untestable on the only rung where it can be exercised safely.
+        Not refused on testnet: the testnet grants withdrawal to every key.
         """
         account = self._signed("GET", "/fapi/v2/account")
         assert isinstance(account, dict)
@@ -338,25 +278,13 @@ class BinanceFuturesAdapter(VenueAdapter):
     # -- VenueAdapter --------------------------------------------------------
 
     def submit(self, order: Order, at: datetime) -> Ack:
-        """Send one order, and report what came back rather than what was hoped.
+        """Send one order, and report what came back.
 
-        `newClientOrderId` carries the deterministic id (§14.3), but **the venue
-        does not enforce it**. Measured on the testnet: the same id sent twice as
-        a MARKET order was accepted both times, with two different venue order
-        ids, and the position doubled. Binance frees a client id once the order
-        leaves the book, which for a market order is at once.
-
-        So a retry after a timeout opens a second position unless the caller
-        checks first. `already_executed` is how: write the intent, send, and on
-        recovery *ask about the id already written* rather than resending it.
-        That is what §14.3 means by resolving from a known id instead of
-        guessing from a position delta — and the guarantee is ours, not the
-        venue's.
-
-        While an order rests the venue *does* refuse its id, with -4116. That
-        is answered with the order already there rather than a rejection: the
-        retry found what it was looking for, and counting it as an error lets a
-        correct placement walk the engine towards `max_consecutive_errors`.
+        `newClientOrderId` carries the deterministic id (§14.3), but the venue
+        does not enforce it once the order leaves the book (a resent MARKET id
+        doubles the position), so recovery asks `already_executed` instead of resending.
+        -4116 means the order rests on the book: return it, not a rejection, so it does
+        not count towards `max_consecutive_errors`.
         """
         instrument = self.instruments.get(order.asset)
         if instrument is None:
@@ -399,12 +327,7 @@ class BinanceFuturesAdapter(VenueAdapter):
         if venue_order_id:
             self._our_orders[venue_order_id] = order.client_order_id
 
-        # Collected on every accepted order, not only where the response reports
-        # an executed quantity. A market order comes back status NEW with
-        # executedQty 0 and fills microseconds later, so gating on that field
-        # left the engine believing it held nothing while the venue held 0.002
-        # BTC — the exact divergence §14.2 exists to catch, manufactured by the
-        # adapter that feeds it.
+        # Always collect: a MARKET order returns NEW with executedQty 0 and fills just after.
         self.collect_fills(order.asset)
         return Ack(client_order_id=order.client_order_id,
                    status=_status(response.get("status")),
@@ -416,16 +339,9 @@ class BinanceFuturesAdapter(VenueAdapter):
         return ack
 
     def collect_fills(self, asset: str) -> int:
-        """Read executed trades and fold in any not seen before.
+        """Read executed trades and fold in any not seen before, deduplicated by trade id.
 
-        Deduplicated by the venue's trade id, because this runs after every
-        order and again on recovery, and a fill counted twice is a position that
-        drifts from the venue's without either side being wrong about its own
-        arithmetic.
-
-        The trade id travels on the `Fill` as well. One order that fills in
-        three pieces produces three trades under one client order id, so the
-        engine needs the venue's name for each to count them all.
+        The trade id rides on the `Fill`: one order can fill as several trades.
         """
         trades = self._signed("GET", "/fapi/v1/userTrades",
                               {"symbol": asset, "limit": 100})
@@ -433,13 +349,7 @@ class BinanceFuturesAdapter(VenueAdapter):
 
     def recover_fills(self, asset: str, client_order_id: str,
                       venue_order_id: str) -> int:
-        """The trades of one order, asked for by the venue's id for it.
-
-        For a restart. The fresh process primes the recent history away as not
-        its own, so an order that filled while the old one was dead would be
-        primed with it. Run before `prime`, and the recovered trades are seen
-        already and stay folded.
-        """
+        """The trades of one order, by venue order id. On restart, run before `prime`."""
         if not venue_order_id:
             return 0
         self._our_orders[venue_order_id] = client_order_id
@@ -462,9 +372,7 @@ class BinanceFuturesAdapter(VenueAdapter):
                 price=Decimal(str(trade["price"])),
                 fee=Decimal(str(trade["commission"])),
                 at=datetime.fromtimestamp(int(trade["time"]) / 1000, UTC),
-                # Empty where we did not send the order — a manual trade, a
-                # liquidation, another process. Saying so is better than
-                # attributing it to whatever we happened to send last.
+                # Empty when not ours (manual trade, liquidation, another process).
                 client_order_id=self._our_orders.get(str(trade.get("orderId", "")), ""),
                 venue_trade_id=str(trade_id),
             ))
@@ -474,19 +382,8 @@ class BinanceFuturesAdapter(VenueAdapter):
     def prime(self, symbols: list[str] | None = None) -> int:
         """Mark the trades already at the venue as seen, without folding them.
 
-        `collect_fills` reads the recent trade history, and on the first call
-        that history is not ours — it belongs to whatever ran before. Folding
-        it makes our position the sum of everything the account has done
-        lately, which is right only when that sum happens to be zero.
-
-        It did happen to be zero in the drill that found this: the previous run
-        had flattened, so seven stale trades netted out and the engine agreed
-        with the venue for entirely the wrong reason. A run that had ended
-        holding something would have started believing it held the opposite.
-
-        Reconciliation cannot catch it, because reconciliation runs before the
-        first fill and this happens after. So: `reconcile()`, then `prime()`,
-        then trade.
+        Prior history is not ours; folding it corrupts the position. Restart order:
+        `reconcile()`, then `prime()`, then trade.
         """
         primed = 0
         for symbol in symbols or sorted(self.instruments):
@@ -502,25 +399,18 @@ class BinanceFuturesAdapter(VenueAdapter):
     def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
         """Has this id already been placed? None if the venue has never seen it.
 
-        The idempotency the venue does not provide. §14.3 writes the intent
-        before the order is sent precisely so a process that died between the
-        two can ask this on restart instead of resending and opening a second
-        position.
+        The idempotency the venue does not provide (§14.3).
         """
         if not client_order_id:
-            # The venue answers an empty id with -1102, which is not -2013 and
-            # would therefore be raised — correct, but it reads as a venue
-            # fault when it is a caller with nothing to ask about.
+            # The venue would answer -1102, which reads as a venue fault.
             raise ValueError("cannot resolve an empty client order id")
         try:
             found = self._signed(
                 "GET", "/fapi/v1/order",
                 {"symbol": asset, "origClientOrderId": client_order_id})
         except VenueError as missing:
-            # -2013 is "order does not exist", which is the answer and not a
-            # failure. Anything else — a rate limit, a bad signature — is a
-            # failure, and reading it as "never sent" is how the caller is
-            # invited to open the second position this method exists to stop.
+            # Only -2013 means "never sent"; any other error must raise, or the caller
+            # would resend and open a second position.
             if missing.code == UNKNOWN_ORDER:
                 return None
             raise
@@ -530,16 +420,12 @@ class BinanceFuturesAdapter(VenueAdapter):
                    venue_order_id=str(found.get("orderId", "")))
 
     def cancel_all(self, at: datetime) -> int:
-        """Cancel every resting order, and keep going when one symbol fails.
-
-        A kill switch that clears four books of five is far better than one that
-        stops at the first refusal (§14.1).
-        """
+        """Cancel every resting order, continuing past a failing symbol (§14.1)."""
         del at
         try:
             resting = self._signed("GET", "/fapi/v1/openOrders")
         except VenueError:
-            # Cannot read what is open, so try every symbol we know instead.
+            # Cannot list open orders; try every known symbol.
             resting = [{"symbol": s} for s in sorted(self.instruments)]
         assert isinstance(resting, list)
         cancelled = 0
@@ -552,23 +438,14 @@ class BinanceFuturesAdapter(VenueAdapter):
         return cancelled
 
     def open_orders(self, symbol: str | None = None) -> list[str]:
-        """Client order ids resting at the venue, as the venue lists them.
-
-        Read rather than tracked, for the same reason as `positions`: the
-        switches that cancel orders — ours and the venue's own countdown — are
-        only proven by what the book shows afterwards.
-        """
+        """Client order ids resting at the venue, read rather than tracked."""
         resting = self._signed("GET", "/fapi/v1/openOrders",
                                {"symbol": symbol} if symbol else None)
         assert isinstance(resting, list)
         return [str(o["clientOrderId"]) for o in resting]
 
     def positions(self) -> dict[str, Decimal]:
-        """What the venue says is held. The only view §14.2 reconciles against.
-
-        Zero-quantity rows are dropped: the venue returns one per symbol it has
-        ever known, and a flat position is not a held one.
-        """
+        """What the venue says is held (non-zero only). The view §14.2 reconciles against."""
         account = self._signed("GET", "/fapi/v2/account")
         assert isinstance(account, dict)
         return {str(p["symbol"]): Decimal(str(p["positionAmt"]))
@@ -576,23 +453,13 @@ class BinanceFuturesAdapter(VenueAdapter):
                 if Decimal(str(p["positionAmt"])) != 0}
 
     def last_price(self, symbol: str) -> Decimal:
-        """The venue's last traded price, for the risk engine to judge against.
-
-        Unsigned, so it costs nothing to ask often. The deviation limit
-        compares an order's price against this, which is only meaningful if it
-        comes from the venue the order is going to.
-        """
+        """The venue's last traded price (unsigned), for the price-deviation limit."""
         quote = self._public("/fapi/v1/ticker/price", {"symbol": symbol})
         assert isinstance(quote, dict)
         return Decimal(str(quote["price"]))
 
     def equity(self) -> Decimal:
-        """Margin balance as the venue computes it. §14.1 judges against this.
-
-        Read, not tracked. A running total of our own drifts from the venue's
-        on every fee and every funding payment, and a limit expressed as a
-        fraction of equity is only a limit if the equity is the real one.
-        """
+        """Margin balance as the venue computes it; read, not tracked (§14.1)."""
         account = self._signed("GET", "/fapi/v2/account")
         assert isinstance(account, dict)
         return Decimal(str(account["totalMarginBalance"]))
@@ -602,11 +469,7 @@ class BinanceFuturesAdapter(VenueAdapter):
     def arm_dead_mans_switch(self, symbol: str, timeout_ms: int = 30_000) -> int:
         """Ask the venue to cancel our orders if we stop talking to it (§14.1).
 
-        The point is that it does not depend on us. A kill switch inside our own
-        process cannot fire when the failure *is* our own process, and that is
-        the failure most likely to leave orders resting.
-
-        Must be re-armed inside the timeout; the countdown resets on each call.
+        Must be re-armed inside the timeout; each call resets the countdown.
         """
         payload = self._signed("POST", "/fapi/v1/countdownCancelAll",
                                {"symbol": symbol, "countdownTime": timeout_ms})
@@ -632,12 +495,8 @@ def _status(venue_status: object) -> OrderStatus:
 
 def heartbeat_due(last_armed: datetime, timeout_ms: int, now: datetime,
                   safety: float = 0.5) -> bool:
-    """Whether the switch needs re-arming, with margin.
-
-    Re-arming at the last moment means one slow request cancels the book. The
-    default fires at half the window, so a single missed beat is survivable and
-    two are not — which is the intended behaviour.
-    """
+    """Whether the switch needs re-arming; default at half the window, so one missed beat is
+    survivable."""
     elapsed_ms = (now - last_armed).total_seconds() * 1000
     return elapsed_ms >= timeout_ms * safety
 

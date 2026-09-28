@@ -162,9 +162,7 @@ const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
 let current = [];
 
 function openEditor() {
-  // Pre-filled with what is in force, so a change is a change rather than a
-  // form filled from nothing. Every field is present: a configuration is the
-  // whole set, and a partial one would take defaults nobody chose.
+  // Pre-filled with the limits in force; a config must include every field.
   $("fields").innerHTML = current.map((l) => `
     <div class="field">
       <label for="f-${escape(l.name)}">${escape(l.name)}</label>
@@ -188,9 +186,7 @@ async function create() {
   for (const l of current) {
     const input = $(`f-${l.name}`);
     const value = Number(input.value);
-    // Checked here so the operator is told which field, and again by the
-    // endpoint — which is reachable without this form, so the server's check
-    // is the one that counts.
+    // Client-side hint only; the server check is authoritative.
     const off = !Number.isFinite(value) || value < Number(l.low)
       || value > Number(l.high) || (l.whole && !Number.isInteger(value));
     input.classList.toggle("bad", off);
@@ -222,8 +218,7 @@ async function load() {
   ].map(([n, k]) => `<div class="card"><div class="n">${n}</div>
     <div class="k">${k}</div></div>`).join("");
 
-  // Which of the two is in force, said rather than left to be inferred: a
-  // default displayed as a configuration is a limit nobody chose.
+  // Show whether a stored config or engine defaults are in force.
   $("origin").textContent = data.config_name
     ? `In force: configuration "${data.config_name}", valid from `
       + `${data.valid_from.slice(0, 10)}. Values that differ from the engine's `

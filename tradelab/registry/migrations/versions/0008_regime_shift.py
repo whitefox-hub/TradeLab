@@ -1,11 +1,7 @@
 """The fourth event shape. Plan.md §11.7.
 
-A war, a venue collapse or an outright ban does not deviate from a baseline and
-return to it — it replaces the baseline. Fitting a decay to one estimates a
-reversion that never happens, so it needs its own shape rather than being filed
-as a long shock.
-
-Alembic does not diff CHECK constraints, so this is written by hand.
+Adds `regime_shift`: it replaces the baseline, so no decay is fit. Hand-written: Alembic
+does not diff CHECK constraints.
 """
 
 from __future__ import annotations
@@ -27,8 +23,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Anything already filed as a regime shift has no home in the old set, so it
-    # would block the constraint. Named rather than silently reclassified.
+    # Rows with regime_shift would violate the old constraint; deleted, not reclassified.
     op.execute("DELETE FROM events WHERE shape = 'regime_shift'")
     op.execute("ALTER TABLE events DROP CONSTRAINT IF EXISTS ck_events_shape")
     op.execute(

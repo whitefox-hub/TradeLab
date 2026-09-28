@@ -1,9 +1,4 @@
-"""Venue adapters. Plan.md §12.2.
-
-Four modes, one engine. The adapter and the data feed are the only things that
-change between them; the decision code is byte-for-byte identical, so the
-strategy running live is provably the one that passed validation.
-"""
+"""Venue adapters. Plan.md §12.2. Adapter and data feed are all that differ between modes."""
 
 from __future__ import annotations
 
@@ -24,11 +19,7 @@ from tradelab.execution.types import (
 
 @dataclass(frozen=True, slots=True)
 class Ack:
-    """What a venue says back. Deliberately poorer than a Fill.
-
-    An acknowledgement is not a fill, and conflating them is how a system comes
-    to believe it holds a position the venue never opened (§14.2).
-    """
+    """What a venue says back. An acknowledgement is not a fill (§14.2)."""
 
     client_order_id: str
     status: OrderStatus
@@ -41,9 +32,7 @@ class VenueAdapter(ABC):
 
     @property
     def fills(self) -> list[Fill]:
-        """Fills observed so far. Part of the interface, not an implementation
-        detail of one adapter: the engine folds positions from this, and an
-        adapter that does not expose it stops position tracking silently."""
+        """Fills observed so far; the engine folds positions from this."""
         return []
 
     @abstractmethod
@@ -65,11 +54,7 @@ class VenueAdapter(ABC):
 
     def recover_fills(self, asset: str, client_order_id: str,
                       venue_order_id: str) -> int:
-        """Bring in the trades of one order that the process may have missed.
-
-        Zero where fills cannot be missed, as in a simulator whose fills are
-        recorded in the same call that makes them.
-        """
+        """Bring in the trades of one order the process may have missed. Zero if none can be."""
         del asset, client_order_id, venue_order_id
         return 0
 
@@ -83,11 +68,8 @@ class VenueAdapter(ABC):
 class SimulatedAdapter(VenueAdapter):
     """Local fill simulation for BACKTEST and SIMULATOR.
 
-    Fills at the given price plus a modelled cost. It cannot reject for reasons
-    a real venue would — signature errors, recvWindow drift, margin — which is
-    precisely why §12.1 makes testnet non-optional. What it *does* enforce is
-    tick and lot rounding, because those are knowable offline and a simulator
-    that ignores them reports fills at sizes no venue would accept.
+    Fills at price plus modelled cost; enforces tick/lot rounding and min_viable, but none
+    of the venue-only rejections (§12.1).
     """
 
     mode: ExecutionMode = ExecutionMode.SIMULATOR
@@ -115,8 +97,7 @@ class SimulatedAdapter(VenueAdapter):
         if quantity * price < instrument.min_viable(price):
             return self._reject(order, "below min_viable")
 
-        # Cross the spread in the direction that hurts, always. A simulator that
-        # fills at mid reports an edge the venue will not pay.
+        # Always cross the spread adversely; filling at mid reports a fake edge.
         slip = price * self.half_spread_bps / Decimal(10_000)
         fill_price = instrument.round_price(price + slip * order.side.sign)
         fee = quantity * fill_price * self.taker_fee
@@ -148,12 +129,7 @@ class SimulatedAdapter(VenueAdapter):
 
 @dataclass
 class HaltedAdapter(VenueAdapter):
-    """Wraps another adapter and refuses everything except reduce-only exits.
-
-    The kill switch leaves the system in this state rather than stopping the
-    process, so that positions can still be closed while nothing new opens
-    (§14.1).
-    """
+    """Wraps another adapter and refuses everything except reduce-only exits (§14.1)."""
 
     inner: VenueAdapter
     reason: str = "halted"
@@ -164,9 +140,7 @@ class HaltedAdapter(VenueAdapter):
 
     @property
     def fills(self) -> list[Fill]:
-        """Delegated, and this is load-bearing. Without it the engine's fill
-        folding silently stopped the moment a run halted — so positions froze
-        exactly while the system was trying to flatten them."""
+        """Delegated: without it fill folding stops while a halted run flattens."""
         return self.inner.fills
 
     def submit(self, order: Order, at: datetime) -> Ack:
@@ -181,8 +155,7 @@ class HaltedAdapter(VenueAdapter):
     def positions(self) -> dict[str, Decimal]:
         return self.inner.positions()
 
-    # Reading what happened is never refused. A halted run that cannot ask
-    # about its own orders cannot know what it is holding while it flattens.
+    # Reads are never refused: a halted run must know what it holds while flattening.
 
     def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
         return self.inner.already_executed(asset, client_order_id)
@@ -198,11 +171,7 @@ class HaltedAdapter(VenueAdapter):
 def closing_orders(
     held: dict[str, Decimal], run_id: str = "kill",
 ) -> list[Order]:
-    """Reduce-only orders that flatten everything.
-
-    Built from the *venue's* position view rather than ours, because the kill
-    switch runs precisely in the situations where the two have diverged.
-    """
+    """Reduce-only orders that flatten everything, from the venue's position view."""
     orders = []
     for sequence, (asset, quantity) in enumerate(sorted(held.items())):
         if quantity == 0:

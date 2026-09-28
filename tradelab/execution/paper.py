@@ -1,15 +1,7 @@
 """A paper venue for strategies that rest limits. Plan.md §12.1 rung 2.
 
-`SimulatedAdapter` fills everything at the mark, crossing the spread, with the
-taker fee. That is right for a market order and wrong for a resting limit,
-which fills at its own price and pays the maker fee: at Flash Strike's size the
-difference is the whole of §0.2's maker argument.
-
-So a LIMIT order with a price fills **at that price, at the maker fee**. The
-caller is responsible for having decided that it filled; for Flash Strike that
-decision is the bar model's trade-through, calibrated against aggTrades
-(RESULT-008: 99.9% confirmed). A MARKET order is the simulated adapter's,
-unchanged: at the mark, the spread crossed, the taker fee.
+A LIMIT order with a price fills at that price, at the maker fee (§0.2); the caller has
+already decided it filled (RESULT-008). MARKET orders behave as in `SimulatedAdapter`.
 """
 
 from __future__ import annotations

@@ -1,8 +1,4 @@
-"""Registry ORM. Plan.md §5.
-
-Phase 0-1 subset: the tables needed to ingest data reproducibly. Later phases add
-their own tables per §17; nothing here is speculative.
-"""
+"""Registry ORM (Plan.md §5)."""
 
 from __future__ import annotations
 
@@ -163,8 +159,7 @@ class DatasetVersion(Base):
 # --------------------------------------------------------------------------- #
 
 class User(Base):
-    """One row. Exists so approvals and the audit log have a real actor to
-    reference, not to manage access (§20.3)."""
+    """Single row: a real actor for approvals and the audit log, not access control (§20.3)."""
 
     __tablename__ = "users"
 
@@ -241,8 +236,7 @@ class Strategy(Base):
 
 
 class GateConfig(Base):
-    """Promotion thresholds. `rationale` is NOT NULL: lowering a bar always
-    carries its reason, attached to every verdict issued under it (§20.3)."""
+    """Promotion thresholds; `rationale` NOT NULL : every bar change carries a reason (§20.3)."""
 
     __tablename__ = "gate_configs"
 
@@ -256,8 +250,7 @@ class GateConfig(Base):
 
 
 class Study(Base):
-    """A search campaign. `executed_trials` is the counter that feeds the
-    Deflated Sharpe: monotonic, never reset (§8.3)."""
+    """A search campaign. `executed_trials` feeds Deflated Sharpe; never reset (§8.3)."""
 
     __tablename__ = "studies"
 
@@ -282,8 +275,7 @@ class Study(Base):
 
 
 class Experiment(Base):
-    """Tier 1 results live in Parquet; only candidates earn referential
-    integrity, which the tier check enforces (§5.7)."""
+    """Tier 1 results live in Parquet; only tier >= 2 rows go here (§5.7)."""
 
     __tablename__ = "experiments"
 
@@ -367,8 +359,7 @@ class LifecycleTransition(Base):
     from_state: Mapped[str] = mapped_column(String(16), nullable=False)
     to_state: Mapped[str] = mapped_column(String(16), nullable=False)
     gate_config_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gate_configs.id"))
-    # Snapshot of the criteria as evaluated, so a later reading shows what was
-    # true at the moment rather than what is true now (§20.3).
+    # Snapshot of the criteria as evaluated then, not as they are now (§20.3).
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -377,18 +368,12 @@ class LifecycleTransition(Base):
 
 
 # --------------------------------------------------------------------------
-# Execution. Plan.md §12, §14. Added for phases 5-8, which were started ahead
-# of the validation gate that normally precedes them.
+# Execution. Plan.md §12, §14.
 # --------------------------------------------------------------------------
 
 
 class RiskLimitConfig(Base):
-    """Versioned limit sets, referenced rather than embedded (§14.1).
-
-    Embedding the numbers in `runs` would make a limit change invisible: two
-    runs would show the same config and behave differently. A reference plus
-    `valid_from` makes the change a row someone can point at.
-    """
+    """Versioned limit sets, referenced from `runs`, not embedded (§14.1)."""
 
     __tablename__ = "risk_limit_configs"
 
@@ -414,20 +399,12 @@ class RiskLimitConfig(Base):
 
 
     __table_args__ = (
-        # The configuration in force is the newest by valid_from, so "only one
-        # is active" holds by construction rather than by a flag somebody has
-        # to keep correct. A tie would make "newest" ambiguous, and the screen
-        # could show ACTIVE against a row a run would not pick up.
+        # The config in force is the newest by valid_from; a tie would make "newest" ambiguous.
         UniqueConstraint("valid_from", name="uq_risk_limit_configs_valid_from"),
     )
 
 class Run(Base):
-    """One execution in any mode (§12).
-
-    `risk_limit_config_id` is NOT NULL in every mode on purpose. A run that
-    could exist without limits would be a run whose limiter is first exercised
-    in production.
-    """
+    """One execution in any mode (§12). `risk_limit_config_id` NOT NULL in every mode."""
 
     __tablename__ = "runs"
 
@@ -477,8 +454,7 @@ class Intent(Base):
     reason: Mapped[dict] = mapped_column(JSONB, nullable=False)
     #: Which rule blocked it, if any. A veto is a decision and belongs here.
     vetoed_by: Mapped[str | None] = mapped_column(Text)
-    #: Survives venue-level netting, so per-strategy attribution stays possible
-    #: when two strategies want opposite positions in one asset (§13.4).
+    #: Survives venue-level netting, keeping per-strategy attribution (§13.4).
     attributed_to: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("strategies.id"))
 
     __table_args__ = (Index("ix_intents_run_time", "run_id", "decided_at"),)
@@ -490,7 +466,7 @@ class OrderRow(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
     intent_id: Mapped[int | None] = mapped_column(ForeignKey("intents.id"))
-    #: Deterministic, which is what makes a retry after a timeout idempotent.
+    #: Deterministic, so a retry after a timeout is idempotent.
     client_order_id: Mapped[str] = mapped_column(Text, nullable=False)
     venue_order_id: Mapped[str | None] = mapped_column(Text)
     asset: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -498,8 +474,7 @@ class OrderRow(Base):
     order_type: Mapped[str] = mapped_column(String(16), nullable=False)
     qty: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
-    #: Decision time and send time are separate columns because their difference
-    #: is what makes divergence attributable to timing rather than to fills.
+    #: Decision and send times kept apart so divergence is attributable to timing vs fills.
     intent_ts: Mapped[datetime] = mapped_column(TS, nullable=False)
     sent_ts: Mapped[datetime | None] = mapped_column(TS)
     ack_ts: Mapped[datetime | None] = mapped_column(TS)
@@ -519,8 +494,7 @@ class FillRow(Base):
     fill_ts: Mapped[datetime] = mapped_column(TS, nullable=False)
     qty: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    #: Kept alongside the realised price so per-trade slippage is a stored fact
-    #: rather than a reconstruction from a price series recorded elsewhere.
+    #: Stored so per-trade slippage is a fact, not a reconstruction.
     expected_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     fee: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     liquidity: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -541,8 +515,8 @@ class PositionRow(Base):
     unrealised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     realised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     funding_paid: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
-    #: Who sized it: `operator` (trend not 5) or `algorithm` (trend 5), and the
-    #: setting then in force. PREREG-009 is decided by guide (migration 0022).
+    #: Who sized it: `operator` (trend != 5) or `algorithm` (trend 5), plus the setting
+    #: then in force. PREREG-009 is decided by guide (migration 0022).
     guide: Mapped[str | None] = mapped_column(String(16))
     trend: Mapped[int | None] = mapped_column(SmallInteger)
     trend_source: Mapped[str | None] = mapped_column(Text)
@@ -581,12 +555,7 @@ class RiskEvent(Base):
 
 
 class PositionReconciliation(Base):
-    """Our position view against the venue's (§14.2).
-
-    Distinct from `reconciliations`, which compares *returns*. Conflating the
-    two loses the distinction between "we hold something different from what
-    they hold" and "we earned something different from what we expected".
-    """
+    """Our position view against the venue's (§14.2). `reconciliations` compares returns."""
 
     __tablename__ = "position_reconciliations"
 
@@ -614,8 +583,7 @@ class Reconciliation(Base):
     return_reference: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     divergence_ci_low: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     divergence_ci_high: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
-    #: {costs, timing, fills, data}. Knowing *that* two series diverge is
-    #: useless; the decomposition is what says which one to fix (§12.5).
+    #: {costs, timing, fills, data}: the decomposition says what to fix (§12.5).
     attribution: Mapped[dict] = mapped_column(JSONB, nullable=False)
     verdict: Mapped[str] = mapped_column(String(8), nullable=False)
 
@@ -635,8 +603,7 @@ class CapitalRampEvent(Base):
     from_tier: Mapped[str | None] = mapped_column(String(4))
     to_tier: Mapped[str] = mapped_column(String(4), nullable=False)
     capital: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    #: True when §14.1's minimum-viable floor raised the tier above its nominal
-    #: fraction. Worth storing: a floored tier is not the tier §14.5 describes.
+    #: True when §14.1's minimum-viable floor raised the tier above its nominal fraction.
     floored: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False)
@@ -648,18 +615,10 @@ class CapitalRampEvent(Base):
 
 
 class Approval(Base):
-    """A recorded decision. Plan.md §20.1, §20.3.
+    """A recorded decision (§20.1, §20.3). The UI writes only here and `lifecycle_transitions`.
 
-    The interface writes here and to `lifecycle_transitions`, and nowhere else.
-    Everything else it shows was computed by a worker and persisted, because a
-    figure that exists only on screen is a figure nobody can reproduce.
-
-    `gate_config_id` is the load-bearing column. With one operator there is no
-    separation of duties: nothing stops lowering a threshold and approving under
-    it three minutes later, and that loop is the characteristic failure of a solo
-    laboratory. So the separation becomes temporal — an approval may not cite a
-    gate config younger than 24 hours — and it is enforced here rather than in
-    the interface, so it cannot be clicked past.
+    Solo operator, so separation of duties is temporal: an approval may not cite a gate
+    config younger than 24 hours, enforced in the DB, not the interface.
     """
 
     __tablename__ = "approvals"
@@ -669,8 +628,7 @@ class Approval(Base):
     subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     approved_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     decision: Mapped[str] = mapped_column(String(8), nullable=False)
-    #: Which bar this approval relies on. Nullable only for `gate_change`
-    #: approvals, which are approving the bar itself rather than acting on one.
+    #: The bar relied on. Nullable only for `gate_change`, which approves the bar itself.
     gate_config_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gate_configs.id"))
     notes: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -680,8 +638,6 @@ class Approval(Base):
             "subject_kind IN ('strategy','capital_tier','gate_change')",
             name="ck_approvals_subject"),
         CheckConstraint("decision IN ('approve','reject')", name="ck_approvals_decision"),
-        # A gate change is approving the bar; everything else is acting on one
-        # and must say which.
         CheckConstraint(
             "subject_kind = 'gate_change' OR gate_config_id IS NOT NULL",
             name="ck_approvals_cites_a_gate"),
@@ -690,11 +646,7 @@ class Approval(Base):
 
 
 class AuditLog(Base):
-    """Actor, action, subject and time for every write. Plan.md §20.3.
-
-    What makes "threshold lowered 14:02, approval 14:05" legible six months
-    later. Append-only by convention and by the absence of any update path.
-    """
+    """Actor, action, subject and time for every write (§20.3). Append-only: no update path."""
 
     __tablename__ = "audit_log"
 
@@ -716,26 +668,10 @@ class AuditLog(Base):
 
 
 class Event(Base):
-    """One occurrence, whatever produced it. Plan.md §11.7.
+    """One occurrence, whatever produced it (§11.7). `shape` selects the machinery applied.
 
-    `shape` is not a label, it decides which machinery applies. A shock is a
-    single impulse; a schedule has a date the market can see coming and prices
-    in; a process resolves in steps, each of which can supersede the last. Using
-    one model for all three measures the wrong thing twice.
-
-    The fourth, `regime_shift`, is the one the impulse-response framework cannot
-    hold, and its examples are the events people most want to trade: a war
-    breaking out, a venue collapsing, an outright ban. Every other shape
-    estimates a **deviation from a baseline and a return to it** — `τ_slow` is
-    the rate of that return. A regime shift does not deviate from the baseline,
-    it **replaces** it, so fitting a decay estimates a reversion that never
-    happens and the fitted τ is meaningless rather than imprecise.
-
-    These belong to §10 rather than §11: a change of market state, handled by
-    the regime classifier that already conditions every result, and used as a
-    **conditioning variable** rather than as a signal. Wars and exchange
-    collapses number in the handful, and §8.8 applies — a conditional model over
-    a handful of occurrences estimates nothing.
+    `regime_shift` replaces the baseline rather than decaying back to it, so no τ is fit;
+    it is a §10 conditioning variable, not a signal (§8.8: too few occurrences).
     """
 
     __tablename__ = "events"
@@ -744,13 +680,8 @@ class Event(Base):
     event_type: Mapped[str] = mapped_column(String(48), nullable=False)
     shape: Mapped[str] = mapped_column(String(16), nullable=False, server_default="shock")
     first_seen_at: Mapped[datetime] = mapped_column(TS, nullable=False)
-    #: What the event says, in the words it arrived in.
-    #:
-    #: A column rather than an annotation. `event_annotations` holds what a
-    #: *person* asserted about an event — a correction or a judgement — and a
-    #: collected headline is neither: it is the event's own text. Filing it as an
-    #: annotation would also make every collected event look annotated, which is
-    #: precisely the flag the screen uses to find the ones nobody has read.
+    #: The event's own text. Not an annotation: annotations are human assertions, and the
+    #: screen uses "has annotation" to find unread events.
     headline: Mapped[str | None] = mapped_column(Text)
     latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     resolved_at: Mapped[datetime | None] = mapped_column(TS)
@@ -766,49 +697,22 @@ class Event(Base):
 
 
 class MarketConditions(Base):
-    """What a simulation is told the market is doing. Plan.md §20.
+    """What a simulation is told the market is doing (§20). Singleton: id fixed at 1 by CHECK.
 
-    One row, always. The primary key is fixed at 1, so a second set of
-    conditions collides rather than being created — the singleton is in the
-    schema and not in the API remembering to update instead of insert.
-
-    Two dials. The **market trend** is direction and intensity of pressure; `NORMAL` is
-    a real state and the default, because conditions forced to be either UP or
-    DOWN make the operator pick a lean they may not hold. The **sentiment** is
-    where on the 1-100 fear-and-greed scale the simulation should assume the
-    rest of the market sits.
-
-    `sentiment` here is **not** the reading in `sentiment_readings`. That one is
-    a measurement: dated, published once a day, never revised, and legible as of
-    a moment. This is an assumption with no date at all. One column for both
-    would make a measurement and an opinion indistinguishable, which is the
-    failure the hand-entered event corpus was kept apart from the collected one
-    to avoid.
-
-    None of it is dated, because none of it happened. Everything that did is in
-    `events`, which is point-in-time and is the corpus a study reads.
+    `sentiment` is an undated assumption, deliberately separate from the measured
+    `sentiment_readings`.
     """
 
     __tablename__ = "market_conditions"
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
-    #: The operator's reading of the news on one scale: 1 to 10, **5 neutral**,
-    #: direction derived from which side of 5 it sits on.
-    #:
-    #: One column, not a direction beside a magnitude. Those were two fields
-    #: that could disagree, kept in step by a CHECK, and there was no way to say
-    #: "nothing has happened" at the 5 the operator actually holds when they
-    #: have read no news.
+    #: Operator's reading of the news, 1-10 with 5 neutral; direction is the side of 5.
     trend: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=5)
-    #: 1 extreme fear, 50 neutral, 100 extreme greed. Defaults to 50 rather than
-    #: to today's printed value: seeding an assumption from a measurement would
-    #: make "nobody set this" and "someone chose the market's own number" the
-    #: same row, and only one of them is a decision.
+    #: 1 extreme fear, 50 neutral, 100 extreme greed. Defaults to 50, never seeded from a
+    #: measurement, so "unset" stays distinguishable from a choice.
     sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=50)
-    #: 'manual' set by a person, 'derived' computed, 'adopted' a computed value
-    #: a person accepted. PREREG-005 measures the operator and filters on this;
-    #: a hit credited to a person that was computed would confirm the wrong
-    #: hypothesis.
+    #: 'manual' by a person, 'derived' computed, 'adopted' computed then accepted.
+    #: PREREG-005 measures the operator and filters on this.
     source: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
     __table_args__ = (
@@ -825,21 +729,10 @@ class MarketConditions(Base):
 
 
 class MarketIndexReading(Base):
-    """A daily point of a broad market index. Plan.md §20, PREREG-005, §4.3.
+    """A daily point of a broad market index (§20, PREREG-005, §4.3). A yardstick: never traded.
 
-    A **yardstick, not an instrument**. CMC100 rebalances, so its return
-    includes rebalancing and is not a return anyone earned; nothing may trade
-    it, and it is here to say which way the market went.
-
-    Kept out of `macro_series` for the same reason the sentiment readings are:
-    that table is the point-in-time corpus a study reads, and this is a vendor
-    construct. Keyed on (day, source) from the start — `sentiment_readings` was
-    keyed on the day alone and had to be migrated the moment a second vendor
-    arrived.
-
-    One definition per column: every row is a 00:00Z snapshot. The intraday
-    endpoint refreshes every five minutes, and a row from it would mean
-    something different from its neighbours while looking identical.
+    Kept out of `macro_series` (vendor construct). Every row is a 00:00Z snapshot; never
+    store intraday values here.
     """
 
     __tablename__ = "market_index_readings"
@@ -859,19 +752,10 @@ class MarketIndexReading(Base):
 
 
 class ScenarioRun(Base):
-    """What the algorithm did under a set of operator-set conditions. §20, §15.
+    """What the algorithm did under operator-set conditions (§20, §15).
 
-    Deliberately **not** `runs`. That table carries a strategy, a risk limit
-    config, a cost model and a mode that includes `live`, and it exists for
-    something that trades. This records a simulation, and the two are kept apart
-    because the query that mistakes them is the one that reports a scenario as a
-    position. There is no mode column here and no foreign key out, so there is
-    nothing for a later change to point at the execution tables.
-
-    The conditions are copied onto the row rather than joined from
-    `market_conditions`, which holds one mutable row — a join would report every
-    past run as having used today's settings, which is the shape of error that
-    makes a backtest look prescient.
+    Deliberately not `runs` and no FKs out: a simulation must never read as a position.
+    Conditions are copied, not joined from the mutable `market_conditions` row.
     """
 
     __tablename__ = "scenario_runs"
@@ -883,22 +767,18 @@ class ScenarioRun(Base):
     trend: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment_bucket: Mapped[str] = mapped_column(Text, nullable=False)
-    #: What the market trend did, stored so a result can be read without re-deriving the
-    #: transform that produced it — which may have changed since.
+    #: Stored so results read without re-deriving a transform that may have changed.
     long_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
     short_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
     reference: Mapped[str] = mapped_column(Text, nullable=False)
     bars: Mapped[int] = mapped_column(Integer, nullable=False)
-    #: Both arms. The conditioned result alone would be a number with nothing to
-    #: read it against, and the difference is the only thing the operator changed.
+    #: Both arms; the difference is the effect of the operator's conditions.
     baseline: Mapped[dict] = mapped_column(JSONB, nullable=False)
     conditioned: Mapped[dict] = mapped_column(JSONB, nullable=False)
     reached_step: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     stopped_because: Mapped[str] = mapped_column(Text, nullable=False)
-    #: 'manual' set by a person, 'derived' computed, 'adopted' a computed value
-    #: a person accepted. PREREG-005 measures the operator and filters on this;
-    #: a hit credited to a person that was computed would confirm the wrong
-    #: hypothesis.
+    #: 'manual' by a person, 'derived' computed, 'adopted' computed then accepted.
+    #: PREREG-005 measures the operator and filters on this.
     source: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
     __table_args__ = (
@@ -915,17 +795,9 @@ class ScenarioRun(Base):
 
 
 class SentimentReading(Base):
-    """A day's Fear and Greed value. Plan.md §11.4, §4.3.
+    """A day's Fear and Greed value (§11.4, §4.3). Display only; kept out of `macro_series`.
 
-    Kept out of `macro_series` on purpose. That table is the point-in-time
-    corpus a study reads, and §11.4's objection to a bought index stands: the
-    method is not auditable and it is composed partly of data already collected
-    here. This is for looking at.
-
-    `available_at` is the day's own midnight, because the index publishes once a
-    day and does not revise. Stamping a backfilled 2018 reading with the moment
-    it was downloaded would make eight years of history look as though it
-    arrived today.
+    `available_at` is the day's own midnight (published daily, never revised), not ingest time.
     """
 
     __tablename__ = "sentiment_readings"
@@ -933,10 +805,7 @@ class SentimentReading(Base):
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     value: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     classification: Mapped[str] = mapped_column(Text, nullable=False)
-    #: Part of the key. CoinMarketCap and alternative.me are different indices
-    #: with different methods — they printed 72 and 74 for the same day — so
-    #: they are two series and not two opinions about one. With the day alone as
-    #: the key the second written would silently replace the first.
+    #: Part of the key: each vendor is a different index, not an opinion about one.
     source: Mapped[str] = mapped_column(Text, primary_key=True)
     available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     ingest_time: Mapped[datetime] = mapped_column(
@@ -953,13 +822,9 @@ class SentimentReading(Base):
 
 
 class ScheduleRevision(Base):
-    """What the expected date was believed to be, and when. Plan.md §11.6.
+    """What the expected date was believed to be, and when (§11.6).
 
-    Unlocks get postponed and deadlines extended, so computing "days until the
-    event" from the date it eventually happened on assumes the market knew a date
-    it did not. That is look-ahead bias wearing a calendar, and it is invisible
-    afterwards because the labels look entirely reasonable — they are simply
-    built from a future nobody had.
+    Use the revision available at the time, never the final date: that is look-ahead bias.
     """
 
     __tablename__ = "schedule_revisions"
@@ -981,9 +846,7 @@ class ScheduleRevision(Base):
 class EventAsset(Base):
     """Which assets an event is expected to move, and by how much.
 
-    `expected_magnitude` is in sigma of pre-event volatility, matching both the
-    human rating and the measured reaction, so the §11.10 residual is a
-    subtraction rather than a conversion.
+    `expected_magnitude` is in sigma of pre-event volatility, like ratings and reactions (§11.10).
     """
 
     __tablename__ = "event_assets"
@@ -1001,22 +864,10 @@ class EventAsset(Base):
 
 
 class EventAnnotation(Base):
-    """What a human said about an event. Plan.md §20.5.
+    """What a human said about an event (§20.5).
 
-    Two kinds, and the difference is when the information came into existence.
-    A **correction** repairs a parse failure, so it inherits the event's own
-    availability — the value was always there, we simply read it wrong. A
-    **judgement** creates information at the moment it is made and can never be
-    backdated; a judgement dated before it was written is hindsight with a form
-    around it, and the database refuses it.
-
-    `rating` is in **sigma of pre-event volatility**, signed. The unit is the
-    whole point: §11.3 normalises every measured reaction to sigma, so a rating
-    in sigma can be scored against what actually happened. "8 out of 10 bullish"
-    cannot be scored against anything, which makes the annotator's calibration
-    unknowable — and an unmeasurable input is the one nobody ever corrects. It
-    is also the only unit comparable across assets: 2% on BTC and 2% on a
-    memecoin are different events, 2 sigma is the same event.
+    A correction inherits the event's availability; a judgement may never be backdated (CHECK).
+    `rating` is signed sigma of pre-event volatility, so it is scoreable against §11.3 reactions.
     """
 
     __tablename__ = "event_annotations"
@@ -1033,8 +884,6 @@ class EventAnnotation(Base):
 
     __table_args__ = (
         CheckConstraint("kind IN ('correction','judgement')", name="ck_annotation_kind"),
-        # The rule that makes the ratings worth having. Enforced here so it
-        # cannot be bypassed by whatever writes them.
         CheckConstraint(
             "kind <> 'judgement' OR available_at >= created_at - interval '1 minute'",
             name="ck_judgement_is_not_backdated"),
@@ -1046,12 +895,7 @@ class EventAnnotation(Base):
 
 
 class ProcessTransition(Base):
-    """A process event resolving in steps. Plan.md §11.7.
-
-    `supersedes` is what distinguishes this from a list of updates: a regulation
-    withdrawn at step 4 invalidates the pricing that step 2 justified, and a
-    model that reads the steps as independent news double-counts it.
-    """
+    """A process event resolving in steps (§11.7). `supersedes` marks steps a later one voids."""
 
     __tablename__ = "process_transitions"
 
@@ -1070,13 +914,7 @@ class ProcessTransition(Base):
 
 
 class MacroSeries(Base):
-    """Catalogue of macro series. Plan.md §4.7, §20.6.
-
-    `has_vintages` is operational rather than decorative. A revised series used
-    as if it were real-time is answering a different question — what we know now
-    rather than what was known then — and a result that depends on one is flagged
-    rather than quietly reported.
-    """
+    """Catalogue of macro series (§4.7, §20.6). Results using revised series are flagged."""
 
     __tablename__ = "macro_series"
 
@@ -1087,20 +925,13 @@ class MacroSeries(Base):
     has_vintages: Mapped[bool] = mapped_column(Boolean, nullable=False)
     is_revised: Mapped[bool] = mapped_column(Boolean, nullable=False)
     session_close: Mapped[str | None] = mapped_column(Text)
-    #: Measured, not assumed. The gap between a release instant and the moment a
-    #: subscriber could act on it is the whole difference between a tradeable
-    #: event and a backtest artefact.
+    #: Measured, not assumed: seconds from release to actionable.
     publish_lag_s: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     __table_args__ = (
         CheckConstraint(
             "kind IN ('rate','yield','price','index','activity')", name="ck_macro_kind"),
-        # 'yahoo' added to the plan's list after measuring what is actually
-        # reachable without a key: FRED serves rates, yields, WTI, the dollar
-        # index and CPI, but has no usable gold series, and stooq's CSV endpoint
-        # now returns a web page. Extending the list is a schema decision and is
-        # recorded as one rather than worked around with a 'manual' label that
-        # would hide where the number came from.
+        # 'yahoo' added beyond the plan: FRED has no usable gold series, stooq CSV is gone.
         CheckConstraint(
             "source IN ('fred','alfred','stooq','yahoo','manual')",
             name="ck_macro_source"),
@@ -1108,17 +939,9 @@ class MacroSeries(Base):
 
 
 class MacroRelease(Base):
-    """One scheduled print, with what was expected and what arrived. §20.6.
+    """One scheduled print, with what was expected and what arrived (§20.6).
 
-    The CHECK is the point of the table. A consensus recorded after the release
-    is not a consensus, it is a memory of one — and the entire value of macro as
-    an event class is that expectations existed *before* the print, so that
-    surprise is a number rather than a story told afterwards. A consensus entered
-    once the actual is known is that story, and it would make every macro
-    surprise look predictive.
-
-    Enforced in the schema rather than in the form, which is the third place this
-    system refuses to trust a control that can be clicked past.
+    The CHECK forbids a consensus recorded at or after the release; enforced in the schema.
     """
 
     __tablename__ = "macro_releases"
@@ -1129,9 +952,7 @@ class MacroRelease(Base):
     consensus: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
     consensus_at: Mapped[datetime | None] = mapped_column(TS)
     actual: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
-    #: The publication instant, not the date. A daily timestamp on an intraday
-    #: release puts the event at midnight and every reaction measured from it is
-    #: measured from the wrong moment.
+    #: The publication instant, not the date; reactions are measured from it.
     actual_at: Mapped[datetime | None] = mapped_column(TS)
     available_at: Mapped[datetime | None] = mapped_column(TS)
     surprise_sigma: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
@@ -1146,22 +967,9 @@ class MacroRelease(Base):
 
 
 class AppSetting(Base):
-    """Operator configuration, versioned rather than edited. Plan.md §12.4, §20.4.
+    """Operator configuration, append-only, never updated (§12.4, §20.4).
 
-    The line this table sits on matters, because §12.4 puts the asset universe in
-    the column that **cannot** be tuned: changing a strategy's universe creates a
-    new strategy, with a new id and hash, that re-enters screening and adds its
-    trials to the counter.
-
-    What lives here is a different thing with a confusingly similar name. The
-    **research** universe is which assets get collected and studied; a
-    **strategy's** universe is part of that strategy's identity. Widening the
-    first is an operational decision about where to look. Changing the second
-    invalidates a validation, and this table cannot do it.
-
-    Rows are appended, never updated. A setting that changed silently makes every
-    result issued before the change unreadable afterwards, and the audit log can
-    only say what someone did if the previous value still exists.
+    Holds the research universe only; a strategy's universe is part of its identity (§12.4).
     """
 
     __tablename__ = "app_settings"
@@ -1169,8 +977,7 @@ class AppSetting(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     key: Mapped[str] = mapped_column(String(48), nullable=False)
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    #: Mandatory. A change with no stated reason is one nobody can review, and
-    #: §20.3 makes the same demand of gate thresholds for the same reason.
+    #: Mandatory, as for gate thresholds (§20.3).
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     changed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     valid_from: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -1179,21 +986,9 @@ class AppSetting(Base):
 
 
 class EventReaction(Base):
-    """What the market did after an event. Plan.md §11.3.
+    """What the market did after an event, per asset and horizon (§11.3, §11.5).
 
-    Stored per event, asset and horizon, because a reaction is not one number:
-    a move that is large at an hour and gone by a day is a different object from
-    one that persists, and collapsing them loses exactly the distinction §11.5
-    is trying to fit.
-
-    `z` is the poolable quantity — CAR over sigma_pre times the root of the
-    horizon — and it is the same unit a human rating is given in, which is what
-    makes a rating scoreable rather than merely recorded.
-
-    `benchmark_kind` is stored rather than implied. A cross-sectional
-    counterfactual differences against an unaffected asset; a time-series one
-    has no unaffected asset to use and is weaker. Treating them as one quantity
-    would pool a measurement with an estimate.
+    `z` = CAR / (sigma_pre * sqrt(horizon)), the rating unit. Do not pool the two benchmark_kinds.
     """
 
     __tablename__ = "event_reactions"
@@ -1207,14 +1002,11 @@ class EventReaction(Base):
     beta_pre: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
     sigma_pre: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
     n_bars: Mapped[int] = mapped_column(Integer, nullable=False)
-    #: True when the pre-event window already carried the move. Reported rather
-    #: than subtracted out: the honest handling of a contaminated measurement is
-    #: to mark it, not to repair it.
+    #: Pre-event window already carried the move. Flagged, never corrected.
     leaked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     measured_at: Mapped[datetime] = mapped_column(
         TS, nullable=False, server_default=func.now())
-    #: Which version of the measurement produced this row. A corpus that cannot
-    #: say what measured it cannot be compared across a change to the estimator.
+    #: Version of the estimator that produced this row.
     code_hash: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (

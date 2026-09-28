@@ -1,4 +1,7 @@
-"""Record a new golden digest. Requires a written reason (Plan.md §16.6)."""
+"""Record a new golden digest. Requires a written reason (Plan.md §16.6).
+
+    python scripts/update_golden.py "<reason>"
+"""
 
 from __future__ import annotations
 

@@ -1,22 +1,7 @@
 """The scenario: the wave and the sentiment a simulation runs under. §20.
 
-`market_wave` held one dial. There are two, so the table is renamed for what it
-actually is — the market conditions the operator is testing under — and the wave
-columns are prefixed so that `direction` and `magnitude` cannot be read as
-belonging to the sentiment, which has neither.
-
-**Sentiment here is not the Fear and Greed reading.** That one is a measurement:
-dated, published once a day, and never revised, and it lives in
-`sentiment_readings` where a study could in principle read it as of a moment.
-This one is an assumption with no date at all. Holding them in one column would
-make a measurement and an opinion indistinguishable, which is the failure the
-hand-entered event corpus was kept separate from the collected one to avoid, and
-the reason that separation is worth repeating here rather than economising on a
-column.
-
-The default is 50 and not today's printed value. Seeding an assumption from a
-measurement would make "nobody has set this" and "someone chose the market's
-own number" the same row, and only one of them is a decision.
+Renames `market_wave` to `market_conditions`, prefixes wave columns, adds an assumed
+`sentiment` (default 50), distinct from measured `sentiment_readings`.
 """
 
 from __future__ import annotations
@@ -35,9 +20,7 @@ def upgrade() -> None:
     op.alter_column('market_conditions', 'direction', new_column_name='wave_direction')
     op.alter_column('market_conditions', 'magnitude', new_column_name='wave_magnitude')
 
-    # Constraints carry the old table's name in theirs, which reads as a lie
-    # once the table is renamed and would send the next person looking for a
-    # table that is gone.
+    # Rename constraints to match the new table name.
     for old, new in (
         ('ck_market_wave_singleton', 'ck_market_conditions_singleton'),
         ('ck_market_wave_direction', 'ck_market_conditions_wave_direction'),

@@ -36,9 +36,7 @@ class Partition:
     def relative_path(self) -> Path:
         parts = [self.kind]
         if self.asset == "_all":
-            # Venue-wide sources (announcements, all-market liquidation feeds)
-            # have no single asset. The partition key stays uniform so one scan
-            # pattern covers every kind.
+            # Venue-wide sources keep the asset key so one scan pattern covers every kind.
             pass
         if self.timeframe:
             parts.append(f"tf={self.timeframe}")
@@ -57,10 +55,5 @@ class Partition:
 
 
 def glob_for(root: Path, kind: DataKind) -> str:
-    """A DuckDB-friendly glob.
-
-    One `**` only: DuckDB rejects multiple recursive wildcards in a path. Asset
-    selection is a WHERE predicate on the Hive partition column instead, which
-    prunes files just as effectively and keeps the pattern valid.
-    """
+    """A DuckDB-friendly glob: one `**` only (DuckDB rejects more); filter assets in WHERE."""
     return str(root / kind / "**" / "*.parquet")

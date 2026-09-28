@@ -1,18 +1,9 @@
-"""Measure what happened after each event. Plan.md §11.3.
+"""Measure each event's abnormal reaction vs BTC from daily closes. Plan.md §11.3.
 
-Reads daily closes from the venue, differences each asset against BTC over an
-embargoed pre-event window, normalises to sigma, and stores one row per event,
-asset and horizon.
+Daily bars only, so sub-daily horizons are skipped, not approximated. Upserts per
+(event, asset, horizon) with the estimator's `code_hash`.
 
-Daily bars, which bounds what this can say. The grid in §11 runs from five
-minutes, and at daily resolution the short horizons are unmeasurable — they are
-skipped rather than approximated from a daily bar, because a five-minute
-reaction read off a daily close is not a five-minute reaction. Restoring them
-needs the 1-minute archive, which exists but is 24GB and is a separate job.
-
-Idempotent per (event, asset, horizon): re-running with a changed estimator
-overwrites and records the new `code_hash`, so a corpus can always say what
-measured it.
+    python scripts/measure_reactions.py [--limit N] [--dry-run]
 """
 
 from __future__ import annotations
@@ -33,8 +24,7 @@ from tradelab.events.reaction import Window, leakage_flag, measure
 KLINES = "https://fapi.binance.com/fapi/v1/klines"
 MARKET = "BTCUSDT"
 BARS_PER_DAY = 1
-#: Only the horizons a daily bar can carry. The shorter ones are left unmeasured
-#: rather than approximated.
+#: Only horizons a daily bar can carry.
 DAILY_HORIZONS = (-1440, 1440, 4320, 10080)
 
 
@@ -81,9 +71,6 @@ def main() -> int:
 
     print(f"{len(events)} events with assets, estimator {version}")
     measured = 0
-    # Counted by reason rather than as one number. "skipped 60" says nothing
-    # about whether the measurement is broken or the events are unmeasurable,
-    # and those want opposite responses.
     skipped: dict[str, int] = {}
 
     def skip(reason: str) -> None:
@@ -93,8 +80,6 @@ def main() -> int:
         for row in events:
             start = row["first_seen_at"] - timedelta(days=45)
             end = row["first_seen_at"] + timedelta(days=12)
-            # A future event has no reaction yet; measuring one would read a
-            # window that does not exist.
             if row["first_seen_at"] > datetime.now(UTC):
                 skip("not yet happened")
                 continue
@@ -109,18 +94,13 @@ def main() -> int:
                 symbol = asset if asset.endswith(("USDT", "USDC")) else f"{asset}USDT"
                 series = closes(symbol, start, end, client)
                 if len(series) < 25:
-                    # Almost always a listing: the contract's first day *is* the
-                    # event, so there is no pre-event window to difference
-                    # against. §11.3's machinery measures a deviation from a
-                    # baseline the asset already had, and a listing has none —
-                    # which is why PREREG-001 measured listings forward from the
-                    # listing day rather than as abnormal returns.
+                    # Usually a listing: no pre-event baseline (PREREG-001 measures
+                    # listings forward instead).
                     skip("no pre-event history (listing, or too new)")
                     continue
                 asset_days, asset_returns = returns(series)
 
-                # Inner join on the day, never a fill: a missing bar is an
-                # absence and pairing it with a zero invents a quiet day.
+                # Inner join, never a fill: a zero-filled missing bar invents a quiet day.
                 shared = np.intersect1d(asset_days, market_days)
                 if shared.size < 25:
                     skip("too few shared days with the market")
@@ -135,12 +115,8 @@ def main() -> int:
                     continue
 
                 window = Window(shared, aligned_asset, aligned_market, event_index)
-                # The benchmark asset cannot be differenced against itself: the
-                # abnormal return is zero by construction, and a row of zeroes
-                # reads as "nothing happened" rather than "not measurable this
-                # way". It falls back to the time-series counterfactual, which
-                # is the same treatment a market-wide event gets and for the
-                # same reason — no unaffected asset exists.
+                # BTC vs itself is zero by construction; use the time-series
+                # counterfactual, as for market-wide events.
                 self_benchmarked = symbol == MARKET
                 results = measure(
                     window, symbol, BARS_PER_DAY,

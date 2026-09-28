@@ -1,24 +1,8 @@
-"""Is effective breadth persistent? Plan.md §0.4a, §13.1. FINDING-004.
+"""Does effective breadth persist window to window? Plan.md §0.4a, §13.1. FINDING-004.
 
-FINDING-004 measured effective breadth on the PREREG-003 panel at 11 / 0 / 103 /
-4 by quarter against 151 pooled, and left one question: was the good quarter a
-**regime identifiable in advance**? If it was, there is a strategy — hold the
-book when breadth is high and stand flat when it is not. If it was not, the
-hypothesis is finished.
+Reads covariance only, never a return, so it costs no trial.
 
-**This costs no trial, because it never looks at a return.** Breadth is a
-property of the covariance structure: how much the pairs move together. Whether
-it persists from one window to the next is answerable from that alone, and the
-answer gates the expensive question rather than being it.
-
-That ordering matters. I have already seen the quarterly breakdown, so any
-threshold I choose knowing 2026Q1 was the good one is a description and not a
-discovery. Persistence is different: it is a fact about the panel that I have
-not looked at, and it decides whether an ex-ante rule is possible at all before
-any rule is written.
-
-If breadth does not persist, no rule can capture it and the registration that
-would follow is not worth its trial.
+    python scripts/check_breadth_persistence.py
 """
 
 from __future__ import annotations
@@ -30,20 +14,15 @@ import numpy as np
 from run_prereg_003 import LOOKBACK_DAYS, pair_spreads, panel, simulate
 from scipy import stats
 
-#: One calendar month, and the sensitivity either side. Declared before running:
-#: choosing the window that makes breadth look persistent is the search this
-#: whole ordering exists to avoid.
+#: Declared before running; do not tune (choosing the window would be a search).
 WINDOW = 30
 SENSITIVITY = (15, 60)
 
 
 def breadth(matrix: np.ndarray) -> float:
-    """Effective independent bets in an equal-weighted book.
+    """Effective independent bets: mean per-pair variance / portfolio variance (§0.4a).
 
-    N_eff = mean per-pair variance / portfolio variance. With equal weights and
-    a common volatility this is N / (1 + (N-1) rho), so it is the count of pairs
-    discounted by how much they move together — which is what §0.4a means by
-    breadth and what a nominal pair count does not measure.
+    Equals N / (1 + (N-1) rho) under equal weights and common volatility.
     """
     live = matrix[~np.all(np.isnan(matrix), axis=1)]
     if live.shape[0] < 2 or live.shape[1] < 3:
@@ -57,7 +36,7 @@ def breadth(matrix: np.ndarray) -> float:
 
 
 def windows(matrix: np.ndarray, size: int) -> list[float]:
-    """Non-overlapping, so consecutive values are not the same days twice."""
+    """Breadth over non-overlapping windows, so consecutive values share no days."""
     out = []
     for start in range(0, matrix.shape[1] - size + 1, size):
         out.append(breadth(matrix[:, start:start + size]))
@@ -73,10 +52,7 @@ def report(values: list[float], size: int) -> None:
     pearson = float(np.corrcoef(current, following)[0, 1])
     spearman = float(stats.spearmanr(current, following).statistic)
 
-    # The question a rule would ask: given breadth above the median now, is it
-    # above the median next? Reported as a hit rate because that is the form a
-    # trading rule takes, and a correlation can be positive while the rule is
-    # a coin toss.
+    # Hit rate above-median -> above-median: a positive correlation can still be a coin toss.
     median = float(np.median(clean))
     high_now = current > median
     hits = int(np.sum(following[high_now] > median))

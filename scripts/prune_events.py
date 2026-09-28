@@ -1,26 +1,10 @@
-"""Remove events that no longer have effect. Plan.md §11.8.
+"""Remove events past the retention window. Plan.md §11.8.
 
-Two things have to happen together or the removal does not hold: the rows go,
-and the ingestor stops bringing them back. `ingest_events.py` is idempotent by
-article id, so deleting alone would leave the next run re-inserting everything —
-a prune that undoes itself on the next cron tick is worse than none, because it
-looks done.
+`ingest_events.py` reads the same retention setting and skips anything past it; otherwise
+the next ingest would re-insert what was pruned. Events are rebuildable from the
+announcement Parquet; human annotations are not, so annotated events need --force-annotated.
 
-So both read the same retention window, stored as an operator setting and
-editable on the Parameters screen, and the ingestor skips anything already past
-it.
-
-**What is lost and what is not.** Events are derived: the announcement Parquet is
-the source of truth and re-running the ingestor with a longer retention rebuilds
-them exactly. Human annotations are not derived and cannot be rebuilt, so this
-refuses to delete an event carrying one unless told twice. That refusal is kept
-although the screen that produced annotations is gone: the ones already recorded
-are still the only rows here that no re-run can reconstruct.
-
-Age is now the whole test. This used to spare an event whose effect the news
-screen still considered live, on top of sparing anything inside the retention
-window — a second guard that only made sense while a page was displaying the
-first. With the screen removed, an event past the window goes.
+    python scripts/prune_events.py [--dry-run] [--force-annotated]
 """
 
 from __future__ import annotations
@@ -56,8 +40,6 @@ def main() -> int:
         for row in rows:
             if not row["past_retention"]:
                 continue
-            # A judgement is the one thing here that cannot be rebuilt from the
-            # Parquet archive, so it is worth more than the row it hangs on.
             if row["judgements"] and not args.force_annotated:
                 kept_for_annotation.append(row["id"])
                 continue

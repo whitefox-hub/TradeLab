@@ -92,17 +92,14 @@ const escape = (t) => (t || "").replace(/[<>&"]/g,
 
 const pct = (v) => `${(Number(v) * 100).toFixed(2)}%`;
 
-// What the last run did with a given step. Derived from what the run reported
-// and from the counts, never asserted here: a screen that decides for itself
-// which steps ran is a screen that keeps saying so after they stop.
+// Step status derived from the reported run and counts, never hard-coded here.
 function verdictFor(n, data) {
   const run = data.last_run;
   const steps = data.scenario_steps;
   const execution = n > steps.gate;
 
   if (execution) {
-    // Not "unreached" — never executed at all. The runs table is empty, and
-    // that is a measured fact rather than an inference from the last run.
+    // runs == 0 means execution steps never ran (distinct from "unreached").
     return data.observed.runs === 0
       ? { cls: "never", label: "never run",
           note: "No execution run exists. These steps need a strategy promoted "

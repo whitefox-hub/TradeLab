@@ -1,14 +1,7 @@
-"""Bounds on operator settings. Plan.md §12.4, §20.4.
+"""Server-side bounds on operator settings. Plan.md §12.4, §20.4.
 
-Server side, and that is the point rather than a detail: a rule in the form is a
-suggestion, because the endpoint is reachable without the form. Every bound here
-is checked on the way in and refused with the reason.
-
-The bounds are not decoration. `{"years": 70}` is not merely large — perpetual
-futures history on this venue begins in 2019, so a seventy-year window silently
-resolves to whatever exists and every figure computed from it reports a sample
-the study did not have. A setting that cannot be satisfied should say so when it
-is entered, not produce a quiet answer to a different question.
+Enforced here because the endpoint is reachable without the form; out-of-range values are
+refused with a reason rather than silently clamped (e.g. history before 2019 does not exist).
 """
 
 from __future__ import annotations
@@ -19,9 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-#: USD-M perpetuals launched in September 2019, so nothing earlier exists to ask
-#: for. Derived rather than hard-coded, so the ceiling grows with the archive
-#: instead of becoming wrong next year.
+#: USD-M perpetuals launched Sept 2019; the years ceiling is derived from it, not hard-coded.
 HISTORY_BEGINS = datetime(2019, 9, 1, tzinfo=UTC)
 
 SYMBOL = re.compile(r"^[A-Z0-9]{2,20}(USDT|USDC|USD)$")
@@ -89,8 +80,6 @@ def _rebalance_minutes(value: dict) -> None:
         raise Invalid("minutes must be at least 1")
     if minutes > 10_080:
         raise Invalid("minutes must be at most 10080, which is one week")
-    # §0.2 puts the viable holding band at 2-7 days. Re-evaluating far inside it
-    # does not make the strategy faster, it makes it pay the spread more often.
     if minutes < 60:
         raise Invalid(
             f"{minutes} minutes is below the hourly floor. §0.2 puts the viable "
@@ -152,8 +141,7 @@ def validate(key: str, value: Any) -> None:
     missing = [f for f in rule.fields if f not in value]
     if missing:
         raise Invalid(f"missing {missing}; expected {rule.describes}")
-    # An unknown field is a typo or a misunderstanding, and silently dropping it
-    # means the operator believes they set something they did not.
+    # Unknown fields are refused, not dropped: the operator would think they took effect.
     extra = sorted(set(value) - set(rule.fields))
     if extra:
         raise Invalid(f"unknown fields {extra}; expected only {list(rule.fields)}")

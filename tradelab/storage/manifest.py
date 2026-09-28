@@ -1,7 +1,6 @@
 """Dataset manifests and content hashing. Plan.md §5.1, §16.1.
 
-A dataset version is the hash of its manifest. That hash is what every experiment
-records, and it is what makes "which data produced this number" answerable.
+A dataset version is the hash of its manifest; every experiment records that hash.
 """
 
 from __future__ import annotations
@@ -40,12 +39,7 @@ class Manifest:
     files: tuple[FileEntry, ...]
 
     def content_hash(self) -> str:
-        """Identity of the dataset.
-
-        Only the spec and the file hashes participate — not build time, not
-        absolute paths, not file order. Two builds of the same data must produce
-        the same hash or deduplication and reproducibility both break.
-        """
+        """Identity of the dataset: spec and file hashes only (no build time, paths, order)."""
         payload = {
             "name": self.name,
             "spec": self.spec,

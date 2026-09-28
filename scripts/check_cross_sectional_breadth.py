@@ -1,21 +1,8 @@
-"""How many independent bets does a cross-sectional crypto book have? §0.4a.
+"""Effective breadth of a cross-sectional crypto book, raw and market-residual. §0.4a.
 
-RESULT-006 closed cross-venue funding dispersion and said what to do next:
-choose the following hypothesis against the breadth constraint **before** its
-story. §0.4a fixes the detection threshold by calendar span, and breadth — bets
-held at the same time that are genuinely uncorrelated — is the only fast lever.
+Follows RESULT-006. Tests no rule, reads no return hypothesis, so costs no trial.
 
-This measures the lever, for the whole class of cross-sectional strategies at
-once. It asks nothing about returns and tests no rule, so it costs no trial.
-
-**The question.** Crypto is widely held to be one factor: everything follows
-Bitcoin. If that is true after the factor is removed, a hundred-asset book is
-one bet and no cross-sectional hypothesis can clear the threshold at any
-plausible per-bet Sharpe. If the residuals are genuinely independent, breadth is
-close to the asset count and the arithmetic changes completely.
-
-The answer is a property of the panel, not of any strategy, which is exactly why
-it is worth knowing before one is written.
+    python scripts/check_cross_sectional_breadth.py
 """
 
 from __future__ import annotations
@@ -51,22 +38,10 @@ def returns_matrix(root: Path) -> tuple[np.ndarray, list[str], list]:
 
 def breadth(matrix: np.ndarray, neutral: bool = False,
             draws: int = 400, seed: int = 20260926) -> float:
-    """Effective independent bets: mean per-asset variance over portfolio
-    variance, which for equal weights is N / (1 + (N-1)·rho).
+    """Effective bets: mean per-asset variance / portfolio variance (N / (1 + (N-1)·rho)).
 
-    `neutral` picks the portfolio the measure is taken over, and it is not a
-    detail. A cross-sectional book is **dollar-neutral** — long some names,
-    short others — so its weights sum to zero, not to one.
-
-    Measuring residuals with equal *positive* weights gives nonsense, and the
-    first version of this script did: the market factor here is the
-    equal-weighted mean, so the equal-weighted residual portfolio is zero by
-    construction, the denominator collapses and breadth came back as 3.2e32.
-    The same shape as differencing BTCUSDT against itself and reading four rows
-    of zeroes as "nothing happened".
-
-    So the neutral case averages over random +/-1/N weight draws. Random and not
-    a signal's weights, because a signal would make this a test of the signal.
+    Use `neutral=True` for residuals: the equal-weight residual portfolio is zero by
+    construction (breadth blows up), so it averages random dollar-neutral +/-1/N draws.
     """
     filled = np.nan_to_num(matrix)
     per_asset = float(np.mean(np.var(filled, axis=1, ddof=1)))
@@ -88,9 +63,8 @@ def breadth(matrix: np.ndarray, neutral: bool = False,
 
 
 def dimensions(matrix: np.ndarray) -> float:
-    """Eigenvalue participation ratio: how many directions the correlation
-    matrix really has. Reported beside the variance ratio because the two
-    answer different questions, which FEASIBILITY-006 had to correct once."""
+    """Eigenvalue participation ratio; answers a different question than `breadth`
+    (FEASIBILITY-006)."""
     corr = np.corrcoef(np.nan_to_num(matrix))
     eig = np.linalg.eigvalsh(np.nan_to_num(corr))
     return float(eig.sum() ** 2 / (eig**2).sum())
@@ -103,8 +77,7 @@ def main() -> int:
     args = parser.parse_args()
 
     matrix, assets, _days = returns_matrix(args.root)
-    # Days every surviving asset has, so the covariance is of one sample rather
-    # than of a different subset per pair.
+    # Complete days only, so the covariance is of one sample.
     complete = ~np.any(np.isnan(matrix), axis=0)
     matrix = matrix[:, complete]
     print(f"assets {len(assets)}, days {matrix.shape[1]} "
@@ -115,9 +88,7 @@ def main() -> int:
     print(f"  raw, equal-weight long-only        {raw:>16.1f} "
           f"{dimensions(matrix):>18.1f}")
 
-    # The market factor: the equal-weighted mean return. Removed by regressing
-    # each asset on it and keeping the residual, which is what a
-    # dollar-neutral cross-sectional book actually holds.
+    # Market factor = equal-weighted mean; the residual is what a neutral book holds.
     market = matrix.mean(axis=0)
     variance = float(np.var(market, ddof=1))
     betas = np.array([float(np.cov(row, market, ddof=1)[0, 1] / variance)
@@ -142,19 +113,14 @@ def main() -> int:
     print(f"first factor explains {frac[0]:.0%} of the raw variance, "
           f"first five {frac[:5].sum():.0%}")
 
-    # What it buys. A per-bet Sharpe of 0.2 with N independent bets held at once
-    # gives 0.2*sqrt(N) for the portfolio, which is the number that must clear
-    # the threshold §0.4a fixes from the calendar.
+    # Portfolio Sharpe = per-bet Sharpe * sqrt(N_eff), to compare with the §0.4a threshold.
     print(f"\n{'per-bet Sharpe':>15} {'long-only book':>16} {'neutral book':>16}")
     for per_bet in (0.05, 0.1, 0.2, 0.3):
         print(f"{per_bet:>15.2f} {per_bet * np.sqrt(raw):>16.2f} "
               f"{per_bet * np.sqrt(neutral):>16.2f}")
 
-    # The estimate's honesty depends on having more days than assets. A
-    # 229x229 covariance from 207 observations is rank-deficient, and a
-    # residual correlation near zero can be the deficiency rather than the
-    # market. FINDING-004 is this project's record of reporting a breadth
-    # figure that turned out to be one.
+    # Needs T > N: a rank-deficient covariance fakes near-zero residual correlation
+    # (see FINDING-004).
     print(f"\n{'assets':>8} {'days':>7} {'T/N':>6} {'raw':>8} {'neutral':>9}"
           f" {'resid rho':>10}")
     full, _names, _ = returns_matrix(args.root)

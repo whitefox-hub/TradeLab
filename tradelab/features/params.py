@@ -1,9 +1,4 @@
-"""Parameter spaces for feature definitions. Plan.md §6.
-
-A feature is (definition, parameters), not a column. The definition is registered
-once; the parameterisation expands at experiment time — which is what lets the
-same indicator be evaluated at thirty periods without thirty definitions.
-"""
+"""Parameter spaces for feature definitions; grids expand at experiment time. Plan.md §6."""
 
 from __future__ import annotations
 

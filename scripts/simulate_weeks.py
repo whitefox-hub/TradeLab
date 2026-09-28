@@ -1,19 +1,9 @@
-"""What a week would have done, across every week there is. §14.1, §14.5, §15.
+"""Distribution of weekly outcomes for a random openable basket. §14.1, §14.5, §15.
 
-One week is one draw. Reporting a single one as "the gain" is the shape of
-answer that makes a bad week look like a bad system and a good week like an
-edge, so this runs every week in the panel and reports the distribution.
+No strategy: capital adequacy only (the market, sized by limits and venue, less costs).
+Lot sizes and notional minimums are read from Binance, never hard-coded.
 
-**There is no strategy.** Nothing has cleared §15, so what is held is the
-reference: an equal-weighted basket of whatever the capital can actually open,
-bought at the start of the week and sold at the end. Every figure below is the
-market's, sized by what the limits and the venue allow, less costs. It is a
-measurement of *capital adequacy*, not of an edge.
-
-Lot sizes and notional minimums come from Binance rather than from an
-assumption. The first version of the capital simulation hard-coded BTC's
-minimum at 100 USDT when it is 50, which is the kind of number worth reading
-from the venue rather than remembering.
+    python scripts/simulate_weeks.py [--capital 100]
 """
 
 from __future__ import annotations
@@ -32,19 +22,11 @@ from tradelab.risk.limits import RiskLimits
 EXCHANGE_INFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 WEEK = 7
 
-#: Excluded by hand. Their lot sizes put them out of reach at small capital
-#: anyway — one lot of BTC is $65 against a $25 cap — and holding the two names
-#: every other asset is correlated with would make a basket of five into a
-#: leveraged bet on the factor FEASIBILITY-008 measured at 38% of the variance.
+#: Out of reach at small capital, and they would make the basket a factor bet
+#: (FEASIBILITY-008: 38% of variance).
 EXCLUDED = ("BTC", "ETH")
 
-#: How many random baskets to average over, per week.
-#:
-#: The first version took "the cheapest openable" assets, and since most
-#: perpetuals tie at a 5 USDT floor the sort fell through to alphabetical: the
-#: basket was 1INCH, ACH, ADA, AEVO, AGLD, and every figure reported came from
-#: the top of the alphabet. Random draws measure what a basket of five does,
-#: rather than what one arbitrary basket did.
+#: Random baskets per week. Not "cheapest openable": floors tie, so that sorts alphabetically.
 BASKETS = 60
 
 SEED = 20260926
@@ -103,9 +85,7 @@ def main() -> int:
     for start in range(0, prices.shape[1] - WEEK, WEEK):
         entry, exit_ = prices[:, start], prices[:, start + WEEK]
 
-        # Which assets the capital can actually open at this week's prices.
-        # min_viable is the larger of the venue's notional floor and one lot,
-        # per §14.1 — reading min_notional alone gives the wrong floor.
+        # min_viable = max(notional floor, one lot) per §14.1; min_notional alone is wrong.
         openable = []
         for index, asset in enumerate(assets):
             rule = rules.get(asset)
@@ -121,10 +101,7 @@ def main() -> int:
             spreads.append(0.0)
             continue
 
-        # Equal weight across as many as the limits allow, drawn at random and
-        # averaged. Picking which five is a selection rule, and a selection rule
-        # is a strategy — one nobody registered, whose result would be reported
-        # here as the market's.
+        # Random draws: choosing which five would be an unregistered selection rule.
         week = []
         for draw in range(BASKETS):
             rng = np.random.default_rng(SEED + start * 1000 + draw)
@@ -140,7 +117,6 @@ def main() -> int:
                     continue
                 notional = quantity * price
                 moved = Decimal(str(exit_[index] / entry[index])) - 1
-                # Entry and exit, both charged.
                 gain += notional * moved - notional * fee * 2
             week.append(float(gain / args.capital))
         results.append(float(np.mean(week)))

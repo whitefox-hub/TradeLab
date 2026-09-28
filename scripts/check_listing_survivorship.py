@@ -1,13 +1,8 @@
-"""Are delisted perpetuals still retrievable? Plan.md §0.4 hypothesis 2.
+"""Probe whether delisted perpetuals still serve klines. Plan.md §0.4 hypothesis 2.
 
-The listings study is an event study, so each asset's reaction is observed at
-its listing regardless of what happened later — the announcement corpus records
-the event even for assets that died afterwards. The bias enters one level down:
-if the venue stops serving klines for a contract once it is delisted, then the
-sample silently reduces to survivors, and survivors of a listing cohort are
-exactly the ones that went up.
+If not, the listing sample silently reduces to survivors.
 
-This answers that question with the venue rather than with an assumption.
+    python scripts/check_listing_survivorship.py [--probe 12]
 """
 
 from __future__ import annotations
@@ -47,9 +42,8 @@ def main() -> int:
 
     listed = first_listings(args.root)
     info = httpx.get(EXCHANGE_INFO, timeout=30).json()
-    # Both perpetual flavours count as live. Filtering to "PERPETUAL" alone drops
-    # the 201 TRADIFI_PERPETUAL contracts — tokenised equities — and reports every
-    # one of them as delisted, which inflated the first run of this check.
+    # Both flavours are live: "PERPETUAL" alone would report every TRADIFI_PERPETUAL
+    # (tokenised equity) contract as delisted.
     perpetual = {"PERPETUAL", "TRADIFI_PERPETUAL"}
     live = {s["symbol"] for s in info["symbols"] if s.get("contractType") in perpetual}
     tradfi = {base_ticker(s["symbol"]) for s in info["symbols"]
@@ -57,17 +51,15 @@ def main() -> int:
     live_base = {base_ticker(s) for s in live}
 
     announced = set(listed["base"].to_list())
-    # Tokenised equities are a different instrument with different holders and a
-    # different news flow; pooling them into a token-listing cross-section mixes
-    # two populations. Reported separately rather than silently dropped.
+    # Tokenised equities are a different population; reported separately.
     print(f"of which tokenised equities: {len(announced & tradfi)}")
     gone = sorted(announced - live_base)
     print(f"announced as listed : {len(announced)}")
     print(f"still trading       : {len(announced & live_base)}")
     print(f"no longer listed    : {len(gone)}  ({len(gone) / len(announced):.0%})")
 
-    # The decisive part. A delisted contract whose klines still resolve means the
-    # cohort can be reconstructed whole; a 400 means the sample is survivors only.
+    # Klines resolving for a delisted contract means the cohort is reconstructible;
+    # a 400 means survivors only.
     print(f"\nprobing {args.probe} delisted symbols for price history:")
     retrievable = 0
     for base in gone[: args.probe]:

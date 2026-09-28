@@ -1,31 +1,12 @@
-"""A survivorship-neutral daily panel of Binance USD-M perpetuals. Plan.md §4.4.
+"""Survivorship-neutral daily panel of Binance USD-M perpetuals (Plan.md §4.4, RESULT-007).
 
-The panel every study so far has used is the assets trading **today** on all five
-venues. RESULT-007 named what that costs: the dead are missing, and they are
-disproportionately the ones that collapsed — or, as ALPACA did on its last day
-(0.19 to 1.19), the ones that squeezed. A strategy that shorts crowded names is
-exactly the one those days decide.
-
-Three facts about the venue shape this module, each measured on 2026-09-27:
-
-* **`exchangeInfo` keeps the dead, for a while.** Delisted perpetuals stay
-  listed with status `SETTLING` and a `deliveryDate` that is the delisting
-  instant. 129 of them, against 525 trading. Some are dropped entirely and
-  survive only in the public archive.
-* **Klines do not stop at delisting.** The REST endpoint goes on returning a
-  daily bar at the frozen settlement price with zero volume — AGIX, merged in
-  2024, still "closes" at 0.7009 every day. A day is kept only if it traded,
-  and never after `deliveryDate`. Without that cut a dead asset is a live one
-  with zero volatility, which is the most flattering asset a book can hold.
-* **Some symbols the REST endpoint no longer knows at all** (-1121) traded
-  inside the window. For those the monthly archive at data.binance.vision is
-  the only source, and it is used for them alone.
-
-Funding shares a 500-per-five-minutes limit, and a refused page does not look
-like an empty one here: it raises. The collector this sits beside broke out of
-its loop on any non-list answer, so a rate-limited asset came back as a short
-series indistinguishable from a complete one.
-"""
+Measured venue facts:
+* `exchangeInfo` keeps delisted perpetuals as `SETTLING`, `deliveryDate` = delisting instant;
+  some are dropped and survive only in the public archive.
+* Klines continue after delisting at the frozen price with zero volume: keep only traded
+  days, never after `deliveryDate`.
+* Some symbols are unknown to REST (-1121); the monthly archive is used for those alone.
+* Funding: 500 requests / 5 min; a refused page must raise, never read as an empty one."""
 
 from __future__ import annotations
 
@@ -48,15 +29,12 @@ REST = "https://fapi.binance.com"
 ARCHIVE = "https://data.binance.vision/data/futures/um/monthly"
 BUCKET = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 
-#: What counts as a crypto perpetual. TradFi perpetuals (equities, commodities)
-#: and index perpetuals are different instruments with different hours and
-#: drivers, and none of them were in the panel this replaces.
+#: Crypto perpetuals only (excludes TradFi and index perpetuals).
 CONTRACT = "PERPETUAL"
 UNDERLYING = "COIN"
 QUOTE = "USDT"
 
-#: 500 requests per 300 s is the published funding limit. Paced a little under
-#: it so a burst from elsewhere on the same IP does not push this over.
+#: Published funding limit is 500 requests / 300 s; paced a little under it.
 FUNDING_INTERVAL_S = 300 / 450
 
 
@@ -116,12 +94,9 @@ def archived_symbols(client: httpx.Client) -> list[str]:
 
 def live_days(bars: Iterable[tuple[int, float, float]],
               delisted_at: datetime | None) -> pl.DataFrame:
-    """Daily closes on days that traded, and none after delisting.
+    """Daily closes on traded days, none after delisting. `bars` is (open ms, close, volume).
 
-    `bars` is (open time ms, close, volume). Zero-volume days are dropped
-    wherever they fall, not only after the last trade: a day nobody traded has
-    no price, only the previous one repeated.
-    """
+    Zero-volume days are dropped wherever they fall: the price is only a repeat."""
     cutoff = delisted_at.date() if delisted_at else None
     rows = [(datetime.fromtimestamp(ms / 1000, UTC).date(), close)
             for ms, close, volume in bars if volume > 0]
@@ -153,10 +128,7 @@ def rest_funding(client: httpx.Client, symbol: str, start: datetime, end: dateti
                  pace: float = FUNDING_INTERVAL_S) -> list[tuple[int, float]]:
     """Every settlement in the window, paced under the shared limit.
 
-    A 429 or 418 is waited out once and then raised. Breaking out of the loop
-    instead, as the older collector does, returns the pages fetched so far as
-    though they were the whole history.
-    """
+    A 429/418 is waited out once, then raises: breaking out would return a truncated history."""
     out: list[tuple[int, float]] = []
     cursor, stop = _to_ms(start), _to_ms(end)
     while cursor < stop:
@@ -247,9 +219,7 @@ def collect(client: httpx.Client, contract: Contract,
         return None
     window = [r for r in rates if _to_ms(start) <= r[0] <= _to_ms(end)]
     daily = to_daily(window)
-    # Left from prices: a day with a price and no settlement is a day the book
-    # can hold at zero funding, but a day with a settlement and no price is a
-    # day nothing could be held at all.
+    # Left join from prices: a settlement without a price is a day nothing could be held.
     return (prices.join(daily, on="day", how="left")
             .with_columns(pl.lit(contract.asset).alias("asset"),
                           pl.lit("binance").alias("venue"),

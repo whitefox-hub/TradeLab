@@ -1,8 +1,4 @@
-"""Bulk historical backfill from data.binance.vision. Plan.md §4.1.
-
-Free, no account, no rate limit worth worrying about, and it goes back to the
-listing of each contract. This is what makes phase 1 viable without credentials.
-"""
+"""Bulk historical backfill from data.binance.vision (Plan.md §4.1). Keyless, back to listing."""
 
 from __future__ import annotations
 
@@ -33,9 +29,7 @@ from tradelab.collectors.base import (
 BASE = "https://data.binance.vision/data/futures/um/daily"
 VENUE = "binance"
 
-# Measured, not assumed. Bulk files are published after the fact, so the honest
-# `available_at` for a bar is its close plus the venue's own publication lag.
-# For klines the bar is usable at close; the archive file merely records it later.
+# A kline is usable at close; the archive merely records it later.
 KLINE_PUBLICATION_DELAY = timedelta(milliseconds=0)
 
 # Positional layout of the headerless archives.
@@ -44,9 +38,7 @@ _KLINE_COLUMNS = [
     "quote_volume", "count", "taker_buy_volume", "taker_buy_quote_volume", "ignore",
 ]
 
-# Binance's own header names -> ours. Both header and headerless archives exist,
-# and the header names have changed over the years, so this is a mapping rather
-# than an assumption.
+# Binance header names -> ours. Header names changed over the years; headerless files exist.
 _RENAME = {
     "count": "trade_count",
     "number_of_trades": "trade_count",
@@ -85,13 +77,7 @@ class BinanceKlineBulk:
         )
 
     def fetch_month(self, asset: str, year: int, month: int) -> pl.DataFrame | None:
-        """A whole month in one request.
-
-        Same bytes as the 30 daily files, one request instead of thirty. The
-        archive is latency-bound rather than bandwidth-bound — measured at
-        ~320 KB/s across six workers — so this is roughly a 30x speedup on a
-        multi-year backfill, not a marginal one.
-        """
+        """A whole month in one request; ~30x faster than daily files (archive is latency-bound)."""
         response = self._client.get(self.month_url(asset, year, month))
         if response.status_code == 404:
             return None
@@ -101,12 +87,7 @@ class BinanceKlineBulk:
         return self._parse(raw, asset)
 
     def fetch_day(self, asset: str, day: date) -> pl.DataFrame | None:
-        """Return one day of bars, or None when the archive does not exist.
-
-        A missing file is not an error: it means the contract was not listed that
-        day. Distinguishing "not listed" from "gap" is what the point-in-time
-        universe (§4.4) is for, so this returns None and lets the caller decide.
-        """
+        """One day of bars, or None on 404 (not listed that day; §4.4 decides)."""
         response = self._client.get(self.url(asset, day))
         if response.status_code == 404:
             return None
@@ -117,7 +98,7 @@ class BinanceKlineBulk:
         return self._parse(raw, asset)
 
     def _parse(self, raw: str, asset: str) -> pl.DataFrame:
-        # Binance switched to emitting a header row in some archives; both occur.
+        # Some archives have a header row, some do not.
         has_header = raw.lstrip().startswith("open_time")
         frame = pl.read_csv(
             io.StringIO(raw), has_header=has_header,
@@ -135,18 +116,15 @@ class BinanceKlineBulk:
         return self._normalise(frame, asset)
 
     def _normalise(self, frame: pl.DataFrame, asset: str) -> pl.DataFrame:
-        # Binance emits epoch milliseconds in older archives and microseconds in
-        # newer ones. Detect by magnitude rather than by date, which is fragile.
+        # Older archives use epoch ms, newer ones us; detect by magnitude.
         unit = "us" if frame["open_time"].max() > 1e15 else "ms"  # type: ignore[operator]
         ingest = datetime.now(UTC)
         close_time = pl.from_epoch(pl.col("close_time"), time_unit=unit).dt.replace_time_zone("UTC")
 
         return frame.select(
-            # A bar's event_time is its close: that is when it is complete.
+            # event_time is the bar close.
             event_time=close_time,
             ingest_time=pl.lit(ingest),
-            # A closed bar is usable the instant it closes. No delay to add here,
-            # unlike news or macro, where the feed lag is real and measured.
             available_at=close_time + KLINE_PUBLICATION_DELAY,
             venue=pl.lit(VENUE),
             asset=pl.lit(asset),
@@ -198,13 +176,7 @@ _FUNDING_COLUMNS = ["calc_time", "funding_interval_hours", "last_funding_rate"]
 
 
 class BinanceFundingBulk:
-    """Monthly funding-rate archives.
-
-    Funding settles on fixed UTC marks (00:00, 08:00, 16:00) and is the input to
-    the positioning component of the state index (§11.4). It is also the reason
-    the daily bar boundary must be UTC 00:00 (§5.7): any other cut misaligns
-    funding with the bars that are supposed to explain it.
-    """
+    """Monthly funding-rate archives. Settles at 00/08/16 UTC, hence UTC daily bars (§5.7)."""
 
     kind = "funding"
     venue = VENUE
@@ -250,7 +222,7 @@ class BinanceFundingBulk:
         unit = "us" if frame["event_time_raw"].max() > 1e15 else "ms"  # type: ignore[operator]
         settle = pl.from_epoch(pl.col("event_time_raw"), time_unit=unit).dt.replace_time_zone("UTC")
         return frame.select(
-            # The settlement instant. The rate is known and applied at that mark.
+            # The rate is known and applied at the settlement instant.
             event_time=settle,
             ingest_time=pl.lit(datetime.now(UTC)),
             available_at=settle,
@@ -274,9 +246,7 @@ class BinanceFundingBulk:
             *check_schema(batch),
             *check_timestamps(batch),
             *check_duplicates(batch, ["event_time", "asset"]),
-            # Funding can legitimately be negative, so only the magnitude is
-            # checked: rates beyond +/-5% per interval indicate a parsing error,
-            # not a market event.
+            # |rate| >= 5% per interval indicates a parsing error.
             *(
                 [_out_of_range(batch, "funding_rate", "|rate| must be < 0.05")]
                 if batch.frame.filter(pl.col("funding_rate").abs() >= 0.05).height

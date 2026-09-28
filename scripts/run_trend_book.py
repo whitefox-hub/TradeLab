@@ -5,27 +5,9 @@
     .venv/bin/python scripts/run_trend_book.py            # runs until stopped
     .venv/bin/python scripts/run_trend_book.py --once     # one tick, for a check
 
-Every 5-minute bar close, plus a margin for the venue to publish it:
-
-1. BTC and ETH 5-minute bars from the public REST endpoint, built into the
-   basket index, with its daily ATR and seven-day momentum from closed days.
-2. The operator's trend and when it last changed, from the registry.
-3. `trend_book.step`: the guide, the exposure and any barrier exit.
-4. Orders for the difference, through the `ExecutionEngine` with the risk
-   engine, the intent log and `trim_held`, on a `SimulatedAdapter` whose costs
-   are the registered ones.
-5. Funding at every settlement the book held across.
-6. A snapshot per asset, with its guide, for the operator's screen.
-
-**Restart with memory** (§14.3). The intent log is recovered, and the paper
-venue's fills and the book's state are reloaded from `state.json`, so a
-restarted process resumes the same run with the same positions, and a gap
-between the two halts it rather than being adopted.
-
-Size is clipped to the active configuration's `max_position_pct_equity` before
-an order is sent, not vetoed after. A veto at the cap is a cliff (the
-thousand-dollar simulation found it). A clip is a sizing rule respecting a
-limit, and it is logged each time it binds.
+Restart (§14.3): intent log recovered, fills and book state reloaded from `state.json`;
+a reconciliation divergence halts the run rather than being adopted. Size is clipped to
+`max_position_pct_equity` before sending, not vetoed after (a veto at the cap is a cliff).
 """
 
 from __future__ import annotations
@@ -218,8 +200,7 @@ def main() -> int:
 
         equity = _equity(engine, price, funding_paid)
         engine.risk.mark_equity(equity)
-        # max_daily_loss is judged against the day's opening equity, so the day
-        # has to open: at the first tick of each UTC day, and at start.
+        # max_daily_loss needs the day's opening equity: reset on each UTC day's first tick.
         today = now.strftime("%Y-%m-%d")
         if extra.get("day") != today:
             engine.account.day_start_equity = equity

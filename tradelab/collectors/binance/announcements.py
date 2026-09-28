@@ -1,14 +1,5 @@
-"""Binance announcements. Plan.md §11.1.
-
-The best-behaved event source available: structured, timestamped, free, and with
-hundreds of historical occurrences — which is what §11.6 needs and what free-text
-news cannot provide. Listings are also the core of the differentiation thesis,
-since each one is a fresh event and a genuinely independent cross-sectional
-observation, unlike six more years of BTC.
-
-Unusually for an event source, this one **is** partially backfillable: the CMS
-endpoint paginates through the full history.
-"""
+"""Binance announcements (Plan.md §11.1). Backfillable: the CMS endpoint paginates the
+full history."""
 
 from __future__ import annotations
 
@@ -38,74 +29,47 @@ VENUE = "binance"
 #: Catalogue 48 is "New Cryptocurrency Listing".
 CATALOGS = {48: "listing"}
 
-#: How late a real subscriber would have seen the announcement.
-#:
-#: This constant is a modelling decision, not a detail, and it is versioned with
-#: the collector. Using our own ingest time would make every backfilled
-#: announcement "available" in 2026, which destroys them. Using the publication
-#: instant assumes a zero-latency subscriber, which is a lie in the other
-#: direction and flatters every backtest that uses them. 60s is the conservative
-#: bound for a one-minute poller, and §11.8's pre-event flatness test is what
-#: will reveal if it is set too low.
+#: How late a real subscriber sees an announcement: not ingest time (breaks backfill), not
+#: publication (zero latency flatters backtests). 60s = one-minute poller; §11.8 tests it.
 SUBSCRIBER_DELAY = timedelta(seconds=60)
 
-#: Closed taxonomy (§11.1). A title that matches nothing becomes `unclassified`;
-#: it never invents a class, because emergent classes fragment the sample into
-#: cells of three events and make the impulse response unestimable.
-#: Positively irrelevant to a crypto perpetuals system. Matched FIRST, so that
-#: `unclassified` keeps its meaning: "we could not tell", which is an alarm,
-#: rather than "not our concern", which is half this feed.
+#: Closed taxonomy (§11.1): unmatched titles become `unclassified`, never a new class.
+#: Irrelevant patterns match FIRST so `unclassified` means "could not tell" (an alarm).
 _IRRELEVANT: tuple[re.Pattern[str], ...] = (
     re.compile(r"bStocks|Tokenized Securit|Stock Trading|TradFi", re.I),
     re.compile(r"on Earn|Buy Crypto|Convert|VIP Loan|Collateral Asset", re.I),
     re.compile(r"Trading Bots|Margin Will Add New Pairs", re.I),
-    # Pre-2019 spot and margin housekeeping. USD-M perpetuals launched in
-    # September 2019, so most of the early feed is about instruments this system
-    # does not trade.
+    # Pre-2019 spot/margin housekeeping (USD-M perpetuals launched Sept 2019).
     re.compile(r"Adds? (BUSD )?Margin (Trading|Pairs)|Stablecoin Trading Pairs", re.I),
     re.compile(r"Lottery|Leveraged Token", re.I),
-    # Copy Trading availability is a *product* notice about contracts that
-    # already exist, not a listing. It is the single largest source of false
-    # positives in 2024-2025: 20 of the 107 futures-mentioning titles the
-    # taxonomy missed, and counting them would put an event on a date where
-    # nothing was listed.
+    # Copy Trading notices concern existing contracts, not listings; the largest
+    # false-positive source in 2024-2025.
     re.compile(r"Copy Trading", re.I),
-    # Negations, which must be caught before any listing pattern or they read as
-    # listings: "BTT USDT-Margined Perpetual Contract Listing is Cancelled",
-    # "FIL Coin-Margined Perpetual Contract Listing Postponed", "DOT ... Listing
-    # Delayed to 2020/08/22". A postponed listing still happens and gets its own
-    # announcement; a cancelled one never happened at all.
+    # Negations ("... Listing is Cancelled/Postponed") must precede listing patterns.
+    # A postponed listing gets its own later announcement.
     re.compile(r"Listing (is )?(Cancell?ed|Postponed|Delayed|Suspended)", re.I),
     re.compile(r"Will Cancel.*Delisting", re.I),
 )
 
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # Delivery first. Quarterly and bi-quarterly contracts are dated instruments,
-    # not perpetuals, and several of their titles also say "Will Launch" — so a
-    # perpetual pattern placed above this one swallows them.
+    # Delivery first: quarterly titles also say "Will Launch" and would match perpetuals.
     ("futures_delivery", re.compile(
         r"(Quarterly|Bi-Quarterly|Delivery).{0,40}(Contract|Futures)"
         r"|Futures Will List.*?(Delivery|Quarterly)", re.I)),
-    # Perpetual listings. Five wordings across seven years, and the venue has
-    # changed phrasing repeatedly without notice — which is why capture was
-    # 0 events in 2019 and missed ~35% of 2025 before these were added. A
-    # listings study reads a time-varying miss rate as a property of the market.
+    # Perpetual listings: the venue changes wording without notice; each alternative
+    # covers an era. Missing one gives a time-varying miss rate.
     ("futures_listing", re.compile(
-        # 2019-2020, present tense: "Binance Futures Launches ETH/USDT Perpetual
-        # Contract". The original pattern required "Will Launch".
+        # 2019-2020: "Binance Futures Launches ETH/USDT Perpetual Contract".
         r"Futures Launch(es)?.*?Perpetual Contract"
-        # 2020-2023, the form the taxonomy was written for.
+        # 2020-2023.
         r"|Futures Will Launch.*?Perpetual Contract"
-        # Coin-margined, where "Futures" does not precede the verb: "Binance
-        # Will Launch a FIL/USD Coin-Margined Perpetual Contract".
+        # Coin-margined: "Binance Will Launch a FIL/USD Coin-Margined Perpetual Contract".
         r"|Will (Launch|List).{0,40}Perpetual Contract"
         # 2024: "Binance Will Launch Sleepless AI (AI) on Margin & Futures".
         r"|(Will Launch|Adds?).{0,60}on Margin (&|and) Futures"
-        # 2025, now the dominant form: "Obol (OBOL) Will Be Available on Binance
-        # Alpha and Binance Futures".
+        # 2025: "Obol (OBOL) Will Be Available on Binance Alpha and Binance Futures".
         r"|Will (Be Available|Open for Trading).{0,40}Binance Futures"
-        # Weekly batches, which name no asset in the title and so are routed to
-        # `needs_body` rather than counted as events affecting nothing.
+        # Weekly batches name no asset; they end up `needs_body`.
         r"|Futures: New Listings This Week", re.I)),
     ("futures_delisting", re.compile(r"Futures Will (Delist|Close|Remove|Settle)", re.I)),
     ("spot_delisting", re.compile(r"Will Delist|Notice of Removal", re.I)),
@@ -135,17 +99,9 @@ _NOT_TICKER_WORDS = frozenset({
     "WITH", "UP", "TO", "AND", "THE", "NEW", "LISTINGS", "THIS", "WEEK",
     "BINANCE", "WILL", "LAUNCH", "MULTIPLE", "ALPHA", "AVAILABLE", "TRADING",
     "MARGIN", "QUARTERLY", "DELIVERY", "INDEX", "COMPOSITE",
-    # "ALPHA" is deliberately absent: it is a listed token as well as the name
-    # of the Binance Alpha product, and the product sense is excluded by
-    # position rather than by word.
 })
 
-#: Three shapes the venue uses, none of which `_PAIR` sees.
-#:
-#: More than half of all listing announcements — 338 of 594 — named their asset
-#: in one of these and were being recorded as affecting nothing. `_PAIR` wants
-#: `BTCUSDT` with no separator while the titles write `RLC/USDT`, and the
-#: margin-prefixed form puts the ticker in a position no pattern looked at.
+#: Separator/margin-prefixed forms `_PAIR` misses; over half of listing titles use them.
 _ASSET_FORMS: tuple[re.Pattern[str], ...] = (
     # "RLC/USDT Perpetual Contract", "FIL/USD Coin-Margined"
     re.compile(rf"\b([A-Z0-9]{{2,}})/(?:{_QUOTE})\b"),
@@ -158,9 +114,8 @@ _ASSET_FORMS: tuple[re.Pattern[str], ...] = (
     # "YFI USDT-Margined Perpetual Contract": ticker ahead of the margin type.
     re.compile(rf"\b([A-Z0-9]{{2,}})\s+(?:{_QUOTE})[-\s](?:M|Margined)\b"),
 )
-# Titles end with a parenthesised release date, which the ticker pattern happily
-# captures. A phantom asset is worse than none: it never matches market data, and
-# it hides the fact that the announcement needs its body resolved.
+# Rejects parenthesised release dates the ticker pattern captures; a phantom asset
+# would hide that the announcement needs its body resolved.
 _NOT_A_TICKER = re.compile(r"^[\d\W_]+$|\d{4}-\d{2}", re.UNICODE)
 
 
@@ -173,22 +128,14 @@ def classify(title: str) -> str:
     return "unclassified"
 
 
-#: Quote suffixes to strip so one asset has one key.
-#:
-#: The same listing is written as `BLUR`, `BLUR/USDT` and `USDⓈ-M BLUR` across
-#: years, and without normalisation each spelling counts as a separate asset —
-#: which silently inflates the cross-section the entire power argument rests on.
+#: Quote suffixes stripped so `BLUR`, `BLUR/USDT`, `USDⓈ-M BLUR` share one key.
 _QUOTE_SUFFIX = ("USDT", "USDC", "BUSD", "USD1", "USD")
 
 
 def base_ticker(symbol: str) -> str:
-    """`BLURUSDT` -> `BLUR`. Left alone when stripping would leave nothing.
+    """`BLURUSDT` -> `BLUR`; unchanged if stripping leaves nothing.
 
-    Deliberately *not* applied inside `extract_assets`, which stays faithful to
-    what the title says — `BLUR/USDT` and `USDⓈ-M BLUR` are different facts and
-    the quote asset is information. Callers building a cross-section apply this
-    to get one key per asset; callers auditing the feed do not.
-    """
+    Not applied in `extract_assets`, which stays faithful to the title."""
     upper = symbol.upper()
     for suffix in _QUOTE_SUFFIX:
         if upper.endswith(suffix) and len(upper) > len(suffix) + 1:
@@ -197,13 +144,9 @@ def base_ticker(symbol: str) -> str:
 
 
 def extract_assets(title: str) -> list[str]:
-    """Every asset named in the title. Order-preserving, unique.
+    """Every asset named in the title, order-preserving and unique.
 
-    Tried in order of how unambiguous the form is, and unlike the original this
-    accumulates rather than stopping at the first form that matches: a title can
-    carry both a pair and a parenthesised ticker, and "SAND and LTC" carries two
-    assets in one phrase.
-    """
+    Accumulates across forms (a title can carry several assets)."""
     found: list[str] = []
     for pattern in _ASSET_FORMS:
         for match in pattern.findall(title):
@@ -298,10 +241,7 @@ class BinanceAnnouncements:
             return ValidationReport(issues)
         times = batch.frame["event_time"]
 
-        # Titles we could not place at all. Distinct from `not_applicable`, which
-        # we positively identified as irrelevant. A rise here means the venue
-        # changed its wording and the taxonomy stopped matching — a failure that
-        # is invisible in the data itself.
+        # A rise in `unclassified` means the venue changed wording.
         unknown = batch.frame.filter(pl.col("event_class") == "unclassified").height
         if unknown / batch.frame.height > 0.15:
             issues.append(Issue(
@@ -311,8 +251,7 @@ class BinanceAnnouncements:
                         "hint": "wording likely changed; extend the closed taxonomy"},
             ))
 
-        # A listing whose asset we never extracted cannot have its reaction
-        # measured (§11.3), so it is a hole, not merely untidy.
+        # An asset-bearing event without assets cannot be measured (§11.3).
         bearing = batch.frame.filter(pl.col("event_class").is_in(list(ASSET_BEARING)))
         if bearing.height:
             missing = bearing.filter(pl.col("needs_body")).height

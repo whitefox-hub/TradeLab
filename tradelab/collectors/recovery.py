@@ -1,17 +1,6 @@
-"""Downtime recovery. Plan.md §4.1, §4.2, §14.2.
-
-What happens after the app stops is not one question but three, because the
-sources differ in whether their history can be recovered at all:
-
-    klines / trades / funding   fully recoverable   bulk archive + REST
-    open interest               ~30 days            REST history window
-    liquidations / book / news  NEVER               no historical endpoint exists
-
-So recovery is: read the watermark, measure the gap, and then do the one thing
-that source permits. A gap that cannot be closed is not closed — it is recorded
-as a blocking data quality issue, which under §4.6 bars anything validated on
-that window from promotion. The archive stays honest about what it never saw.
-"""
+"""Downtime recovery (Plan.md §4.1, §4.2, §14.2). Klines/trades/funding fully recoverable;
+open interest ~30 days; liquidations/book/news never. Unclosable gaps become blocking
+issues, which bar promotion under §4.6."""
 
 from __future__ import annotations
 
@@ -73,11 +62,7 @@ def plan_recovery(
     asset: str | None = None,
     tolerance: timedelta = timedelta(minutes=2),
 ) -> GapPlan | None:
-    """Classify the downtime gap and say what can be done about it.
-
-    Returns None when there is nothing to recover: either no prior run, or a gap
-    inside the tolerance (a normal restart, not an outage).
-    """
+    """Classify the downtime gap. None if no prior run or the gap is within tolerance."""
     now = now or datetime.now(UTC)
     if watermark is None:
         return None
@@ -92,8 +77,7 @@ def plan_recovery(
     elif recoverability is Recoverability.WINDOW:
         horizon = now - (lookback or timedelta(0))
         recoverable_from = max(watermark, horizon)
-        # Anything older than the REST window is gone even though the source
-        # nominally has history.
+        # Older than the REST window is gone.
         permanent = (watermark, horizon) if watermark < horizon else None
     else:
         recoverable_from, permanent = None, (watermark, now)
@@ -103,9 +87,7 @@ def plan_recovery(
         start, end = permanent
         issue = Issue(
             kind=IssueKind.GAP,
-            # Blocking, not warn: under §4.6 this bars promotion of anything
-            # validated on the window. Downgrading it would let a strategy be
-            # validated on data the system knows it never collected.
+            # Blocking, not warn: bars promotion of anything validated on the window (§4.6).
             severity=Severity.BLOCKING,
             period_start=start,
             period_end=end,

@@ -1,14 +1,9 @@
-"""Load the macro catalogue and its observations. Plan.md §4.7, §20.6.
+"""Load the macro catalogue and its observations into `macro_releases`. Plan.md §4.7, §20.6.
 
-Each observation becomes a `macro_releases` row with `actual` and `actual_at`
-set and `consensus` left empty, because no free feed carries a forecast
-consensus. The operator supplies those through the screen, and only ever for
-releases that have not happened yet — a consensus recorded after the print is a
-memory of one, and the database refuses it.
+`consensus` stays empty (no free feed has it; the DB refuses one entered after the print).
+`available_at` = `actual_at` + the series' publication lag, i.e. when one could act.
 
-`available_at` is `actual_at` plus the series' measured publication lag, which
-is the moment a subscriber could have acted rather than the moment the statistic
-refers to.
+    python scripts/ingest_macro.py [--since 2019-01-01]
 """
 
 from __future__ import annotations
@@ -54,11 +49,8 @@ def main() -> int:
                 {"s": spec.code}).scalars().all())
             inserted = 0
             for day, value in rows:
-                # Midnight UTC as the scheduled instant for a daily series. The
-                # real release time is in `session_close` and belongs on the
-                # release, not on the observation date — stated rather than
-                # silently assumed, because it is the difference between an
-                # event at 08:30 New York and one at midnight.
+                # Midnight UTC for a daily series; the real release time lives in
+                # `session_close`, not on the observation date.
                 scheduled = datetime.combine(day, time(0, 0), tzinfo=UTC)
                 if scheduled in known:
                     continue

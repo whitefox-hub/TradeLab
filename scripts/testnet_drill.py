@@ -1,18 +1,9 @@
 #!/usr/bin/env python
-"""Run the §16.7 failure drills against Binance testnet. Plan.md §12.1, §16.7.
+"""Run the §16.7 failure drills against Binance testnet with the real `ExecutionEngine`.
 
-The third rung of §12.1 exists for the failures a local simulator cannot
-produce, and §16.7 says a drill that has never been run is a plan, not a
-control. This runs them against a matching engine with the real
-`ExecutionEngine` in the loop, and prints what happened rather than whether it
-matched an expectation.
+Plan.md §12.1, §16.7. Opens real testnet positions; flattens at start and end.
 
     BINANCE_TESTNET_KEY=... BINANCE_TESTNET_SECRET=... python scripts/testnet_drill.py
-
-It opens and closes real testnet positions. It flattens at the start and again
-at the end, and reports whether the account is flat when it finishes — because
-a drill that leaves a position open has created the condition it was testing
-for.
 """
 
 from __future__ import annotations
@@ -37,16 +28,11 @@ from tradelab.execution.types import (
 )
 from tradelab.risk.limits import RiskEngine, RiskLimits
 
-#: The basket, and deliberately not BTC: every one of these has a $5 floor at
-#: the venue against BTC's $50, which is the difference between $100 buying
-#: twenty increments and buying two (§14.5).
+#: Not BTC: these have a $5 venue floor vs BTC's $50 (§14.5).
 BASKET = ["ADAUSDT", "XRPUSDT", "XLMUSDT", "SUIUSDT", "ALGOUSDT"]
 DRILL = "ADAUSDT"
 
-#: The entry-spacing limit is relaxed here and nowhere else. A drill submits in
-#: seconds what a strategy would submit in an hour, and leaving it at 60 would
-#: mean the drills never reach the venue at all — which is the failure mode
-#: where a suite passes by not running.
+#: Entry spacing relaxed for drills only; at 60 s the drills would never reach the venue.
 LIMITS = RiskLimits(min_seconds_between_entries=0, max_orders_per_minute=60)
 
 
@@ -122,20 +108,13 @@ def main() -> int:
 
 def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
            quantity: Decimal, now: datetime) -> int:
-    """The drills themselves, so the caller can flatten whatever they leave.
-
-    Separated for that reason alone: the first version printed its "account
-    flat" line at the end of the same function, so the run that died in drill 4
-    skipped it and left 118 ADA open — a drill creating the condition it exists
-    to test for.
-    """
+    """The drills; separate from `main` so its `finally` flattens even if one raises."""
     # -- 1. reconciliation against what the venue really holds ---------------
     heading(1, "Reconciliation against the venue's own position view")
     engine = build(adapter, "drill-1", equity)
     print(f"  venue holds {adapter.positions() or 'nothing'}, we hold nothing")
     print(f"  divergences: {engine.reconcile(now) or 'none'} — halted: {engine.account.halted}")
-    # Reconcile, then prime, then trade. Without the priming step the first
-    # order folds the venue's whole recent history as though we had placed it.
+    # Prime after reconcile, or the first order folds the venue's recent history as ours.
     print(f"  trades already at the venue, marked seen and not folded: "
           f"{adapter.prime([DRILL])}")
 
@@ -186,18 +165,12 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  distinct identities: {len({p.identity for p in pieces})}")
     print(f"  folded whole: {sum(p.quantity for p in pieces)} of {big}")
     if len(pieces) < 2:
-        # Said out loud rather than passed over. Whether an order sweeps more
-        # than one level is the book's business on the day, so this drill
-        # exercises the path opportunistically and cannot claim it when it did
-        # not. The unit test is what holds the behaviour; a run of this on 26
-        # September filled 118 ADA in three trades and folded all three.
+        # Multi-trade fills depend on the day's book; the unit test holds the behaviour.
         print("  NOT EXERCISED today: one level covered the order. The book, not")
         print("  the adapter, decides this — see test_a_fill_carries_the_venue_"
               "trade_id.")
 
-    # Everything below starts flat, because every drill from here builds a
-    # fresh engine and a fresh engine reconciling against a held position is
-    # drill 3 again, not the drill it was meant to be.
+    # Start flat: a fresh engine reconciling against a held position is drill 3 again.
     flatten(adapter, datetime.now(UTC))
     below = adapter.instruments[DRILL].round_price(price * Decimal("0.97"))
 
@@ -239,9 +212,7 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
 
     # -- 8. rejection for margin, until the error limit halts ----------------
     heading(8, "Insufficient margin, three times, and the engine stops")
-    # Limits wide enough that the venue is the one to refuse. Everything the
-    # risk engine checks is exercised elsewhere; this is about the path a
-    # venue refusal takes once it is past the veto.
+    # Limits wide enough that the venue, not the risk engine, refuses.
     wide = RiskLimits(min_seconds_between_entries=0, max_orders_per_minute=60,
                       max_position_notional=Decimal(10_000_000),
                       max_position_pct_equity=Decimal(1_000),
@@ -345,8 +316,7 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
         print(f"  venue holds {adapter.positions().get(DRILL, 0)}; "
               f"unresolved in the log: {len(before.intents.unresolved())}")
 
-        # Nothing of the dead process is carried over: a new adapter with no
-        # memory of what it sent, and a new engine that has only the file.
+        # New adapter and engine: only the intent file survives the "death".
         fresh = BinanceFuturesAdapter.from_environment(ExecutionMode.TESTNET,
                                                        symbols=BASKET)
         after = build(fresh, run_id, equity)
@@ -367,9 +337,7 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
 
     # -- 13. a held position over its cap ------------------------------------
     heading(13, "A position that outgrew its cap is trimmed back at the venue")
-    # Flat, and a fresh adapter: this one has carried every earlier drill's
-    # fills, and a new engine folds whatever its adapter holds. The first run
-    # of this drill did exactly that and trimmed a position that was not there.
+    # Fresh adapter: a new engine folds every fill the old adapter carries.
     flatten(adapter, now)
     adapter = BinanceFuturesAdapter.from_environment(ExecutionMode.TESTNET,
                                                      symbols=BASKET)
@@ -379,9 +347,7 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     engine.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price}, now,
                   mid_price=price)
     engine.apply_fills(now)
-    # Growth by price cannot be ordered on a testnet, so the other side of the
-    # same ratio moves instead: equity marked down until the position is over
-    # 25% of it, as RAVE's short was over a third of the book.
+    # Price growth can't be forced on testnet; mark equity down instead to exceed the cap.
     engine.risk.mark_equity(quantity * price * Decimal(2))
     print(f"  holding {quantity} ≈ ${quantity * price:.2f}, equity marked "
           f"${engine.account.equity:.2f}: {quantity * price / engine.account.equity:.0%} "

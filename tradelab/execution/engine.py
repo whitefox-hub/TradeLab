@@ -1,10 +1,7 @@
 """The run loop. One engine, four modes. Plan.md §12.2, §14.2, §14.3.
 
-The strategy hands this engine orders and never learns which mode it is in. What
-the engine adds around each order is the part that does not belong in a strategy
-and must not be reimplemented per strategy: the risk veto, the intent log, the
-deterministic id, and the reconciliation that has to happen before anything is
-sent.
+Adds around each order what strategies must not reimplement: risk veto, intent log,
+deterministic id, and reconciliation before anything is sent.
 """
 
 from __future__ import annotations
@@ -29,12 +26,7 @@ from tradelab.risk.limits import Decision, RiskEngine
 
 
 class NotReconciled(RuntimeError):
-    """Raised when an order is attempted before startup reconciliation.
-
-    A system that restarts after a crash and trades without reconciling can
-    double an existing position (§14.2), so this is an exception rather than a
-    warning: the failure it prevents is silent and expensive.
-    """
+    """An order attempted before startup reconciliation (could double a position, §14.2)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +50,7 @@ class ExecutionEngine:
     intents: IntentLog = field(default_factory=IntentLog)
     _sequence: int = 0
     _reconciled: bool = False
-    #: Set by a reconciliation that found a gap, and never cleared by one that
-    #: did not: the gap is evidence of a bug, and a later agreement does not
-    #: say the bug is gone.
+    #: Set by a reconciliation gap and never cleared: later agreement does not fix the bug.
     _diverged: bool = False
     _applied: set[str] = field(default_factory=set)
 
@@ -73,9 +63,7 @@ class ExecutionEngine:
     def reconcile(self, at: datetime) -> list[Divergence]:
         """Compare our position view against the venue's. Plan.md §14.2.
 
-        Mandatory before the first order. A discrepancy halts immediately and is
-        never silently corrected: adopting the venue's number would hide the bug
-        that produced the gap, and the gap is the only evidence it exists.
+        Mandatory before the first order. A gap halts; never adopt the venue's number silently.
         """
         theirs = self.adapter.positions()
         assets = set(theirs) | {a for a, p in self.account.positions.items() if p.is_open}
@@ -100,25 +88,11 @@ class ExecutionEngine:
     def recover(self, at: datetime) -> list[Divergence]:
         """Restart from the intent log, then reconcile. Plan.md §14.3.
 
-        Drill 3 is a restart with no memory, and it halts because it has to: the
-        venue holds a position the new process knows nothing of. This is the
-        restart with memory. In order:
-
-        1. Positions are rebuilt from the FILLED records, and the sequence
-           continues from the last one written. Counting from zero would derive
-           the ids of orders already sent, and the venue accepts a repeated id
-           once the first has left the book.
-        2. Each order that may exist — SENT or UNKNOWN — is asked about by its
-           id. Never seen: ABSENT, and not resent; whether to send it again is
-           the strategy's call on today's prices. Seen: its fills are fetched.
-        3. So are the fills of every order the venue acknowledged, because a
-           process can die after the acknowledgement and before the fill is
-           folded, and a resting order can fill while nobody is running.
-        4. Reconcile. A gap still left is a real one and halts, as always.
-        5. Prime the venue's remaining history as not ours.
-
-        Every order that reached the venue is asked about, so a restart costs a
-        request per order in the log. That is the price of not guessing.
+        1. Rebuild positions from FILLED records; continue the sequence (restarting at zero
+           would reuse ids the venue no longer refuses).
+        2. Ask about each SENT/UNKNOWN id: never seen -> ABSENT, not resent.
+        3. Fetch fills of every acknowledged order (may have filled while down).
+        4. Reconcile; a remaining gap halts.  5. Prime remaining history as not ours.
         """
         if self._reconciled:
             raise RuntimeError(
@@ -202,26 +176,22 @@ class ExecutionEngine:
 
         decision = self.risk.check(order, price, instrument, prices, at, mid_price)
         if not decision.allowed:
-            # Vetoes are logged. A refused order is a decision, and a log that
-            # keeps only what executed cannot explain a quiet day.
+            # Vetoes are logged: a refused order is a decision.
             self.intents.record(order, self.run_id, self._sequence, IntentState.VETOED,
                                 at, f"{decision.breach}: {decision.detail}")
             if decision.halts:
                 self.halt(f"{decision.breach}: {decision.detail}", at)
             return decision
 
-        # Written before the venue is called, never after. If the process dies
-        # on the next line, startup finds this record and knows to go looking.
+        # Written before the venue call, so a crash leaves a record to resolve on startup.
         self.intents.record(order, self.run_id, self._sequence, IntentState.SENT, at)
         self.risk.record_order(at)
 
         try:
             ack = self.adapter.submit(order, at)
         except Exception as error:
-            # Broad on purpose. A venue client can raise anything from a socket
-            # error to a JSON decode failure, and an engine that dies on one
-            # leaves an order in flight with nobody tracking it. The error is
-            # counted, and max_consecutive_errors is what stops the run.
+            # Broad on purpose: dying here leaves an order in flight untracked.
+            # max_consecutive_errors stops the run.
             self.risk.record_error()
             self.intents.record(order, self.run_id, self._sequence, IntentState.UNKNOWN,
                                 at, f"{type(error).__name__}: {error}")
@@ -241,18 +211,11 @@ class ExecutionEngine:
         return decision
 
     def apply_fills(self, at: datetime) -> int:
-        """Fold the adapter's fills into our position view.
-
-        Positions are updated from fills only. Nothing else is allowed to move
-        them, which is what makes the reconciliation in §14.2 meaningful: if our
-        view is derived from a second source it can agree with the venue while
-        both are wrong.
-        """
+        """Fold the adapter's fills into our position view; only fills move positions (§14.2)."""
         applied = 0
         for fill in self.adapter.fills:
             if not fill.identity:
-                # Every fill must be nameable or none of them can be counted:
-                # an empty key makes the first fill swallow all the rest.
+                # An empty key would make the first fill swallow all the rest.
                 raise ValueError(
                     f"{self.run_id}: a fill on {fill.asset} carries neither a "
                     f"venue trade id nor a client order id, so it cannot be "
@@ -272,20 +235,10 @@ class ExecutionEngine:
         return applied
 
     def trim_held(self, prices: dict[str, Decimal], at: datetime) -> list[Order]:
-        """Cut every held position that has grown past its cap back to it.
+        """Cut every held position that has grown past its cap back to it. Called every tick.
 
-        For the run loop to call on every tick, with the same prices it marks
-        equity at. Reduce-only, so it passes a halt: a halt stops new risk and
-        closes nothing, and under RESULT-007's week the run halted on the daily
-        loss limit and would have gone on holding the short that caused it.
-
-        Judged on our position view, not the venue's. A gap between the two is
-        reconciliation's to find, and trimming from the venue's number would
-        hide the gap by acting on it. So once a gap has been found, nothing is
-        trimmed at all: our view is the one known to be wrong, and the kill
-        switch, which reads the venue's, is the tool for that state. Measured
-        on the testnet before this guard existed: 177 units trimmed from a
-        position the venue held 118 of.
+        Reduce-only, so it passes a halt (RESULT-007). Judged on our view, and nothing is
+        trimmed once reconciliation found that view wrong; the kill switch handles that state.
         """
         if self._diverged:
             return []
@@ -306,12 +259,7 @@ class ExecutionEngine:
     # -- stopping ------------------------------------------------------------
 
     def halt(self, reason: str, at: datetime) -> None:
-        """Stop trading without stopping the process.
-
-        The adapter is wrapped rather than discarded, so reduce-only exits still
-        reach the venue. A halt that also blocks closing orders leaves the system
-        holding whatever caused the halt.
-        """
+        """Stop trading without stopping the process; reduce-only exits still reach the venue."""
         self.risk.halt(reason)
         if not isinstance(self.adapter, HaltedAdapter):
             self.adapter = HaltedAdapter(self.adapter, reason=reason)
@@ -319,8 +267,7 @@ class ExecutionEngine:
     def kill(self, at: datetime) -> list[Order]:
         """Cancel everything, flatten, stay halted. Plan.md §14.1.
 
-        Built from the *venue's* position view, because the kill switch runs in
-        exactly the situations where our view and theirs have parted company.
+        Built from the venue's position view: it runs when ours may be wrong.
         """
         self.halt("kill switch", at)
         self.adapter.cancel_all(at)

@@ -1,27 +1,9 @@
-"""The intraday data set for PREREG-008. Plan.md §4.1, §4.3, §4.4.
+"""5-minute data for PREREG-008 from data.binance.vision (Plan.md §4.1, §4.3, §4.4):
+klines, premiumIndexKlines (monthly, daily for an open month) and metrics (daily only).
 
-Three 5-minute sources from data.binance.vision, for the assets in each month's
-point-in-time universe:
-
-* **klines**: OHLC, quote volume, trade count, taker buy volume. Monthly
-  archives, with daily ones for a month the archive has not closed yet.
-* **premiumIndexKlines**: the perpetual against its index, same layout, zero
-  volume.
-* **metrics**: open interest and long/short ratios, one snapshot every five
-  minutes. Daily archives only.
-
-Two facts shape the cutting, both measured on 2026-09-27:
-
-* **The archives outlive the contract.** ALPACA's `metrics` go on after its
-  delisting with open interest at 0E-16, as its klines go on at a frozen
-  price. Everything at or after `deliveryDate` is dropped.
-* **"Available" is not "stamped".** A kline is known at its close time, not its
-  open time. A metrics snapshot is known at its create time. Each row keeps
-  the moment it became knowable as `available_ms` (§4.3), so a feature can be
-  built only from rows available before the decision it feeds.
-
-This module downloads and normalises, and reads no return.
-"""
+Measured: archives continue after delisting (metrics OI at 0E-16, klines at a frozen
+price), so drop rows at/after `deliveryDate`. `available_ms` is when a row became
+knowable (kline close; metrics stamp + METRICS_STAMP_LAG_MS). Reads no returns."""
 
 from __future__ import annotations
 
@@ -37,20 +19,14 @@ import polars as pl
 ARCHIVE = "https://data.binance.vision/data/futures/um"
 REST = "https://fapi.binance.com"
 
-#: The archive stamps a metrics snapshot five minutes before the moment it
-#: describes. Measured 2026-09-27 against /futures/data/openInterestHist on three
-#: assets and three days: the value the REST endpoint stamps 01:00, and
-#: publishes by 01:01, is stamped 00:55 in the daily archive, 13 of 13 times,
-#: every time. Taking the archive's stamp as the moment of availability fed every
-#: feature built on open interest a reading from five minutes later. That is
-#: the leak that voided RESULT-008.
+#: The archive stamps a metrics snapshot five minutes early (REST 01:00 = archive 00:55,
+#: measured 13/13 vs openInterestHist). Using the raw stamp voided RESULT-008.
 METRICS_STAMP_LAG_MS = 300_000
 
 UNIVERSE_SIZE = 100          # FEASIBILITY-008's breadth row, PREREG-008
 RANKING_DAYS = 30
 MIN_HISTORY_DAYS = 30
-#: "Still trading" at the month's start: traded on one of the last three days.
-#: One quiet day with no volume is not a delisting.
+#: "Still trading" at month start: traded on one of the last three days.
 ALIVE_DAYS = 3
 
 KLINE_SCHEMA = {
@@ -71,8 +47,7 @@ METRICS_SCHEMA = {
 
 
 def parse_klines(text: str) -> pl.DataFrame:
-    """Klines and premium-index klines share a layout. Newer files carry a header,
-    older ones do not, and both occur inside one asset's history."""
+    """Klines and premium-index klines share a layout; header rows occur in some files."""
     rows = [r for r in csv.reader(io.StringIO(text)) if r and r[0].isdigit()]
     return pl.DataFrame(
         [(int(r[0]), int(r[6]) + 1, float(r[1]), float(r[2]), float(r[3]),
@@ -82,12 +57,7 @@ def parse_klines(text: str) -> pl.DataFrame:
 
 
 def parse_metrics(text: str) -> pl.DataFrame:
-    """Blank fields are absent readings, not zeros: the ratios are missing for
-    stretches of some assets' history, and a zero ratio is a claim.
-
-    `available_ms` is the archive's `create_time` **plus five minutes**, which is
-    when the REST endpoint says the reading exists (`METRICS_STAMP_LAG_MS`).
-    """
+    """Blank fields are None, not zero. `available_ms` = `create_time` + METRICS_STAMP_LAG_MS."""
     def number(value: str) -> float | None:
         return float(value) if value.strip() else None
 
@@ -104,11 +74,8 @@ def parse_metrics(text: str) -> pl.DataFrame:
 
 def cut(frame: pl.DataFrame, start: datetime, end: datetime,
         delisted_at: datetime | None) -> pl.DataFrame:
-    """Rows knowable inside the window and before delisting, deduplicated.
-
-    Deduplicated because a month assembled from daily files can overlap a
-    monthly one when the archive closes the month between two runs.
-    """
+    """Rows knowable inside the window and before delisting, deduplicated (daily and
+    monthly files can overlap)."""
     stop = min(end, delisted_at) if delisted_at else end
     return (frame.filter((pl.col("available_ms") > _ms(start))
                          & (pl.col("available_ms") <= _ms(stop)))
@@ -119,12 +86,7 @@ def cut(frame: pl.DataFrame, start: datetime, end: datetime,
 
 
 def fetch_text(client: httpx.Client, url: str, attempts: int = 4) -> str | None:
-    """A file's CSV, or None if the archive has no such file.
-
-    404 is an answer, because an asset is not listed in every month. Anything
-    else is retried with backoff and then raised: a file that fails to arrive
-    is not a file that does not exist.
-    """
+    """A file's CSV, or None on 404 (not listed). Other failures retry, then raise."""
     for attempt in range(attempts):
         try:
             response = client.get(url)
@@ -179,17 +141,13 @@ def days_of(month: date, until: date) -> list[date]:
 
 def daily_quote_volume(client: httpx.Client, symbol: str, start: datetime,
                        end: datetime, delisted_at: datetime | None) -> pl.DataFrame:
-    """Quote volume per traded UTC day, cut at delisting, from the REST klines.
-
-    Zero-volume days are dropped, for the reason in `pit_panel.live_days`: the
-    venue repeats a dead contract's settlement price indefinitely.
-    """
+    """Quote volume per traded UTC day, cut at delisting. Zero-volume days dropped
+    (see `pit_panel.live_days`)."""
     rows = client.get(f"{REST}/fapi/v1/klines", params={
         "symbol": symbol, "interval": "1d", "startTime": _ms(start),
         "endTime": _ms(end), "limit": 1500}).json()
     if not isinstance(rows, list):
-        # -1121: the REST endpoint has forgotten the symbol (FINDING-011's three).
-        # The monthly archive has not.
+        # -1121: REST forgot the symbol (FINDING-011); the monthly archive has it.
         rows = []
         month = date(start.year, start.month, 1)
         while month <= end.date():
@@ -209,15 +167,10 @@ def daily_quote_volume(client: httpx.Client, symbol: str, start: datetime,
 
 def monthly_universe(volumes: pl.DataFrame, months: list[date],
                      size: int = UNIVERSE_SIZE) -> pl.DataFrame:
-    """The point-in-time universe: for each month, the `size` assets with the
-    highest quote volume over the previous 30 days.
+    """Per month, the `size` assets with highest quote volume over the prior 30 days.
 
-    `volumes` is (asset, day, quote_volume) on traded days only. Eligible: at
-    least 30 traded days before the month starts, and trading on the day before
-    it. An asset delisted mid-month stays a member until delisting, because on
-    the first of the month nobody knew. "Trading" means a traded day among the
-    last `ALIVE_DAYS`.
-    """
+    Eligible: >= 30 traded days before the month and a traded day in the last `ALIVE_DAYS`.
+    Mid-month delistings stay members (unknown on the 1st)."""
     out = []
     for month in months:
         before = volumes.filter(pl.col("day") < month)

@@ -1,15 +1,8 @@
 """The registry side of a forward simulation. Plan.md §12.1 rung 2, §15, §20.
 
-A forward book writes where the operator's screen reads: a `runs` row in
-simulator mode, `positions` snapshots and `balances`. Before this module
-nothing wrote to either table, and the home screen's "Nothing has executed"
-was true by construction.
-
-**A forward-validation run is not a promotion.** The strategy keeps its
-lifecycle status (`validating`). `mode = simulator` says how the run executes,
-on fake capital and with no venue, not what the strategy has earned. §15's
-`candidate → simulator` transition, with its human approval and signed report,
-is untouched, and the run's params say which registration started it.
+Writes a simulator-mode `runs` row, `positions` snapshots and `balances`.
+A forward run is not a promotion: the strategy stays `validating`; §15's
+`candidate → simulator` transition is untouched.
 """
 
 from __future__ import annotations
@@ -51,8 +44,7 @@ class Store:
     # -- identity -------------------------------------------------------------
 
     def ensure_strategy(self, name: str, impl: Path, status: str = "validating") -> uuid.UUID:
-        """One row per strategy name and code version. The code hash ties a run
-        to the exact source that produced it (§16.1)."""
+        """One row per strategy name and code hash (§16.1)."""
         code_hash = hashlib.sha256(impl.read_bytes()).hexdigest()
         with self.engine.begin() as db:
             found = db.execute(sa.text(
@@ -68,8 +60,7 @@ class Store:
             return sid
 
     def active_limits(self) -> tuple[uuid.UUID, RiskLimits]:
-        """The ACTIVE configuration is the newest by `valid_from`, as the API and
-        the risk-limits screen define it."""
+        """The active configuration: newest by `valid_from`, as the API defines it."""
         with self.engine.begin() as db:
             row = db.execute(sa.text(
                 "SELECT * FROM risk_limit_configs ORDER BY valid_from DESC LIMIT 1")
@@ -87,9 +78,7 @@ class Store:
 
     def ensure_run(self, strategy_id: uuid.UUID, label: str, params: dict[str, Any],
                    capital: Decimal, limits_id: uuid.UUID) -> uuid.UUID:
-        """The open run for this label, or a new one. A restart resumes its run
-        rather than starting a second: two open runs of one book would show
-        the operator the same positions twice."""
+        """The open run for this label, or a new one; a restart resumes, never duplicates."""
         with self.engine.begin() as db:
             found = db.execute(sa.text(
                 "SELECT id FROM runs WHERE strategy_id = :s AND mode = 'simulator' "
@@ -116,9 +105,7 @@ class Store:
     def setting(self) -> Setting:
         """The trend in force, and when it last *changed*.
 
-        A change is an audit row whose trend differs from the one before it.
-        Moving only the sentiment dial is not a new trend, and must not re-open
-        a view that hit its barrier.
+        Only a trend change counts; moving the sentiment dial must not re-open a barrier.
         """
         with self.engine.begin() as db:
             now = db.execute(sa.text(

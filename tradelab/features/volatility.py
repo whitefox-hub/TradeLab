@@ -1,8 +1,6 @@
 """Volatility features. Plan.md §6, §11.3.
 
-Range-based estimators are preferred over close-to-close where the data allows:
-Parkinson and Garman-Klass use the intrabar extremes and are several times more
-efficient on the same sample, which matters directly for §8.8.
+Range estimators (Parkinson, Garman-Klass) are preferred: several times more efficient (§8.8).
 """
 
 from __future__ import annotations
@@ -16,7 +14,7 @@ from tradelab.features.registry import feature
 @feature(family="volatility", lookback=lambda p: p["period"] + 1,
          params={"period": IntRange(2, 200)})
 def realised_vol(period: int) -> pl.Expr:
-    """Close-to-close. The baseline the range estimators must beat."""
+    """Close-to-close volatility; baseline for the range estimators."""
     return (pl.col("close") / pl.col("close").shift(1)).log().rolling_std(period)
 
 

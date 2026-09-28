@@ -1,23 +1,8 @@
 """What events touch an asset at a given instant. Plan.md §11.7, §14.1.
 
-This is how news enters the decision path. It does not produce a signal, and the
-distinction matters: §11.7 is explicit that sign is an **input to the
-expected-reaction model**, never a signal in itself, because what is tradeable
-is the residual — observed reaction minus expected. Trading the sign directly
-trades the part everyone else has already priced.
-
-What can be done before that model exists is **conditioning**, which §11.7
-positively recommends for the one class it rules out as a signal: a regime shift
-is a change of market state, used as a conditioning variable rather than as an
-entry. So this module answers "what is going on with this asset right now", and
-the risk engine and the sizer decide what to do about it.
-
-**Point in time, and this is the part that would silently break everything.** An
-event is visible at instant t only if `available_at <= t`. Reading by
-`first_seen_at` would let a backtest act on an announcement at the moment it
-occurred rather than the moment a subscriber could have seen it, and reading
-without a cutoff at all would let it act on tomorrow's news. Both look entirely
-reasonable in the output.
+Conditioning only, never a signal: sign is an input to the expected-reaction model (§11.7).
+Point in time: an event is visible at t only once a subscriber could have seen it
+(`first_seen_at`; schedule revisions by `available_at`), never later news.
 """
 
 from __future__ import annotations
@@ -27,17 +12,10 @@ from datetime import datetime
 
 import sqlalchemy as sa
 
-#: How much a live regime shift cuts the size of a new position.
-#:
-#: Not zero. Refusing to trade an asset because a war is on would sit out the
-#: whole period, and §11.7's point is that a regime shift replaces the baseline
-#: rather than removing the market — what changes is that the prior is worse,
-#: not that the asset stopped trading.
+#: How much a live regime shift cuts a new position. Not zero: the prior is worse (§11.7).
 REGIME_SIZE_MULTIPLIER = 0.5
 
-#: A pending scheduled event inside this many days damps size the same way. The
-#: anticipation window of §11.6: for a scheduled event the tradeable object is
-#: the approach, and a position opened into one is taking a bet nobody sized.
+#: A pending scheduled event inside this many days damps size too (§11.6).
 ANTICIPATION_DAYS = 3
 ANTICIPATION_MULTIPLIER = 0.7
 
@@ -49,18 +27,12 @@ class EventContext:
     regime_shifts: int
     pending_schedules: int
     active_shocks: int
-    #: Net direction of everything live, in -1/0/+1. Reported, not acted on —
-    #: see the module docstring.
+    #: Net direction of everything live, in -1/0/+1. Reported, not acted on.
     net_direction: int
 
     @property
     def size_multiplier(self) -> float:
-        """What to multiply an intended position by.
-
-        Multiplicative rather than a veto, and the two conditions compound: an
-        asset under a regime shift *and* days from a scheduled event is a worse
-        prior than either alone.
-        """
+        """What to multiply an intended position by; the two conditions compound."""
         multiplier = 1.0
         if self.regime_shifts:
             multiplier *= REGIME_SIZE_MULTIPLIER
@@ -89,12 +61,7 @@ class EventContext:
 def context_for(
     connection: sa.Connection, asset: str, as_of: datetime,
 ) -> EventContext:
-    """Every event visible at `as_of` that touches `asset`.
-
-    One query, and the `available_at` cutoff is in it rather than applied
-    afterwards: a filter that runs after the rows are fetched is one somebody
-    removes for speed.
-    """
+    """Every event visible at `as_of` that touches `asset`; the cutoff stays in the SQL."""
     row = connection.execute(sa.text("""
         SELECT
           count(*) FILTER (

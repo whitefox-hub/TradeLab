@@ -79,10 +79,7 @@ mount("/home", { onReady: load });
 const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-// Figures arrive already computed by whatever folded them from fills. Formatted
-// here and nowhere derived: §20.1 puts the boundary at this screen producing a
-// number, and one it produced would disagree with the engine's the moment
-// either changed.
+// Format only; never derive figures here (§20.1).
 const money = (v, ccy) => v === null || v === undefined
   ? "—"
   : `${v >= 0 ? "+" : "−"}${Math.abs(v).toLocaleString(undefined,
@@ -115,10 +112,7 @@ function renderBook(book) {
     : `${book.fills.toLocaleString()} fills folded.`;
 
   if (!book.positions.length) {
-    // The empty state says why. A blank table reads as a quiet day, and this
-    // is not one — no strategy has been promoted, so nothing can have traded.
-    // Said as it is: forward books may exist and be flat, and none of them is a
-    // promoted strategy. A blank table would read as a quiet day.
+    // Explain the empty state rather than show a blank table.
     $("book").innerHTML = `<tr><td colspan="10"><p class="empty-why">No position is
       open. ${book.runs_live
         ? `${book.runs_live} forward book(s) run in the simulator on fake capital
@@ -162,8 +156,7 @@ async function load() {
 
   const stale = series.filter((s) => s.days_old > 45).length;
   const unsafe = series.filter((s) => !s.point_in_time_safe).length;
-  // One 1-10 scale, 5 neutral (b3f90ee). The direction is derived from it by
-  // the server, so the card shows the scale position beside the word.
+  // Trend is 1-10, 5 neutral; direction comes from the server.
   const pressure = scenario.direction === "NEUTRAL"
     ? "NEUTRAL" : `${scenario.direction} ${scenario.trend}/10`;
   const fg = sentiment.available ? sentiment.primary : null;

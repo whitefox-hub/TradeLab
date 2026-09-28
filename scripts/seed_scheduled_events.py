@@ -1,20 +1,9 @@
-"""Known future events, which no announcement feed publishes. Plan.md §11.6.
+"""Seed known future events no announcement feed publishes (halvings etc.). Plan.md §11.6.
 
-The collectors read what a venue has already said. A halving three years out was
-never announced by anyone — it is a property of the protocol — and the same holds
-for scheduled unlocks, mainnet dates and policy meetings.
+`schedule_revisions` keeps each date as believed at the time; a changed date is appended,
+never overwritten, so "days until" never uses a date the market did not know (§11.6).
 
-These are the events §11.6 is actually about. For a scheduled event the tradeable
-object is the **approach** rather than the arrival: risk appetite builds or drains
-as the date nears, and that anticipation is only measurable if the date is in the
-system before it happens. An event added afterwards can be studied but never
-traded, which is the difference this file exists to close.
-
-Each entry carries `confidence`, because a protocol date and a rumoured listing
-are not the same claim. `schedule_revisions` keeps the date as believed at the
-time, so a postponement leaves both the old belief and the new one — computing
-"days until" from the date it eventually happened on assumes the market knew a
-date it did not (§11.6).
+    python scripts/seed_scheduled_events.py [--dry-run]
 """
 
 from __future__ import annotations
@@ -44,10 +33,7 @@ def _utc(year: int, month: int, day: int) -> datetime:
     return datetime(year, month, day, tzinfo=UTC)
 
 
-#: `fixed` is a date the protocol or an institution has committed to. `estimated`
-#: is a projection from a known rate — the halving is block-height based, so its
-#: calendar date moves with hash rate and is an estimate however certain the
-#: event is. Recording that difference is the point of the column.
+#: confidence: `fixed` = committed date; `estimated` = projection (halvings move with hash rate).
 CALENDAR: tuple[Scheduled, ...] = (
     Scheduled("btc-halving-2028", "halving",
               "Bitcoin fourth halving, block 1,050,000",
@@ -107,8 +93,7 @@ def main() -> int:
             else:
                 event_id = existing
 
-            # A date already believed is left alone; a changed one is appended as
-            # a new revision rather than overwritten, so the old belief survives.
+            # Changed date -> new revision, never overwrite, so the old belief survives.
             latest = connection.execute(sa.text(
                 "SELECT revision, scheduled_for FROM schedule_revisions "
                 "WHERE event_id = :e ORDER BY revision DESC LIMIT 1"), {"e": event_id}

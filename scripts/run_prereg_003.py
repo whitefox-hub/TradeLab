@@ -1,8 +1,8 @@
 """Evaluate PREREG-003. One trial, no knobs.
 
-Everything here is fixed by research/PREREG-003-funding-dispersion.md, committed
-while the panel was still downloading. The constants are asserted rather than
-parameterised, because a script with options is a grid however it is run.
+Constants fixed by research/PREREG-003-funding-dispersion.md; do not parameterise.
+
+    python scripts/run_prereg_003.py
 """
 
 from __future__ import annotations
@@ -48,10 +48,8 @@ def pair_spreads(rows: pl.DataFrame) -> dict[tuple[str, str], pl.DataFrame]:
             joined = joined.drop_nulls(["close", "close_b"])
             if joined.height < LOOKBACK_DAYS + REBALANCE_DAYS:
                 continue
-            # Both legs. `spread` is what the position earns in funding, `basis`
-            # is the relative price gap whose *change* is the hedge's P&L. The
-            # first run of this study had only the former, and basis volatility
-            # is 42x the funding spread, so it was measuring one leg of two.
+            # `spread` = funding earned; change in `basis` = hedge P&L. Both required:
+            # basis volatility is 42x the funding spread.
             out[(asset, venue)] = joined.with_columns(
                 (pl.col("rate") - pl.col("rate_b")).alias("spread"),
                 (pl.col("close") / pl.col("close_b") - 1.0).alias("basis"),
@@ -60,16 +58,10 @@ def pair_spreads(rows: pl.DataFrame) -> dict[tuple[str, str], pl.DataFrame]:
 
 
 def simulate(spread: np.ndarray, basis: np.ndarray) -> tuple[np.ndarray, int]:
-    """Sign of the trailing 90-day mean of the funding spread, refreshed monthly.
+    """Sign of the trailing 90-day mean funding spread, refreshed monthly.
 
-    Daily P&L is the funding differential **plus the change in the price basis**.
-    Holding long the perpetual on the reference venue and short it elsewhere, a
-    widening basis is a gain to that position and a narrowing one is a loss; both
-    carry the position's sign, exactly as the funding does.
-
-    The signal is still the funding spread alone, as registered. Only the P&L
-    gained a term — the rule did not change, so this is a corrected
-    implementation and not a second trial.
+    Daily P&L = sign * (funding spread + basis change). The signal is the funding spread
+    alone, as registered; the basis term is a P&L correction, not a second trial.
     """
     n = spread.size
     basis_change = np.zeros(n)
@@ -83,12 +75,7 @@ def simulate(spread: np.ndarray, basis: np.ndarray) -> tuple[np.ndarray, int]:
         target = int(np.sign(window.mean()))
         stop = min(start + REBALANCE_DAYS, n)
         daily[start:stop] = target * total[start:stop]
-        # Charged before `position` is updated. The first version assigned
-        # `position = target` inside the comparison above and then tested
-        # `target != position` again, which is False by construction — so no
-        # cost was ever charged and the reported Sharpe was 40. Same shape as
-        # the gross-for-net defect in run_study: a variable reassigned between
-        # the test and its use.
+        # Compare before reassigning `position`, or no flip cost is ever charged.
         if target != position:
             flips += 1
             daily[start] -= LEGS * float(BINANCE_RETAIL.per_side)
@@ -110,9 +97,7 @@ def main() -> int:
         print("no usable pairs")
         return 1
 
-    # Each pair runs on its own calendar and contributes to the days it has.
-    # Intersecting every pair's day set collapsed a 730-day window to 142 days,
-    # because one pair with a short history truncates all 470.
+    # Union calendar, not intersection: one short pair would truncate all of them.
     all_days = sorted({d for f in pairs.values() for d in f["day"].to_list()})
     index = {day: i for i, day in enumerate(all_days)}
     print(f"union of days          : {len(all_days)}")
@@ -125,8 +110,7 @@ def main() -> int:
         aligned = frame.sort("day")
         daily, flips = simulate(aligned["spread"].to_numpy(),
                                 aligned["basis"].to_numpy())
-        # Capital sits on both venues, so the return per unit of committed
-        # capital is half the return on one leg's notional (§ the registration).
+        # Capital on both venues: return per committed unit is half one leg's (registered).
         daily = daily / 2.0
         positions = np.array([index[d] for d in aligned["day"].to_list()])
         live_mask = np.arange(daily.size) >= LOOKBACK_DAYS

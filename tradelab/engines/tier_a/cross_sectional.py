@@ -1,27 +1,8 @@
 """Cross-sectional ranking. Plan.md §6.3.
 
-A threshold asks whether a signal is high in absolute terms. A ranking asks
-whether it is high *relative to the rest of the universe right now*, which is a
-different hypothesis and often the better-posed one: a funding z-score of 1.5
-means one thing when the whole market is calm and another when everything is at
-2.
-
-Three design points that decide whether the result means anything.
-
-**Long-short, not long-only.** A long-only basket of the top-k crypto assets is
-mostly long crypto, so its Sharpe measures beta to a market that rose. Shorting
-the bottom-k removes that factor and leaves the cross-sectional signal, which is
-the thing being tested. Both are available and the difference between them is
-itself the finding.
-
-**The universe is point-in-time.** An asset that had not listed yet cannot be
-ranked, and treating its absence as a low score would manufacture a short. Ranks
-are computed over whatever exists at that bar.
-
-**Rebalancing costs.** Re-ranking every bar produces enormous turnover, and §0.1
-already showed turnover is what kills a strategy at this horizon. The rebalance
-interval is a declared parameter, and the honest comparison holds it fixed
-against the threshold study rather than tuning it.
+Long-short by default (long-only top-k mostly measures crypto beta). The universe is
+point-in-time: unlisted assets (NaN) are excluded, not ranked low. `rebalance` is declared,
+not tuned.
 """
 
 from __future__ import annotations
@@ -58,9 +39,7 @@ def rank_positions(
 ) -> np.ndarray:
     """Target weights from a (bars x assets) signal matrix.
 
-    NaN marks an asset absent at that bar and is excluded from the ranking
-    rather than ranked last — the point-in-time universe of §4.4 applied to a
-    cross-section.
+    NaN = asset absent at that bar; excluded, not ranked last (§4.4).
     """
     n_bars, n_assets = signals.shape
     weights = np.zeros((n_bars, n_assets))
@@ -95,8 +74,7 @@ def run_cross_sectional(
     costs = costs or BINANCE_RETAIL
     weights = rank_positions(signals, k, long_short, rebalance)
 
-    # The same one-bar rule as everywhere else: a ranking computed from bar t
-    # takes effect at t+1 (§9.1).
+    # A ranking from bar t takes effect at t+1 (§9.1).
     lagged = np.vstack([np.zeros((1, weights.shape[1])), weights[:-1]])
 
     returns = np.zeros_like(closes)
@@ -115,7 +93,6 @@ def run_cross_sectional(
         returns=net, gross_returns=gross, turnover=float(traded.sum()),
         rebalances=rebalances,
         avg_names=float(np.mean((lagged != 0).sum(axis=1))),
-        # Independent bets are rebalances, not bars: holding a basket for ten
-        # bars gives ten dependent returns and one decision.
+        # Independent bets are rebalances, not bars.
         effective_n=float(max(rebalances, 1)),
     )

@@ -1,8 +1,7 @@
 """Momentum and trend features. Plan.md §6.
 
-Every lookback here is exact rather than generous. An overstated lookback inflates
-the purge and throws away training data; an understated one breaks purging
-silently, which is far worse. The honesty property in §16.3 catches the second.
+Lookbacks are exact: understated breaks purging silently (caught by §16.3), overstated
+wastes training data.
 """
 
 from __future__ import annotations
@@ -36,11 +35,8 @@ def log_return(period: int) -> pl.Expr:
 
 @feature(
     family="trend",
-    # Exponential kernels never fully forget, so the lookback is the bar count
-    # at which the retained weight drops below MEMORY_EPSILON — a stated
-    # threshold rather than a guess. Declaring 4x the span, as this first did,
-    # leaves ~3e-4 of the weight outside the purge; the honesty property in
-    # §16.3 caught it.
+    # EWM never fully forgets: lookback is where retained weight < MEMORY_EPSILON.
+    # 4x span leaves ~3e-4 weight outside the purge (fails §16.3).
     lookback=lambda p: ewm_lookback(p["span"]),
     params={"span": IntRange(2, 200)},
 )

@@ -1,9 +1,7 @@
 """Execution types shared by every mode. Plan.md §12.2.
 
-The strategy is written once and does not know which mode it runs in. Only the
-pair (`data_feed`, `venue_adapter`) changes between backtest, simulator, testnet
-and live; the decision code is byte-for-byte identical and its hash is recorded
-on the run, so it is provable that what trades live is what passed validation.
+Only (`data_feed`, `venue_adapter`) changes between modes; the decision code is identical
+and its hash is recorded on the run.
 """
 
 from __future__ import annotations
@@ -27,12 +25,7 @@ class ExecutionMode(StrEnum):
 
     @property
     def reaches_a_venue(self) -> bool:
-        """Testnet reaches a matching engine; the simulator does not.
-
-        The distinction matters because an entire family of failures — tick and
-        lot rounding, min-notional rejection, signature errors, recvWindow drift
-        — exists only past this boundary (§12.1).
-        """
+        """Testnet reaches a matching engine; the simulator does not (§12.1)."""
         return self in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
 
 
@@ -63,9 +56,7 @@ class OrderStatus(StrEnum):
 class Instrument:
     """Exchange constraints as of a point in time. Plan.md §4.4.
 
-    Resolved from `asset_universe` at the simulated instant, never from today's
-    parameters: a backtest that sizes with current `min_notional` places orders
-    the venue would have rejected at the time.
+    Resolved from `asset_universe` at the simulated instant, never from today's parameters.
     """
 
     asset: str
@@ -74,21 +65,11 @@ class Instrument:
     min_notional: Decimal
 
     def min_viable(self, price: Decimal) -> Decimal:
-        """The smallest position that can actually be opened (§14.1).
-
-        Not `min_notional`. On BTCUSDT at 84,532 the lot size binds at 84.53
-        against a notional minimum of 50, so reading `min_notional` alone gives
-        a floor wrong by a factor of 1.7.
-        """
+        """The smallest position that can actually be opened (§14.1); lot size can bind."""
         return max(self.min_notional, self.lot_size * price)
 
     def quantise(self, quantity: Decimal) -> Decimal:
-        """Round down to a whole number of lots.
-
-        Down, never nearest: rounding up can breach a limit the risk engine has
-        just approved, and a position slightly smaller than intended is always
-        safe where a slightly larger one is not.
-        """
+        """Round down to a whole number of lots; up could breach an approved limit."""
         if self.lot_size <= 0:
             return quantity
         return (quantity // self.lot_size) * self.lot_size
@@ -96,15 +77,11 @@ class Instrument:
     def quantise_up(self, quantity: Decimal) -> Decimal:
         """Round up to a whole number of lots. For reductions only.
 
-        The exception to `quantise`. When the order is a trim, rounding down
-        leaves the position a fraction of a lot over the cap it is being cut to,
-        and the next tick trims again for less than a lot, which quantises to
-        nothing. Over-trimming by under a lot is the safe side of a reduction.
+        Rounding a trim down leaves it over the cap with a sub-lot remainder that never trims.
         """
         if self.lot_size <= 0:
             return quantity
-        # Not -(-q // lot): Decimal's // truncates toward zero rather than
-        # flooring, so that idiom rounds down here, silently.
+        # Not -(-q // lot): Decimal's // truncates toward zero, so that idiom rounds down.
         lots = (quantity / self.lot_size).to_integral_value(rounding=ROUND_CEILING)
         return lots * self.lot_size
 
@@ -122,8 +99,7 @@ class Order:
     order_type: OrderType = OrderType.MARKET
     limit_price: Decimal | None = None
     reduce_only: bool = False
-    #: Deterministic, so a retry after a timeout cannot create a second order
-    #: (§14.3). Derived from the run and the decision, never random.
+    #: Deterministic from run and decision, never random (§14.3).
     client_order_id: str = ""
     strategy_id: uuid.UUID | None = None
 
@@ -148,19 +124,14 @@ class Fill:
     fee: Decimal
     at: datetime
     client_order_id: str
-    #: The venue's own id for this trade, where the venue gives one. Empty in
-    #: the simulator, which has no trades of its own to name.
+    #: The venue's trade id; empty in the simulator.
     venue_trade_id: str = ""
 
     @property
     def identity(self) -> str:
         """What makes this fill distinct, so it is folded exactly once.
 
-        The venue's trade id first, because one order can produce several
-        trades and every one of them carries the same client order id. Dedupe
-        on the client id alone and a fill that arrived in three pieces is
-        counted as one — which is the partial-fill failure §16.7 asks about,
-        arriving as a position quietly smaller than the venue's.
+        Trade id first: one order's partial fills share a client order id (§16.7).
         """
         return self.venue_trade_id or self.client_order_id
 

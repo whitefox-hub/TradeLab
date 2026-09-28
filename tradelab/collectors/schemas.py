@@ -1,12 +1,7 @@
-"""Arrow schemas for the Parquet archive. Plan.md §4.3, §3.2.
+"""Arrow schemas for the Parquet archive (Plan.md §4.3, §3.2).
 
-Every row carries three timestamps. `available_at` is the only one a backtest is
-allowed to filter on; the other two exist so that a leak can be diagnosed after
-the fact rather than merely suspected.
-
-Prices are float64 here. The execution path uses Decimal (Postgres `numeric`) —
-the archive is for analysis, where float64 has ample precision and is 20x faster.
-"""
+Backtests filter only on `available_at`; the other timestamps diagnose leaks. Prices are
+float64 here (analysis); the execution path uses Decimal."""
 
 from __future__ import annotations
 
@@ -39,8 +34,7 @@ OHLCV = _schema(
     pa.field("close", pa.float64(), nullable=False),
     pa.field("volume", pa.float64(), nullable=False),
     pa.field("quote_volume", pa.float64(), nullable=False),
-    # Participation proxies (§11.4). Trade count and average size beat volume,
-    # which wash trading inflates.
+    # Participation proxies (§11.4); wash trading inflates volume, not trade count.
     pa.field("trade_count", pa.int64(), nullable=False),
     pa.field("taker_buy_base", pa.float64(), nullable=False),
     pa.field("taker_buy_quote", pa.float64(), nullable=False),
@@ -71,12 +65,8 @@ LIQUIDATIONS = _schema(
     pa.field("order_type", pa.string(), nullable=True),
 )
 
-#: Exchange announcements (§11.1). Not market data, so it carries its own identity
-#: fields, but the three-timestamp contract is identical and matters more here:
-#: `available_at` is publication plus a MODELLED subscriber delay, never our
-#: ingest time — backfilled announcements would otherwise all become available
-#: in 2026, which makes them useless, while using publication exactly assumes a
-#: zero-latency subscriber, which is a lie in the other direction.
+#: Exchange announcements (§11.1). `available_at` = publication + modelled subscriber delay,
+#: never ingest time.
 ANNOUNCEMENTS = pa.schema([
     pa.field("event_time", US_UTC, nullable=False),      # releaseDate
     pa.field("ingest_time", US_UTC, nullable=False),
@@ -87,14 +77,10 @@ ANNOUNCEMENTS = pa.schema([
     pa.field("code", pa.string(), nullable=False),
     pa.field("title", pa.string(), nullable=False),
     pa.field("catalog_id", pa.int32(), nullable=False),
-    # Closed taxonomy (§11.1). Unmatched titles get "unclassified", never a new
-    # class: emergent classes fragment the sample and make the IRF unestimable.
+    # Closed taxonomy (§11.1): unmatched titles get "unclassified", never a new class.
     pa.field("event_class", pa.string(), nullable=False),
     pa.field("assets", pa.list_(pa.string()), nullable=False),
-    # True when the class implies assets but the title does not name them — the
-    # "Multiple ... Perpetual Contracts" case, where they live in the body. An
-    # empty asset list on a listing event is a defect, so it is made visible
-    # rather than left to look like an event that affects nothing.
+    # Class implies assets but the title names none (they are in the article body).
     pa.field("needs_body", pa.bool_(), nullable=False),
     pa.field("subscriber_delay_s", pa.int32(), nullable=False),
 ])

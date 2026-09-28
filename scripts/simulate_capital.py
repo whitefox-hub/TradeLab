@@ -1,19 +1,9 @@
-"""Run the execution path on a given capital. Plan.md §14.1, §14.5, §20.
+"""Walk execution steps 8-13 in SIMULATOR mode on a given capital. Plan.md §14.1, §14.5, §20.
 
-The first thing here that actually walks steps 8 to 13: reconcile, ask, condition
-the size, veto, write the intent, fold the fill. Everything before it either
-stopped at the gate or evaluated a position series without ever placing one.
+Reference buy-and-hold, trend-conditioned: tests plumbing and limits (tick/lot rounding),
+not an edge. Venue-side rejections need testnet (§12.1).
 
-**It is a simulation and cannot be anything else.** The adapter fills locally,
-the mode is SIMULATOR, and §12.1 makes testnet non-optional precisely because a
-local adapter cannot reject for the reasons a venue does — signature errors,
-recvWindow drift, margin. What it does enforce is tick and lot rounding, which
-are knowable offline, and that turns out to be the whole story at small capital.
-
-**There is no strategy.** Nothing has cleared §15, so the position asked for is
-the declared reference — buy and hold — conditioned by the market trend. That
-makes this a test of the *plumbing and the limits*, not of an edge. Any return
-it reports is the asset's, scaled, and is labelled as such.
+    python scripts/simulate_capital.py [--capital 1000] [--trend N] [--rebalance-minutes 60]
 """
 
 from __future__ import annotations
@@ -43,15 +33,10 @@ from tradelab.strategy.reference import BuyAndHold
 
 ASSET = "BTCUSDT"
 
-#: Step 9 is now a real call. The strategy asks for a signed fraction of
-#: equity; the trend conditions it (step 10) and the risk engine vetoes what is
-#: left (step 11). The reference asks for two thirds of the position cap, which
-#: is what leaves the maximal tilt landing exactly on the cap rather than past
-#: it — at the cap, a trend of 10 produced 168 vetoes and no position at all.
+#: Asks two thirds of the position cap so the maximal trend tilt lands on the cap, not past it.
 STRATEGY = BuyAndHold()
 
-#: Binance USD-M BTCUSDT. The lot size is what binds at small capital, not the
-#: notional minimum — §14.1's point, and the reason this script exists.
+#: Binance USD-M BTCUSDT. At small capital the lot size binds, not min notional (§14.1).
 INSTRUMENT = Instrument(
     asset=ASSET, tick_size=Decimal("0.1"), lot_size=Decimal("0.001"),
     min_notional=Decimal(100),
@@ -59,7 +44,7 @@ INSTRUMENT = Instrument(
 
 
 def active_limits(engine: sa.Engine | None) -> tuple[RiskLimits, str]:
-    """The configuration in force, or the engine's defaults, said which."""
+    """Latest stored risk limits, or engine defaults, with a label saying which."""
     if engine is None:
         return RiskLimits(), "engine defaults"
     import dataclasses
@@ -100,8 +85,6 @@ def main() -> int:
           f"({'neutral' if args.trend == NEUTRAL else f'longs x{long_multiplier}'})")
     print()
 
-    # What the limits allow before anything is asked for. Reported first,
-    # because at small capital the answer is decided here and not by the market.
     by_pct = args.capital * limits.max_position_pct_equity
     ceiling = min(by_pct, limits.max_position_notional)
     price0 = Decimal(str(close[0]))
@@ -149,16 +132,12 @@ def main() -> int:
         adapter.prices[ASSET] = price
         prices = {ASSET: price}
 
-        # Step 9: the strategy asks, from this instant's data and nothing
-        # later. `history` ends before the bar being decided on, so a strategy
-        # cannot read the price it is about to trade at.
+        # Step 9: `history` ends before bar i, so the strategy cannot see its trade price.
         target = STRATEGY.decide(Context(
             at=at, asset=ASSET, history=close[:i], last_close=price,
             held=held, equity=account.equity))
 
-        # Step 10: the trend conditions the size. Longs and shorts scale
-        # opposite ways, so a short does not get pushed further into a trend it
-        # disagrees with.
+        # Step 10: trend scales longs and shorts oppositely.
         multiplier = long_multiplier if target.exposure >= 0 else short_multiplier
         target_notional = (abs(target.exposure) * account.equity
                            * Decimal(str(multiplier)))
@@ -182,7 +161,6 @@ def main() -> int:
             continue
         filled += engine.apply_fills(at)
 
-        # Equity marks to the last price, which is what the limits judge.
         position = account.positions.get(ASSET)
         if position is not None:
             account.equity = args.capital + position.realised_pnl + \

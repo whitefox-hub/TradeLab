@@ -1,13 +1,6 @@
-"""Power triage of the §0.4 hypotheses, before any of them is worked on.
+"""Power triage of the §0.4 hypotheses (§8.8): which can the independent-N resolve at all.
 
-§8.8 refuses to run a study that cannot resolve its own target. The same
-question applies one level up and was never asked there: which hypotheses can
-this operator's data resolve *at all*?
-
-Two campaigns were spent before anyone asked. Both returned inconclusive, and
-both for the same reason — the design could not have answered either way. The
-input here is the count of genuinely independent observations each hypothesis
-can produce, which is a property of the data and is knowable in advance.
+    python scripts/triage_hypotheses.py
 """
 
 from __future__ import annotations
@@ -25,9 +18,7 @@ class Hypothesis:
     basis: str
 
 
-#: Counts are measured where measured, and stated as estimates where not. An
-#: estimate that is wrong by 2x moves the resolvable Sharpe by about 40%, so the
-#: ordering below survives considerable error in these numbers.
+#: Counts marked MEASURED are measured; the rest are estimates (2x error ~ 40% Sharpe).
 HYPOTHESES = (
     Hypothesis(
         "1. Capacity-constrained assets", 120, 17,

@@ -1,6 +1,5 @@
 /* Shared navigation and session handling. Plan.md §20.3.
-   The sidebar is built here rather than pasted into each page, so a screen that
-   ships later appears in the menu by editing one list. */
+   SCREENS is the single sidebar list for every page. */
 
 const SCREENS = [
   { group: "Research" },
@@ -35,9 +34,8 @@ function renderSidebar(active) {
     </aside>`;
 }
 
-/* Every screen calls this. It draws the menu, resolves the session, and sends an
-   unauthenticated visitor to sign in with the path they wanted — rather than
-   showing a page whose every request is about to 401. */
+/* Called by every screen: draws the menu, resolves the session, and redirects an
+   unauthenticated visitor to /login with `next`. */
 async function mount(active, { onReady } = {}) {
   document.querySelector(".layout")
     .insertAdjacentHTML("afterbegin", renderSidebar(active));

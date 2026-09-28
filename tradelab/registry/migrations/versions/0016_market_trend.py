@@ -1,16 +1,6 @@
 """The wave is called the market trend. Plan.md §20.
 
-A rename, and only a rename. "Wave" was a word this project invented; "market
-trend" is the one the operator uses, and one thing with two names is one thing
-nobody can grep for.
-
-The columns go with it rather than staying behind. A schema that says
-`wave_direction` under a screen that says Market Trend is the drift this
-codebase keeps finding the hard way — the name nobody reads is the one that
-stops matching, and the next person looks for a concept that is not there.
-
-Migrations 0011 to 0015 keep the old word, because they record what happened and
-did not happen under this name.
+Pure rename of wave columns and constraints to trend. Migrations 0011-0015 keep "wave".
 """
 
 from __future__ import annotations
@@ -48,9 +38,7 @@ def upgrade() -> None:
         op.alter_column(table, old, new_column_name=new)
     for table, old, new in CONSTRAINTS:
         op.execute(f'ALTER TABLE {table} RENAME CONSTRAINT {old} TO {new}')
-    # The CHECK bodies still name the old columns; Postgres rewrites those on a
-    # column rename, so only the constraint *names* need touching. Asserted by
-    # the schema-drift comparison rather than assumed here.
+    # Postgres rewrites CHECK bodies on column rename; only names need touching.
 
 
 def downgrade() -> None:

@@ -1,19 +1,10 @@
-"""Promote captured announcements into annotatable events. Plan.md §11.1, §11.7.
+"""Promote captured announcements into events. Plan.md §11.1, §11.7.
 
-The Parquet archive holds what the venue published. `events` holds what the
-system treats as an occurrence — which is not the same thing, and the gap is
-where the judgement lives:
+`event_assets` carries the names; `shape` (§11.7) comes from the class; `code_hash`
+versions the taxonomy that built the row. Idempotent by `article_id`; corrections are
+annotations, never edits.
 
-* One announcement can name several assets, and one asset can appear in several
-  announcements. The event is the occurrence, `event_assets` carries the names.
-* `shape` decides which machinery applies later (§11.7), so it is assigned here
-  from the event class rather than left for a model to infer.
-* `code_hash` records which version of the taxonomy produced the row. Today's
-  taxonomy finds a third more listings than yesterday's did, and a corpus that
-  cannot say which parser built it cannot be compared across time.
-
-Idempotent by `article_id`: re-running after a taxonomy change updates nothing
-and inserts only what is new. Corrections are annotations, never edits.
+    python scripts/ingest_events.py [--dry-run] [--retention-days N]
 """
 
 from __future__ import annotations
@@ -31,11 +22,7 @@ from tradelab.collectors.binance import announcements as taxonomy
 from tradelab.config import Settings
 from tradelab.events.retention import retention_days
 
-#: Which §11.7 shape each announcement class behaves as.
-#:
-#: A listing is a single impulse. A delisting is announced with a date and the
-#: market prices toward it, so it is a schedule. Nothing in this corpus is a
-#: process yet — regulation is, and it arrives from a different source.
+#: §11.7 shape per announcement class; delistings carry a date, hence `schedule`.
 SHAPES: dict[str, str] = {
     "futures_listing": "shock",
     "spot_listing": "shock",
@@ -52,7 +39,7 @@ INGESTED = frozenset(SHAPES)
 
 
 def taxonomy_hash() -> str:
-    """Version the parser, not the file. Two runs of the same patterns agree."""
+    """Hash of the taxonomy module source, stamped as `code_hash`."""
     source = Path(taxonomy.__file__).read_bytes()
     return hashlib.sha256(source).hexdigest()[:16]
 
@@ -75,9 +62,7 @@ def main() -> int:
             taxonomy.extract_assets, return_dtype=pl.List(pl.Utf8)).alias("assets"),
     ).filter(pl.col("cls").is_in(list(INGESTED)))
 
-    # The same window `prune_events.py` deletes by. Without this the prune
-    # undoes itself on the next run, which is worse than not pruning because it
-    # looks done.
+    # Same window `prune_events.py` deletes by; otherwise the next run undoes the prune.
     engine = sa.create_engine(Settings().database_url)
     with engine.connect() as connection:
         days = args.retention_days or retention_days(connection)
@@ -101,8 +86,7 @@ def main() -> int:
         for record in rows.iter_rows(named=True):
             key = f"article:{record['article_id']}"
             if key in existing:
-                # Backfill a headline onto rows written before the column
-                # existed, so re-running repairs rather than only skipping.
+                # Backfill headline on rows written before the column existed.
                 connection.execute(sa.text(
                     "UPDATE events SET headline = :hl "
                     "WHERE cluster_method = :c AND headline IS NULL"
@@ -116,8 +100,7 @@ def main() -> int:
                 "VALUES (:i, :t, :s, :f, :hl, 1, :c, :h)"
             ), {"i": event_id, "t": record["cls"], "s": SHAPES[record["cls"]],
                 "hl": record["title"],
-                # `available_at`, not `event_time`: the modelled subscriber delay
-                # is when this could first have been acted on (§11.2).
+                # `available_at`, not `event_time`: first actionable moment (§11.2).
                 "f": record["available_at"], "c": key, "h": code_hash})
 
             for asset in record["assets"] or []:

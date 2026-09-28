@@ -147,9 +147,6 @@
         <button class="primary" id="save">Save scenario</button>
       </div>
     </div>
-    <!-- Full width and under the header rather than beside the button: the
-         messages name a field and a range, and squeezed into the corner they
-         would wrap to three lines or be clipped. -->
     <p class="err" id="err"></p>
 
     <div class="panes">
@@ -162,13 +159,7 @@
           from a list. It has no date, because it is a condition to test under and
           not a record of something that happened.</p>
 
-        <!-- One scale, 5 neutral, mirroring the fear-and-greed index beside
-             it. It was a direction and a magnitude: two fields that could
-             disagree, kept in step by a constraint, and with no way to say
-             "nothing has happened" at the 5 an operator actually holds when
-             they have read no news. Worse, the old arithmetic read magnitude
-             as distance from zero, so a 5 tilted the book by a quarter at the
-             exact moment it was meant to say nothing. -->
+        <!-- One 1-10 scale, 5 neutral (no tilt). Not direction + magnitude. -->
         <div class="slider-row">
           <input type="range" id="t-mag" min="1" max="10" step="1" value="5">
           <input type="number" id="t-mag-value" min="1" max="10" step="1" value="5">
@@ -196,16 +187,10 @@
           <span class="v" id="fg-value">—</span>
           <span class="band" id="fg-band"></span>
         </div>
-        <!-- Two indices, side by side rather than averaged: an average of two
-             methods is a third method nobody can decompose. Where they disagree
-             is information about the measurement, and hiding it would make one
-             of them look authoritative. -->
+        <!-- Both indices side by side, never averaged. -->
         <p class="cross" id="fg-cross"></p>
 
-        <!-- The slider sits directly above the scale and shares its width, so
-             the thumb reads against the gradient underneath: where it stands is
-             where the value would land. That is what makes a separate preview
-             unnecessary. -->
+        <!-- Slider must share the scale's width so the thumb aligns with the gradient. -->
         <div class="adjust-head">
           <span class="assume-label">Test under</span>
           <button class="ghost tiny" id="fg-match">Match today</button>
@@ -214,11 +199,7 @@
           <input type="range" id="s-range" min="1" max="100" step="1" value="50">
           <input type="number" id="s-value" min="1" max="100" step="1" value="50">
         </div>
-        <!-- Two marks, because the bar answers two questions. The thin one is
-             what the index printed; the solid one is what a simulation is being
-             told to assume, and it moves on Save rather than while dragging —
-             so the bar always shows what is in force, not what is being
-             considered. -->
+        <!-- mark = measured index; pin = applied value, moves only on Save. -->
         <div class="scale">
           <span class="mark" id="fg-pin" style="left:50%"></span>
           <span class="pin" id="s-pin" style="left:50%"></span>
@@ -244,8 +225,7 @@
 
 
 
-    <!-- What Save started. Below both panes because the run reads both dials,
-         and putting it under either would read as belonging to that one. -->
+    <!-- The run Save started; below both panes since it uses both dials. -->
     <section class="pane run-pane" id="run-pane" style="display:none">
       <h2>Last run</h2>
       <p class="lead" id="run-lead"></p>
@@ -281,8 +261,6 @@
 <script>
 mount("/market-sentiment", { onReady: load });
 
-// 1 very weak, 5 medium, 10 extreme. The words ride on the options rather than
-// sitting in a legend underneath, so the scale is readable while choosing.
 const WORDS = { 1: "very weak", 5: "medium", 10: "extreme" };
 const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -290,19 +268,14 @@ const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
 let measured = null;      // the printed reading, kept apart from the assumed one
 let stored = null;        // what the server last confirmed, for the dirty check
 
-// 1 to 10, 5 neutral. Only the points the scale actually defines carry a word:
-// inventing one for 7 would be a label with nothing behind it.
+// Only the scale's defined points get a word.
 const TREND_WORDS = { 1: "as bearish as it gets", 5: "nothing new",
                       10: "as bullish as it gets" };
 
-// Where a value sits on a 1-10 track. 1 is the left end and 10 the right, so
-// the position is across the nine steps between them and not a tenth of ten.
+// 1-10 track position: nine steps, so (n - 1) / 9, not n / 10.
 const trackPct = (n) => ((n - 1) / 9) * 100;
 
-// The Save button sits with the title, away from the sliders it governs, so a
-// change made at the bottom of the page can be forgotten on the way up. This is
-// what makes that visible; without it the move trades a tidier header for a
-// setting the operator believes took effect.
+// Dirty check: Save is far from the sliders, so unsaved changes must be flagged.
 function current() {
   return { trend: Number($("t-mag").value), sentiment: Number($("s-value").value) };
 }
@@ -315,9 +288,7 @@ function paintDirty() {
   $("saved").className = dirty ? "saved pending" : "saved";
 }
 
-// The bars show what is in force, which is why Save is what moves them. The
-// sliders above show what is being considered; between a drag and a save the
-// two disagree on purpose, and that disagreement is the whole point of a button.
+// Pins show the applied (saved) values; sliders show the pending ones.
 function paintApplied() {
   if (stored === null) return;
   $("t-pin").style.left = `${trackPct(stored.trend)}%`;
@@ -341,15 +312,11 @@ function bandClass(c) {
 
 function paintTrend(value) {
   const n = Math.min(10, Math.max(1, Number(value) || 5));
-  // Two views of one field, so neither may hold a value the other does not.
-  // Neither of them is the pin: the pin shows what is applied.
+  // Keep both controls in sync; the pin is updated only on save.
   $("t-mag").value = String(n);
   $("t-mag-value").value = String(n);
 
-  // The tilt, worked out the same way the engine does: each side normalised by
-  // its own reach, so 1 is exactly as bearish as 10 is bullish. Dividing both
-  // by five would make 1 worth less, and nothing about the reading is
-  // asymmetric.
+  // Mirrors the engine's tilt: each side normalised by its own reach (4 below 5, 5 above).
   const reach = n > 5 ? 5 : 4;
   const tilt = n === 5 ? 0 : ((n - 5) / reach) * 0.5;
   const word = TREND_WORDS[n];
@@ -364,8 +331,7 @@ function paintTrend(value) {
 
 function paintSentiment(value) {
   const n = Math.min(100, Math.max(1, Number(value) || 1));
-  // Both controls carry the same number. They are two views of one field, so
-  // neither is allowed to hold a value the other does not.
+  // Keep both controls in sync.
   $("s-range").value = String(n);
   $("s-value").value = String(n);
   const word = band(n);
@@ -378,9 +344,7 @@ function paintSentiment(value) {
   paintDirty();
 }
 
-// Local time, and the day only where it is not today: a log whose every line
-// repeats the same date is a log you have to read twice to find the one that
-// matters.
+// Local time; date shown only when not today.
 function when(iso) {
   const at = new Date(iso);
   const clock = at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -393,9 +357,7 @@ function trendText(entry) {
 }
 
 function renderHistory(id, entries, label, moved) {
-  // Only the entries where *this* dial moved. A change to the sentiment alone
-  // listed under the trend would read as the trend having been set to the value
-  // it already held, which is the repetition the write path exists to avoid.
+  // Only entries where this dial moved.
   const mine = entries.filter(moved);
   if (!mine.length) {
     $(id).innerHTML = `<li><p class="empty-note">Nothing changed yet. Only changes
@@ -403,8 +365,6 @@ function renderHistory(id, entries, label, moved) {
     return;
   }
   $(id).innerHTML = mine.map((e) => {
-    // An entry written before the log recorded what it replaced cannot say what
-    // it came from, and says so rather than guessing.
     const was = e.from === null || e.from === undefined
       ? "" : `<span class="h-was">from ${escape(label(e.from))}</span>`;
     return `<li>
@@ -443,9 +403,6 @@ async function load() {
     $("fg-pin").style.left = `${head.value}%`;
     $("fg-match").textContent = `Match today (${head.value})`;
 
-    // The second index is shown whether or not it agrees. When it does, that
-    // agreement is worth seeing; when it does not, the gap is information about
-    // the measurement and not a number to reconcile away.
     $("fg-cross").innerHTML = fg.other
       ? `<span class="who">${escape(head.source)}</span> ${head.value} · `
         + `<span class="who">${escape(fg.other.source)}</span> ${fg.other.value}`
@@ -471,15 +428,13 @@ async function load() {
     $("fg-source").className = head.days_old > 1 ? "hint stale" : "hint";
   }
 
-  // Painted last, because the comparison it prints needs the measured value.
+  // After `measured` is set: the text compares against it.
   paintSentiment(scenario.sentiment);
   stored = {trend: scenario.trend, sentiment: scenario.sentiment};
   paintApplied();
   paintDirty();
   await loadHistory();
-  // The last run, whether or not this session started it: the conditions in
-  // force were produced by some run, and not showing it would make a reload
-  // look like nothing had ever been run.
+  // Show the last run even if another session started it.
   const runs = await api("/api/scenario/runs?limit=1");
   renderRun(runs[0] ? {...runs[0], notes: []} : null);
 }
@@ -507,8 +462,6 @@ function renderRun(run) {
       <td class="num">${pct(r.cost_drag)}</td>
     </tr>`;
 
-  // The difference is the only line the operator actually caused. Shown as its
-  // own row rather than left to be subtracted by eye.
   const d = (a, b) => b - a;
   const sign = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
   const dr = d(run.baseline.total_return, run.conditioned.total_return);
@@ -537,14 +490,8 @@ function renderRun(run) {
 async function loadHistory() {
   const raw = await api("/api/scenario/history?limit=40");
 
-  // Entries written before the log recorded what it replaced have no `from`.
-  // It is not lost, though: the list is newest-first, so the state an entry
-  // replaced is the entry after it. Derived rather than guessed — and only
-  // where it was not recorded, so a real one is never overwritten.
-  //
-  // Exact except at the oldest row on the page, which has nothing after it to
-  // compare against and is therefore shown as a change to both dials. That is
-  // the honest reading of an entry whose predecessor is off the end.
+  // Missing `from` (older entries) is filled from the next (older) entry; never overwrite a
+  // recorded one. The oldest row on the page stays null and counts as both dials moving.
   const entries = raw.map((e, i) => ({
     ...e,
     from: e.from ?? (raw[i + 1] ? {
@@ -563,18 +510,14 @@ $("t-mag-value").oninput = () => paintTrend($("t-mag-value").value);
 
 $("s-range").oninput = () => paintSentiment($("s-range").value);
 $("s-value").oninput = () => paintSentiment($("s-value").value);
-// Copying the market's number is an act, not a default. The scenario starts at
-// 50 so that "nobody set this" and "someone chose the market's own value" are
-// different rows, and this button is how the second one gets made.
+// Explicit copy of the measured value; never the default.
 $("fg-match").onclick = () => { if (measured !== null) paintSentiment(measured); };
 
 $("save").onclick = async () => {
   $("err").textContent = ""; $("saved").textContent = "";
   const trend = Number($("t-mag").value);
   const sentiment = Number($("s-value").value);
-  // Checked here so the operator is told which field disagrees, and again by
-  // the request model and a database CHECK. This is the friendliest of the
-  // three and the only one that can be bypassed.
+  // Client-side hint; the request model and a DB CHECK also enforce this.
   if (!Number.isInteger(trend) || trend < 1 || trend > 10) {
     $("err").textContent = "The market trend is a whole number from 1 to 10.";
     return;
@@ -584,8 +527,7 @@ $("save").onclick = async () => {
     return;
   }
   try {
-    // The baseline comes from the response, not from what was sent: if the
-    // server normalised something, the form is now the stale copy.
+    // Baseline from the response, not the request.
     const saved = await api("/api/scenario", { method: "PUT",
       body: JSON.stringify({ trend, sentiment }) });
     stored = {trend: saved.trend, sentiment: saved.sentiment};
@@ -593,12 +535,9 @@ $("save").onclick = async () => {
     $("saved").textContent = saved.changed ? "Saved." : "No change.";
     $("saved").className = "saved";
     setTimeout(paintDirty, 2500);
-    // Only a real change adds a line, so there is nothing to re-read otherwise.
     if (saved.changed) {
       await loadHistory();
-      // The notes come with the fresh run only. They qualify the numbers, so
-      // they are shown while the numbers are new rather than reconstructed
-      // later from a row that does not carry them.
+      // Notes exist only on the fresh run response, not on stored rows.
       renderRun(saved.run);
       if (saved.run_error) {
         $("err").textContent = `Saved, but the run could not start: ${saved.run_error}`;

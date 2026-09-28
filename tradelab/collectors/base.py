@@ -1,8 +1,5 @@
-"""Collector contract and ingestion-time validation. Plan.md §4.2.
-
-Anomalies are recorded, never silently corrected. A source with silent gaps is
-worse than no source at all, because it looks fine.
-"""
+"""Collector contract and ingestion-time validation (Plan.md §4.2). Anomalies are recorded,
+never silently corrected."""
 
 from __future__ import annotations
 
@@ -99,12 +96,7 @@ def check_schema(batch: Batch) -> list[Issue]:
 
 
 def check_timestamps(batch: Batch) -> list[Issue]:
-    """The three-timestamp contract of §4.3.
-
-    `available_at >= event_time` must hold for every row. A row that claims to
-    have been usable before it happened is the seed of look-ahead bias, and it is
-    cheaper to reject here than to detect three months later in a Sharpe ratio.
-    """
+    """The three-timestamp contract of §4.3: `available_at >= event_time` on every row."""
     frame = batch.frame
     issues: list[Issue] = []
     impossible = frame.filter(pl.col("available_at") < pl.col("event_time"))
@@ -140,14 +132,9 @@ def check_ranges(batch: Batch, positive: list[str], non_negative: list[str]) -> 
 
 def check_gaps(batch: Batch, expected: timedelta, sla: timedelta | None = None,
                tolerance: float = 1.5) -> list[Issue]:
-    """Gaps beyond the source SLA. Reported, never interpolated away.
+    """Gaps beyond the source SLA, reported, never interpolated.
 
-    A gap means **at least one expected observation is missing**, so the
-    threshold is `tolerance x expected`, not `expected`. Venue timestamps carry
-    milliseconds of jitter, and comparing against the exact interval reports a
-    gap on every single bar — a validator that cries wolf is worse than none,
-    because its output stops being read.
-    """
+    Threshold is `tolerance x expected`: venue timestamps jitter by milliseconds."""
     if batch.frame.height < 2:
         return []
     threshold = max(expected * tolerance, sla or timedelta(0))

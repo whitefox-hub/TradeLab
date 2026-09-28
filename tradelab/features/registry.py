@@ -1,15 +1,8 @@
 """Feature registry. Plan.md §6.
 
-Two properties are enforced here rather than reviewed by hand, because both are
-correctness issues that produce plausible numbers when violated:
-
-**Declared lookback.** It drives the warmup and, more importantly, the purge size
-in cross-validation (§8.2). A feature that reaches further back than it declares
-silently breaks purging, and a broken purge produces a validation report that
-looks entirely normal.
-
-**Causality.** No feature may read a row whose `available_at` is later than the
-instant being computed. Verified by truncation invariance (§16.3), not by review.
+Declared lookback drives warmup and the CV purge (§8.2); understating it breaks purging
+silently. Causality: no feature may read a row with `available_at` later than the instant
+computed; verified by truncation invariance (§16.3).
 """
 
 from __future__ import annotations
@@ -25,8 +18,7 @@ import polars as pl
 
 from tradelab.features.params import ParamSpace
 
-#: Families from §6. Closed, for the same reason the event taxonomy is (§11.1):
-#: free-form families fragment feature-importance clustering into noise.
+#: Families from §6. Closed (like §11.1) so importance clustering does not fragment.
 FAMILIES = frozenset({
     "momentum", "trend", "volatility", "volume", "structure", "vwap",
     "orderflow", "open_interest", "funding", "liquidations", "basis",
@@ -90,11 +82,7 @@ class Registry:
 
 
     def max_lookback(self, feature_set: list[tuple[str, dict]]) -> int:
-        """Largest lookback in a feature set.
-
-        This is the number the CV scheme needs: purge must cover it plus the
-        label horizon (§8.2), and neither is a value anyone tunes by hand.
-        """
+        """Largest lookback in a feature set; purge covers it plus label horizon (§8.2)."""
         return max(
             (self.get(name).lookback_bars(params) for name, params in feature_set),
             default=0,
@@ -104,11 +92,7 @@ class Registry:
         return len(self.features)
 
 
-#: Residual weight below which a feature's memory is treated as exhausted.
-#: Exponential kernels never truly forget, so "the lookback" is a choice of
-#: threshold rather than a fact, and leaving that threshold implicit is how an
-#: understated lookback slips through — the purge derived from it is then too
-#: small, and the validation report that follows looks entirely normal.
+#: Residual weight below which an EWM's memory counts as exhausted (sets its lookback).
 MEMORY_EPSILON = 1e-6
 
 
@@ -132,12 +116,7 @@ def feature(
     requires: tuple[str, ...] = ("close",),
     registry: Registry | None = None,
 ) -> Callable[[Callable[..., pl.Expr]], FeatureDef]:
-    """Register a feature definition.
-
-    `lookback` is mandatory and takes the parameters, because for most features
-    it depends on them. Declaring it as a constant when it is not is the lie the
-    honesty property in §16.3 exists to catch.
-    """
+    """Register a feature definition. `lookback` is a function of params (checked by §16.3)."""
     if family not in FAMILIES:
         raise ValueError(f"unknown family {family!r}; extend FAMILIES deliberately")
 
@@ -152,11 +131,8 @@ def feature(
             code_hash=hashlib.sha256(source.encode()).hexdigest(),
             requires=requires,
         )
-        # `is not None`, never `or`: Registry defines __len__, so an EMPTY
-        # registry is falsy and `registry or REGISTRY` silently falls through to
-        # the global one. That is how the leakage canaries — features written to
-        # cheat on purpose — ended up registered in the production registry,
-        # available to real studies.
+        # `is not None`, never `or`: an empty Registry is falsy (__len__), so `or` would
+        # register test/canary features in the global REGISTRY.
         target = registry if registry is not None else REGISTRY
         target.add(definition)
         return definition

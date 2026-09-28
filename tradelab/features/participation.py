@@ -1,8 +1,6 @@
-"""Participation and order-flow features. Plan.md §11.4.
+"""Participation and order-flow features from 1m kline fields. Plan.md §11.4, §0.2.
 
-Users are not observable. Volume is a poor proxy because wash trading inflates
-it; trade count and average trade size are far better, and both come free in the
-1m kline — which is why the wide archive is klines rather than ticks (§0.2).
+Trade count and average trade size are preferred over volume, which wash trading inflates.
 """
 
 from __future__ import annotations

@@ -1,28 +1,7 @@
-"""Funding history across venues. Plan.md §0.4 hypothesis 3, §4.2.
+"""Funding history across venues (Plan.md §0.4 hypothesis 3, §4.2).
 
-The dispersion hypothesis needs the same asset's funding on several venues over
-the same window, which makes this collector different from the single-venue ones
-in one important way: **its output is only usable where the venues agree on what
-they are quoting.**
-
-Three things differ between venues and all three corrupt a spread silently if
-left alone:
-
-* **Settlement interval.** Binance settles every 8 hours, some contracts every 4,
-  Bybit mostly 8, OKX 8, Gate 8, Bitget 8 but with exceptions per contract. A
-  per-settlement comparison between a 4h venue and an 8h venue compares half a
-  day against a whole one, and reports a spread that is an artefact of the
-  schedule.
-* **Sign convention.** Every venue here quotes the rate longs pay when positive,
-  so no flip is needed — but that is a fact to be asserted, not assumed, because
-  a sign error inverts the entire signal while leaving its magnitude plausible.
-* **Symbol spelling.** `BTCUSDT`, `BTC-USDT-SWAP`, `BTC_USDT`. Normalised to the
-  base coin here so the join key is the asset rather than a venue's formatting.
-
-The daily aggregation in `to_daily` is the resolution of the first point: summing
-each venue's settlements over a UTC day makes the quantities comparable whatever
-the schedule is.
-"""
+Venues differ in settlement interval (4h/8h, per contract), so compare only daily sums
+(`to_daily`). All venues here quote positive = longs pay. Symbols keyed by base coin."""
 
 from __future__ import annotations
 
@@ -86,11 +65,8 @@ def _bybit(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> lis
     return out
 
 
-#: Measured 2026-09-25: OKX serves about 96 days of funding history and Bitget
-#: about 90, whatever is asked for. Requesting earlier returns empty rather than
-#: an error, so a caller that does not check gets a short series that looks
-#: complete. Their *price* history is fine — two years, once paginated — so the
-#: limit is on funding specifically.
+#: Measured: OKX serves ~96 days and Bitget ~90 of funding history; earlier requests
+#: return empty, not an error. Their price history is not limited.
 FUNDING_HISTORY_DAYS: dict[str, int | None] = {
     "binance": None, "bybit": None, "gate": None, "okx": 96, "bitget": 90,
 }
@@ -131,9 +107,7 @@ def _gate(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> list
         if oldest >= cursor:
             break
         cursor = oldest - 1
-    # Gate pages by an upper bound only, so the last page runs past `start`.
-    # Unfiltered it returned 61 days for a 30-day window, which would put one
-    # venue on a longer history than the others and bias every paired statistic.
+    # Gate pages by an upper bound only, so the last page runs past `start`: filter.
     return [r for r in out if start_ms <= r[0] <= end_ms]
 
 
@@ -181,12 +155,7 @@ def fetch(venue: str, base: str, start: datetime, end: datetime,
 
 
 def to_daily(rows: list[Rate]) -> pl.DataFrame:
-    """Sum settlements per UTC day.
-
-    This is what makes venues on different schedules comparable. A venue
-    settling every four hours collects twice as often as one settling every
-    eight; the day is the smallest unit on which both quote the same thing.
-    """
+    """Sum settlements per UTC day, making venues on different schedules comparable."""
     if not rows:
         return pl.DataFrame(schema={"day": pl.Date, "rate": pl.Float64, "n": pl.UInt32})
     frame = pl.DataFrame(
@@ -202,12 +171,7 @@ def to_daily(rows: list[Rate]) -> pl.DataFrame:
 
 
 def spread(a: pl.DataFrame, b: pl.DataFrame, min_days: int = 30) -> pl.DataFrame | None:
-    """Daily difference on days both venues actually quoted.
-
-    Inner join, never a fill. A missing day on one venue is not a zero spread —
-    it is an absence, and treating it as zero pulls every statistic toward the
-    conclusion that no dispersion exists.
-    """
+    """Daily difference on days both venues quoted. Inner join: a missing day is not zero."""
     joined = a.join(b, on="day", how="inner", suffix="_b")
     if joined.height < min_days:
         return None
@@ -219,10 +183,7 @@ def spread(a: pl.DataFrame, b: pl.DataFrame, min_days: int = 30) -> pl.DataFrame
     )
 
 
-#: Daily close endpoints, same venues and same symbol conventions as the funding
-#: fetchers. The price leg is not optional: a cross-venue funding spread is one
-#: leg of a two-leg trade, and RESULT-003 was voided for measuring only the
-#: other one. Basis volatility ran 42x the funding spread it was collecting.
+#: Daily closes per venue: the price leg is required (RESULT-003 was voided for omitting it).
 def closes(venue: str, base: str, start: datetime, end: datetime,
            client: httpx.Client | None = None) -> dict[int, float]:
     """Daily closes keyed by UTC-midnight epoch ms."""
@@ -245,9 +206,7 @@ def closes(venue: str, base: str, start: datetime, end: datetime,
             out = {int(b[0]): float(b[4])
                    for b in (payload.get("result", {}).get("list") or [])}
         elif venue == "okx":
-            # Caps at 100 candles per call and pages backwards from `after`.
-            # Without this the panel would silently lose every OKX pair to a
-            # 100-day history while the other venues carried 730.
+            # Caps at 100 candles per call; page backwards from `after`.
             out = {}
             cursor = end_ms
             while cursor > start_ms:

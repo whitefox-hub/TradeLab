@@ -1,11 +1,9 @@
 """Event dataset for PREREG-001: price and funding around each new listing.
 
-The listing day is taken as the **first available kline**, not the announcement
-timestamp. The announcement precedes the launch by hours to days and says so in
-prose, and parsing that prose would put a second parser between the hypothesis
-and the data. The first bar a contract ever printed is the listing day by
-definition, and it is available for delisted contracts too — which is what keeps
-this survivorship-neutral.
+Listing day = first available kline, not the announcement time (which precedes launch);
+it exists for delisted contracts too, keeping the set survivorship-neutral.
+
+    python scripts/build_listing_events.py
 """
 
 from __future__ import annotations
@@ -65,8 +63,7 @@ def main() -> int:
     def one(record: dict) -> dict:
         """Fetch one listing's window, or record why it cannot be used."""
         symbol = f"{record['base']}USDT"
-        # A week before the announcement: the launch always follows it, so the
-        # first bar returned is the contract's own first bar.
+        # Start a week before the announcement so the first bar is the contract's first.
         start_ms = int(record["event_time"].timestamp() * 1000) - 7 * 86_400_000
         with httpx.Client(timeout=20.0) as client:
             response = client.get(
@@ -81,10 +78,8 @@ def main() -> int:
                 return {"_drop": "short_history"}
 
             closes = [float(bar[4]) for bar in bars]
-            # Close time of the entry bar, not its open. The registered entry is
-            # the *close* of the first day after listing, so funding settled
-            # during that day was paid before any position existed. Using the
-            # open overstated the funding window by a full day.
+            # Close time (index 6), not open: the registered entry is the close, and
+            # funding settled during the entry day predates the position.
             entry_ms, exit_ms = int(bars[1][6]), int(bars[8][6])
             settlements_response = client.get(
                 FUNDING,
@@ -106,9 +101,6 @@ def main() -> int:
             "first_day_return": closes[1] / closes[0] - 1.0,
         }
 
-    # Modest concurrency. Sequentially this takes long enough that one transient
-    # failure costs the whole run, and progress is printed so a stall is visible
-    # rather than inferred from silence.
     with ThreadPoolExecutor(max_workers=8) as pool:
         for done, result in enumerate(pool.map(one, targets), start=1):
             if "_drop" in result:
