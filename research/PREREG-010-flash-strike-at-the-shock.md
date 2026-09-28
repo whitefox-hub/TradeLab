@@ -77,3 +77,37 @@ pullback paid.
   a backtest of this rule on them would be the second look this project keeps
   refusing.
 * No path to real capital that skips §15.
+
+## Amendment, 2026-09-28 — doubling windows on the unseen past
+
+Written before any data from 2021-12 to 2024-09 has been downloaded for this family.
+
+The operator's instruction: **test on a short window of the past, and double it while
+the result holds.** A 10-day window cannot tell skill from luck (a Sharpe of ~10 is
+needed), and doubling over data already seen carries the luck forward. So the windows
+are taken only from data **no study of this family has looked at**: every Flash Strike
+decision so far (the pullback's adverse selection, which produced this registration, and
+the MDA) was made on 2024-09 → 2026-09. Binance's metrics archive starts 2021-12.
+
+| | |
+|---|---|
+| Training only | 2021-12-01 → 2022-11-30, never evaluated |
+| Test windows, in order, never revisited | 10, 20, 40, 80, 160, 320 days from **2022-12-01**: ending 12-10, 12-30, 2023-02-08, 04-29, 10-06, **2024-08-21** |
+| Model | PREREG-010's procedure unchanged: trained on every candidate determined before each window, and retrained at every month boundary inside it |
+| Universe, data | survivorship-neutral for that era (FINDING-011's method), the same `flash_data.assemble` |
+
+**To double**, the cumulative net return through the window must be positive. A window
+that fails **ends the sequence**, and its result is reported. Changing anything and
+testing again is a new registration, which may only use data after the failed window.
+
+**The verdict** is taken once, on the cumulative span reached, with the registered rules
+in the registered order, against the resolvable Sharpe for that span: 1.25 if all 630
+days are reached. Window-by-window figures are reported, and they are not evidence
+beyond the gate they serve. Each passed window's threshold is also stated, so that "it
+held for 40 days" is not read as more than it is.
+
+**Development window** (engineering only, no rule may change): 2026-09-11 → 2026-09-20,
+in the already-seen era. It checks that the window runner reproduces the backtest's
+candidates and trades before the unseen past is opened.
+
+The forward run stands as registered, beside this.
