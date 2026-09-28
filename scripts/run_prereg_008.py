@@ -113,7 +113,12 @@ def breakeven(frame: pl.DataFrame, config: int) -> np.ndarray:
     sl, tp, _ = CONFIGS[config]
     stop = sl * frame["atr"].to_numpy() / frame["entry"].to_numpy()
     target = tp * stop
-    return (stop + LOSS_COST) / (target + stop + LOSS_COST - WIN_COST)
+    # PREREG-010's market entry pays taker in: win = taker + maker, loss = 2 x taker.
+    market = (frame["entry_market"].to_numpy() if "entry_market" in frame.columns
+              else np.zeros(frame.height, dtype=bool))
+    win = np.where(market, TAKER + MAKER, WIN_COST)
+    loss = np.where(market, 2 * TAKER, LOSS_COST)
+    return (stop + loss) / (target + stop + loss - win)
 
 
 def matrix(frame: pl.DataFrame) -> np.ndarray:

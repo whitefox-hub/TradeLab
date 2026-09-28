@@ -106,13 +106,16 @@ def candidates_for(root: Path, panel: Path, asset: str, members: set[str],
             picks = rng.choice(pool, size=min(count, pool.size), replace=False)
             randoms += [(int(t), int(rng.choice([-1, 1])), float(atr_all[t])) for t in picks]
 
-    for kind, triples in (("event", zip(events, sides, atrs, strict=True)),
-                          ("random", randoms)):
+    shock_triples = list(zip(events, sides, atrs, strict=True))
+    for kind, triples in (("event", shock_triples), ("random", randoms),
+                          ("at_shock", shock_triples)):   # PREREG-010's entry, same shocks
         for t, side, atr in triples:
             t, side = int(t), int(side)
             if kind == "event":
                 entry = fs.fill(s, t, side, float(atr))
                 shocked.append(_shock_row(s, asset, month[t], t, side, entry))
+            elif kind == "at_shock":
+                entry = fs.fill_at_shock(s, t, side, float(atr))
             else:
                 entry = _random_fill(s, t, side, float(atr))
             if entry is None:
@@ -127,6 +130,7 @@ def candidates_for(root: Path, panel: Path, asset: str, members: set[str],
             row = {"asset": asset, "kind": kind, "month": month[t],
                    "shock_ms": int(s.close_ms[t]), "fill_ms": int(s.close_ms[entry.fill]),
                    "side": side, "entry": entry.price, "atr": entry.atr,
+                   "entry_market": entry.market,
                    "cap_notional": float(0.01 * volume_1h[entry.fill])
                    if np.isfinite(volume_1h[entry.fill]) else 0.0,
                    **feats}

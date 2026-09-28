@@ -214,3 +214,34 @@ def test_an_open_trade_is_open_until_a_barrier_or_the_clock_decides_it() -> None
     assert decided == fs.exit_trade(s, entry, 1.0, 1.0, 120, NO_FUNDING, upto=39)
     timed = fs.exit_trade(_flat(40, 102.0), entry, 1.0, 1.0, 30, NO_FUNDING, upto=18)
     assert timed is not None and timed.reason == 0
+
+
+@pytest.mark.fast
+def test_at_the_shock_enters_at_its_close_when_its_own_flow_agrees() -> None:
+    s = _shocked()                                   # up shock at bar 10, taker share 80/102
+    entry = fs.fill_at_shock(s, 10, 1, atr=1.0)
+    assert entry is not None and entry.market and entry.fill == 10
+    assert entry.price == pytest.approx(104.0)
+    against = _with(s, taker_buy_quote=(10, 20_000.0))
+    assert fs.fill_at_shock(against, 10, 1, atr=1.0) is None
+
+
+@pytest.mark.fast
+def test_a_market_entry_pays_taker_and_can_take_profit_in_the_next_bar() -> None:
+    s = _with(_flat(40, 104.0), high=(11, 105.02))
+    entry = Fill(shock=10, fill=10, side=1, price=104.0, atr=1.0, market=True)
+    out = fs.exit_trade(s, entry, 1.0, 1.0, 30, NO_FUNDING)
+    assert out is not None and out.reason == 1 and out.exit_bar == 11
+    assert out.net == pytest.approx(1.0 / 104.0 - fs.TAKER - fs.MAKER)
+    stopped = fs.exit_trade(_with(_flat(40, 104.0), low=(12, 102.9)), entry, 1.0, 1.0, 30,
+                            NO_FUNDING)
+    assert stopped.net == pytest.approx(-1.0 / 104.0 - 2 * fs.TAKER)
+
+
+@pytest.mark.fast
+def test_a_market_entry_does_not_pay_the_settlement_at_its_own_close() -> None:
+    funding = np.zeros(40)
+    funding[10] = 0.001
+    entry = Fill(shock=10, fill=10, side=1, price=104.0, atr=1.0, market=True)
+    out = fs.exit_trade(_flat(40, 104.0), entry, 1.0, 2.0, 30, funding)
+    assert out.net == pytest.approx(-fs.TAKER - fs.TAKER)

@@ -149,6 +149,20 @@ class Fill:
     side: int
     price: float
     atr: float
+    #: PREREG-010: a market order at the close of bar `fill` (= the shock), taker cost.
+    #: Exits and funding then start at the next bar, which lies wholly after the entry.
+    market: bool = False
+
+
+def fill_at_shock(s: Series, shock: int, side: int, atr: float) -> Fill | None:
+    """PREREG-010's entry: market at the shock bar's close. Persistence is the shock
+    bar's own taker share; open interest is not yet published then (`flash_data`)."""
+    if s.quote_volume[shock] <= 0 or not np.isfinite(atr) or side == 0:
+        return None
+    share = s.taker_buy_quote[shock] / s.quote_volume[shock]
+    if not (share > 0.5 if side > 0 else share < 0.5):
+        return None
+    return Fill(shock, shock, side, float(s.close[shock]), float(atr), market=True)
 
 
 def fill(s: Series, shock: int, side: int, atr: float) -> Fill | None:
@@ -211,22 +225,24 @@ def exit_trade(s: Series, entry: Fill, sl_mult: float, tp_mult: float,
     last = s.close.size - 1 if upto is None else min(upto, s.close.size - 1)
     if upto is None and horizon > last:
         return None
+    entry_cost = TAKER if entry.market else MAKER
+    first = entry.fill + 1 if entry.market else entry.fill
 
-    for j in range(entry.fill, min(horizon, last) + 1):
+    for j in range(first, min(horizon, last) + 1):
         worst = s.low[j] if side > 0 else s.high[j]
         best = s.high[j] if side > 0 else s.low[j]
         stopped = (worst <= stop) if side > 0 else (worst >= stop)
         if stopped:
             gapped = (s.open[j] <= stop) if side > 0 else (s.open[j] >= stop)
             out = worst if gapped and j > entry.fill else stop
-            return _close(s, entry, out, j, -1, MAKER + TAKER, funding_per_bar)
+            return _close(s, entry, out, j, -1, entry_cost + TAKER, funding_per_bar)
         tick = s.tick[j]
         hit = (best >= target + tick) if side > 0 else (best <= target - tick)
         if j > entry.fill and hit:
-            return _close(s, entry, target, j, 1, MAKER + MAKER, funding_per_bar)
+            return _close(s, entry, target, j, 1, entry_cost + MAKER, funding_per_bar)
     if horizon > last:
         return None                     # still open
-    return _close(s, entry, float(s.close[horizon]), horizon, 0, MAKER + TAKER,
+    return _close(s, entry, float(s.close[horizon]), horizon, 0, entry_cost + TAKER,
                   funding_per_bar)
 
 
@@ -242,7 +258,7 @@ def _close(s: Series, entry: Fill, out: float, bar: int, reason: int,
     gross = entry.side * (out - entry.price) / entry.price
     # Funding accrues to the side paying it across the bars held. Positive
     # funding is paid by longs.
-    funding = entry.side * float(np.nansum(funding_per_bar[entry.fill:bar + 1]))
+    funding = entry.side * float(np.nansum(funding_per_bar[entry.fill + entry.market:bar + 1]))
     return Outcome(gross - costs - funding, reason, bar)
 
 
