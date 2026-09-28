@@ -1,6 +1,6 @@
 """Pull the Fear and Greed index into `sentiment_readings`. Plan.md §11.4.
 
-Idempotent upsert by day; meant for cron beside scripts/refresh_macro.sh.
+Idempotent upsert by day; meant for a daily cron.
 
     python scripts/refresh_sentiment.py [--limit 0] [--cmc-history]
 """

@@ -100,8 +100,6 @@ def test_recording_an_approval_requires_a_session(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-
-
 @pytest.mark.fast
 def test_no_route_mentions_mode_as_something_to_set(client: TestClient) -> None:
     paths = {route.path for route in client.app.routes}
@@ -241,32 +239,6 @@ def test_the_cooling_off_is_enforced_by_the_database(monkeypatch) -> None:
                                {"i": operator_id})
 
 
-
-
-
-
-
-
-
-
-@pytest.mark.fast
-def test_the_macro_screen_is_served(client: TestClient) -> None:
-    response = client.get("/macro")
-    assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
-
-
-@pytest.mark.fast
-def test_the_consensus_body_carries_no_timestamp() -> None:
-    """§20.6: `consensus_at` is set by the handler and refused by the database
-    if it does not precede the release. Accepting one from the client would put
-    the choice in the caller's hands, which is the choice the rule removes."""
-    from tradelab.api.app import ConsensusRequest
-
-    assert "consensus_at" not in ConsensusRequest.model_fields
-    assert ConsensusRequest(consensus=3.5).consensus == 3.5
-
-
 @pytest.mark.fast
 def test_the_sidebar_only_links_screens_that_exist(client: TestClient) -> None:
     """A menu offering a screen that 404s is worse than not offering it.
@@ -282,8 +254,6 @@ def test_the_sidebar_only_links_screens_that_exist(client: TestClient) -> None:
     assert linked, "the sidebar links nothing"
     for path in linked:
         assert path in served, f"{path} is in the menu but not served"
-
-
 
 
 @pytest.mark.fast
@@ -331,42 +301,6 @@ def test_the_dashboard_no_longer_carries_a_second_sign_in_form(client: TestClien
     that keeps working against a stale endpoint."""
     page = client.get("/home").text
     assert 'type="password"' not in page
-
-
-@pytest.mark.integration
-def test_the_indicator_cards_carry_a_value_and_a_change() -> None:
-    """The screen the operator asked for shows where each series stands.
-
-    Reading the last two stored prints is not a computed figure and not a chart;
-    the history behind them is a time series and stays in Grafana (§20.1).
-    """
-    import sqlalchemy as sa_
-
-    from tradelab.api.security import Sessions, new_secret
-    from tradelab.config import Settings
-
-    engine = sa_.create_engine(Settings().database_url)
-    email = engine.connect().execute(
-        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
-    if email is None:
-        pytest.skip("no operator row")
-
-    secret = new_secret()
-    with pytest.MonkeyPatch().context() as patch:
-        patch.setenv("TRADELAB_SESSION_SECRET", secret)
-        app = create_app(engine=engine)
-        client = TestClient(app)
-        client.cookies.set("tradelab_session", Sessions(secret).issue(email))
-        rows = client.get("/api/macro/series").json()
-
-    assert rows, "no macro series loaded"
-    priced = [r for r in rows if r["value"] is not None]
-    assert priced, "every series came back without a value"
-    for row in priced:
-        assert "change" in row
-        assert "value_at" in row
-        # The flag the screen colours the card by.
-        assert isinstance(row["point_in_time_safe"], bool)
 
 
 @pytest.mark.fast
@@ -426,38 +360,6 @@ def test_a_locked_parameter_is_refused_by_name() -> None:
                    for item in allowed["locked"])
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.fast
 def test_the_content_area_is_not_capped(client: TestClient) -> None:
     """A table that stops short of the window wastes the column the headline
@@ -467,22 +369,6 @@ def test_the_content_area_is_not_capped(client: TestClient) -> None:
     assert ".content { min-width:0; padding:28px 28px 64px; width:100%; }" in css
     assert "max-width:1180px" not in css
     assert ".hint { font-size:14px; color:var(--muted); margin:10px 0 0; max-width:74ch;" in css
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.fast
@@ -564,38 +450,12 @@ def test_the_chrome_is_revalidated_rather_than_cached(client: TestClient) -> Non
     assert client.get("/algorithm").status_code == 200
 
 
-
-
-
-
-
-
-
-
-
-
 # -- trends -------------------------------------------------------------------
 #
 # A market trend is three fields: asset, direction, magnitude. The tests below are
 # mostly about what it is *not* allowed to become, because the pressure on a
 # screen like this is always to add one more field, and the fourth field is the
 # one nothing downstream reads.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # -- what this surface is allowed to do --------------------------------------
@@ -613,24 +473,11 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
         for method in getattr(route, "methods", set())
         if method in {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    # The complete set of writes this surface is allowed, and the only place it
-    # is asserted. §20.1 permits approvals and lifecycle transitions; §20.6 adds
-    # a macro consensus, an observation recorded with its time rather than a
-    # computed figure. §12.4 adds operator settings, which reach only the column
-    # that does not define a strategy. §20 adds the scenario — the market trend and the
-    # assumed sentiment — which changes what a simulation is asked to assume and
-    # nothing that is running.
-    #
-    # The event writes are gone with the news screen. They were the largest
-    # group here, and their removal is the reason this list is worth keeping as
-    # an equality: a write that no longer has a caller is a write that should no
-    # longer have a route.
-    #
-    # Written as equality so a new route fails here. Extending this list is the
-    # moment to ask whether the write belongs on this surface at all.
+    # The complete set of writes this surface allows, asserted only here: approvals
+    # and lifecycle transitions (§20.1), operator settings (§12.4), the scenario (§20).
+    # Written as equality so a new route fails here.
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
-        ("/api/macro/releases/{release_id}/consensus", "POST"),
         # §12.4 puts sizing and risk limits in the operator's hands, and §20
         # gives this screen "limit changes (admin)". It creates a configuration
         # and never edits one: §14.1 versions them and has runs reference one,
@@ -768,8 +615,6 @@ def test_a_sentiment_outside_one_to_a_hundred_is_refused() -> None:
         assert ScenarioRequest(trend=5, sentiment=good).sentiment == good
 
 
-
-
 @pytest.mark.fast
 def test_a_magnitude_outside_the_scale_is_refused() -> None:
     """The scale is defined as 1 to 10. A 70 is not a stronger market trend, it is a
@@ -807,8 +652,6 @@ def test_the_scenario_carries_no_field_beyond_what_it_needs() -> None:
     for smuggled in ("asset", "happened_at", "duration_hours", "note", "mode"):
         with pytest.raises(pydantic.ValidationError):
             ScenarioRequest(trend=6, sentiment=50, **{smuggled: 1})
-
-
 
 
 # -- the index ---------------------------------------------------------------
@@ -1588,7 +1431,7 @@ def test_the_menu_is_the_working_loop_and_nothing_else(client: TestClient) -> No
     linked = re.findall(r'href: "(/[a-z_-]+)"', menu)
 
     assert linked == [
-        "/home", "/algorithm", "/market-sentiment", "/macro", "/parameters",
+        "/home", "/algorithm", "/market-sentiment", "/parameters",
         "/audit", "/risk-limits",
     ], f"the menu is now {linked}"
 
@@ -1611,45 +1454,6 @@ def test_a_removed_screen_leaves_its_data_behind(client: TestClient) -> None:
     # And the counts survive where they were already displayed.
     assert "data-quality" in client.get("/static/index.html").text
     assert "experiments" in client.get("/static/algorithm.html").text
-
-
-@pytest.mark.fast
-def test_macro_says_what_it_is_for_and_who_reads_it(client: TestClient) -> None:
-    """The catalogue exists so the operator can ask whether money is flowing to
-    other markets. Nothing in the code reads these series — the reader is the
-    operator, and what they take from them enters through the market trend.
-
-    That chain was invisible on the screen, which is how the page came to look
-    orphaned when it is the input to the one channel the algorithm has for what
-    it cannot see.
-    """
-    markup = client.get("/static/macro.html").text
-    assert "/market-sentiment" in markup, "the screen does not say where a reading goes"
-    assert "you</strong> are the reader" in markup
-
-    # And it stops at the reading. Which way a rising dollar cuts is a market
-    # theory, and stating one here would be §20.1's boundary crossed by prose
-    # rather than by arithmetic.
-    assert "has not tested" in markup
-
-
-@pytest.mark.fast
-def test_the_catalogue_covers_somewhere_for_money_to_go() -> None:
-    """"Is money flowing elsewhere" needs an elsewhere. Rates and the dollar
-    were here; equities, the price of fear, the short end and credit were not,
-    and without them the question has no other side."""
-    from tradelab.collectors.macro import BY_CODE
-
-    for code in ("SP500", "VIX", "DGS2", "HYSPREAD"):
-        assert code in BY_CODE, f"{code} is missing from the catalogue"
-
-    # Every series states whether it is revised and whether the revisions are
-    # recoverable, because those two decide whether a study using it is
-    # answering the question it thinks it is.
-    for code, spec in BY_CODE.items():
-        assert isinstance(spec.is_revised, bool), code
-        assert isinstance(spec.has_vintages, bool), code
-        assert not (spec.is_revised and spec.has_vintages) or spec.has_vintages
 
 
 @pytest.mark.fast
