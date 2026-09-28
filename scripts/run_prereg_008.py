@@ -209,7 +209,7 @@ def _permuted(train: pl.DataFrame, rng: np.random.Generator) -> pl.DataFrame:
     for _, part in train.group_by("month", maintain_order=True):
         order = rng.permutation(part.height)
         parts.append(part.with_columns([part[c].gather(order).alias(c) for c in outcome]))
-    return pl.concat(parts).sort("fill_ms") if parts else train
+    return pl.concat(parts).sort(["fill_ms", "asset", "shock_ms"]) if parts else train
 
 
 # -- the book ------------------------------------------------------------------
@@ -222,7 +222,7 @@ def book(trades: pl.DataFrame, days: list[date]) -> tuple[np.ndarray, np.ndarray
     priority. Returns daily returns on the evaluation calendar and each taken
     trade's result in equity terms.
     """
-    trades = trades.sort(["fill_ms", "priority"], descending=[False, True])
+    trades = trades.sort(["fill_ms", "priority", "asset"], descending=[False, True, False])
     open_: list[tuple[int, float]] = []          # (exit_ms, notional fraction)
     last_bar, day_loss, day_key = -1, 0.0, None
     daily = {d: 0.0 for d in days}
@@ -249,6 +249,12 @@ def book(trades: pl.DataFrame, days: list[date]) -> tuple[np.ndarray, np.ndarray
         last_bar = now
         results.append(pnl)
     return np.array([daily[d] for d in days]), np.array(results)
+
+
+#: Candidates in one bar share `fill_ms` across assets (62% of events). Every sort is on
+#: this key so that thinning, CV folds and the book's tie-break are reproducible (§9.4):
+#: sorted on `fill_ms` alone, a rebuilt file reordered ties and moved 186 trades to 107.
+ORDER = ["fill_ms", "asset", "shock_ms"]
 
 
 def trades_for(frame: pl.DataFrame, decisions: list[MonthDecision],
@@ -365,8 +371,8 @@ def main() -> int:
 
     candidates = pl.read_parquet(args.root / "_candidates.parquet")
     shocks = pl.read_parquet(args.root / "_shocks.parquet")
-    events = candidates.filter(pl.col("kind") == "event").sort("fill_ms")
-    randoms = candidates.filter(pl.col("kind") == "random").sort("fill_ms")
+    events = candidates.filter(pl.col("kind") == "event").sort(["fill_ms", "asset", "shock_ms"])
+    randoms = candidates.filter(pl.col("kind") == "random").sort(["fill_ms", "asset", "shock_ms"])
     # The haircut, as a random thinning of bar-model fills, fixed seed.
     thin = np.random.default_rng(8).random(events.height) < haircut
     events = events.filter(pl.Series(thin))

@@ -48,7 +48,7 @@ def main() -> int:
 
     haircut = json.loads((args.root / "_queue_calibration.json").read_text())["confirmed_share"]
     events = pl.read_parquet(args.root / "_candidates.parquet").filter(
-        pl.col("kind") == "event").sort("fill_ms")
+        pl.col("kind") == "event").sort(["fill_ms", "asset", "shock_ms"])
     # The same thinning as the run, same seed, so the decisions are the run's.
     events = events.filter(pl.Series(np.random.default_rng(8).random(events.height) < haircut))
     decisions = procedure(events)

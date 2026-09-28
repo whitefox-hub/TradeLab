@@ -201,6 +201,7 @@ class Outcome:
     net: float            # return on notional, after costs and funding
     reason: int           # 1 take profit, -1 stop, 0 time
     exit_bar: int         # when the outcome was determined
+    price: float = float("nan")   # where it exited, before costs
 
 
 def exit_trade(s: Series, entry: Fill, sl_mult: float, tp_mult: float,
@@ -259,7 +260,7 @@ def _close(s: Series, entry: Fill, out: float, bar: int, reason: int,
     # Funding accrues to the side paying it across the bars held. Positive
     # funding is paid by longs.
     funding = entry.side * float(np.nansum(funding_per_bar[entry.fill + entry.market:bar + 1]))
-    return Outcome(gross - costs - funding, reason, bar)
+    return Outcome(gross - costs - funding, reason, bar, out)
 
 
 # -- the thirteen features, known at the fill ----------------------------------

@@ -1,5 +1,16 @@
 # Result 008b — Flash Strike, replicated without the leak: the model helps, and it is not enough
 
+> **Reproducibility, 2026-09-28.** 62% of events (44,481 of 72,007) share their
+> `fill_ms` with another asset's, because they fall in the same bar. The
+> pipeline sorted on `fill_ms` alone, so the order of those ties, and with it the
+> queue thinning, the CV folds and the book's tie-break, depended on how the
+> candidates file happened to be written. Rebuilt later, the same rules and data
+> gave **107 trades and −3.8% on $10,000**, against the **186 trades and Sharpe
+> −0.176** below. The sign is the same and the magnitude is not. Every sort now
+> uses (`fill_ms`, `asset`, `shock_ms`), and a deterministic re-run is owed. That
+> the result moves this much on a tie-break is itself evidence that there is
+> little signal in it. The MDA below was computed under the old ordering too.
+
 Run 2026-09-28 against research/PREREG-008-flash-strike.md (`2615de8`), on the
 pipeline of `117cd44`. The corrections that voided RESULT-008 came in `be25f65`
 and `6aa732a`: the archive's five-minute metrics stamp, and auxiliary data
