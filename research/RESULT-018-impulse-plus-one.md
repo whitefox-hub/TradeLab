@@ -37,7 +37,7 @@ no decision reads a later bar.
   rescues and second tranches of positions that were then trapped.
 * **The regime filter does not stop every trap.** The worst trade opened on 2021-11-08, when
   BTC was above its 150-day average, a day before the top; it waited 845 days.
-* Against the simple rule: RESULT-015's BTC above SMA 150 made **16 to 15 times more** on the
+* Against the simple rule: RESULT-015's BTC above SMA 150 gained **15 and 8 times as much** on the
   same $10,000 in the same spans. Frequent +1% gains are real, and they are small; the losses
   they avoid realising are carried, and they are large.
 
