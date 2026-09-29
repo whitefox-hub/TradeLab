@@ -5,10 +5,12 @@
     .venv/bin/python scripts/run_btc_trend.py            # runs until stopped
     .venv/bin/python scripts/run_btc_trend.py --once     # one tick, for a check
 
-Three books on Binance spot prices, each $10,000 of fake capital:
+Four books on Binance spot prices, each $10,000 of fake capital:
 
 * **BTC above SMA 150** (PREREG-015) and **SMA 120** (RESULT-015's addendum): long while
   the last closed day is above its average, in USDT otherwise; decided once per UTC day.
+* **SMA 120, vol-sized** (PREREG-016): the same 120-day signal, holding min(1, 50% / 30-day
+  volatility) of a full position, resized only past 10 points.
 * **Hold BTC**: bought on its first tick, never sold, the reference.
 
 Both are sized at the active `max_position_pct_equity` (25% by default), so they compare
@@ -37,7 +39,7 @@ from tradelab.execution.intent import IntentLog
 from tradelab.execution.types import AccountState, ExecutionMode, Fill, Instrument, Order, Side
 from tradelab.orchestration.forward import Snapshot, Store
 from tradelab.risk.limits import RiskEngine
-from tradelab.strategy import btc_trend, btc_trend_120
+from tradelab.strategy import btc_trend, btc_trend_120, btc_trend_vol
 
 REST = "https://api.binance.com"
 SYMBOL = "BTCUSDT"
@@ -199,7 +201,9 @@ def main() -> int:
     inst = instrument(client)
     trend = [Book("btc-sma150", "BTC above SMA 150 (RESULT-015)", "PREREG-015", btc_trend),
              Book("btc-sma120", "BTC above SMA 120 (RESULT-015 addendum)",
-                  "RESULT-015 addendum, forward only", btc_trend_120)]
+                  "RESULT-015 addendum, forward only", btc_trend_120),
+             Book("btc-sma120-vol", "BTC above SMA 120, vol-sized (RESULT-016)",
+                  "PREREG-016", btc_trend_vol)]
     hold = Book("hold-btc", "Hold BTC (reference)", "PREREG-015 benchmark")
     books = [*trend, hold]
     for book in books:
@@ -220,8 +224,18 @@ def main() -> int:
             if signal != book.state.get("signal"):
                 book.state["manual_flat"] = False     # a new signal supersedes a manual exit
             book.state.update(day=day, signal=signal)
+            if hasattr(book.rule, "target"):
+                # Sized: the fraction of a full position, resized past RESIZE only.
+                wanted = book.rule.target(closes)
+                held = book.state.get("frac", 0.0) if book.held else 0.0
+                frac = book.rule.resize(wanted, held)
+                if book.state.get("manual_flat") and frac > 0:
+                    frac = 0.0
+                if frac != held:
+                    book.trade_to(book.full(price) * Decimal(str(frac)), price, now)
+                book.state["frac"] = frac if book.held else 0.0
             # Switch only: the study held its position unchanged between signals.
-            if signal and book.held == 0 and not book.state.get("manual_flat"):
+            elif signal and book.held == 0 and not book.state.get("manual_flat"):
                 book.trade_to(book.full(price), price, now)
             elif not signal and book.held != 0:
                 book.trade_to(Decimal(0), price, now)
