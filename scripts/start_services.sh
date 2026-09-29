@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the database and capture (docker), then the operator interface and the forward
-# trend book, detached, each with a pidfile.
+# trend book and the BTC trend books, detached, each with a pidfile.
 # Stop by pidfile, not process-name match: a name match also hits this shell.
 #   ./scripts/start_services.sh          # (re)start both
 #   ./scripts/start_services.sh stop     # stop both
@@ -29,6 +29,7 @@ start() {
 
 stop uvicorn
 stop trend_book
+stop btc_trend
 [[ "${1:-}" == "stop" ]] && exit 0
 
 # Only capture and its dependencies: a bare `up` also starts the api container on port 8000.
@@ -41,3 +42,4 @@ fi
 start uvicorn .venv/bin/uvicorn "tradelab.api.app:create_app" --factory \
   --host 127.0.0.1 --port 8010
 start trend_book .venv/bin/python scripts/run_trend_book.py
+start btc_trend .venv/bin/python scripts/run_btc_trend.py

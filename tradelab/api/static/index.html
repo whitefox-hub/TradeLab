@@ -59,7 +59,7 @@
     <h2 class="section">Open positions<span class="note" id="book-note"></span></h2>
     <table class="book">
       <thead><tr>
-        <th>Asset</th><th>Side</th><th class="num">Quantity</th>
+        <th>Book</th><th>Asset</th><th>Side</th><th class="num">Quantity</th>
         <th class="num">Avg entry</th><th class="num">Unrealised</th>
         <th class="num">Realised</th><th class="num">Funding</th>
         <th>Guide</th><th>Mode</th><th class="num">As of</th><th></th>
@@ -119,10 +119,10 @@ function renderBook(book) {
 
   if (!book.positions.length) {
     // Explain the empty state rather than show a blank table.
-    $("book").innerHTML = `<tr><td colspan="11"><p class="empty-why">No position is
+    $("book").innerHTML = `<tr><td colspan="12"><p class="empty-why">No position is
       open. ${book.runs_live
         ? `${book.runs_live} forward book(s) run in the simulator on fake capital
-           (PREREG-008, PREREG-009) and hold nothing at this moment.`
+           (PREREG-009, PREREG-015) and hold nothing at this moment.`
         : "No forward book is running."}
       Nothing has been promoted through §15 (see the
       <a href="/algorithm">sequence</a>), so no book here is a validated
@@ -132,6 +132,7 @@ function renderBook(book) {
 
   $("book").innerHTML = book.positions.map((p) => `
     <tr>
+      <td>${escape(p.book || "—")}</td>
       <td><strong>${escape(p.asset)}</strong></td>
       <td><span class="side ${escape(p.side)}">${escape(p.side)}</span></td>
       <td class="num">${qty(p.qty)}</td>
