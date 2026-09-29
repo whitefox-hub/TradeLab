@@ -35,8 +35,11 @@ no decision reads a later bar.
 * **The realised profits were spent on trapped positions.** Scale-ins and rescues are funded
   by the profits pool, and at the end of each span it held $15 and $4: the gains had gone into
   rescues and second tranches of positions that were then trapped.
-* **The regime filter does not stop every trap.** The worst trade opened on 2021-11-08, when
-  BTC was above its 150-day average, a day before the top; it waited 845 days.
+* **The regime filter does not stop every trap.** The longest trade, a BTC buy on 2021-11-10
+  (the week of the top) with BTC above its 150-day average, fell 77% and sold at its target on
+  2024-03-04, 845 days later. An ETH buy of 2021-11-08 was still open, at −44%, when the span
+  ended. Two more, bought in March and April 2022 in a brief return above the average, waited
+  651 and 694 days.
 * Against the simple rule: RESULT-015's BTC above SMA 150 gained **15 and 8 times as much** on the
   same $10,000 in the same spans. Frequent +1% gains are real, and they are small; the losses
   they avoid realising are carried, and they are large.
