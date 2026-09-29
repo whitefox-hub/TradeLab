@@ -88,6 +88,15 @@ class RiskConfigRequest(BaseModel):
     rationale: str = Field(min_length=10, max_length=1000)
 
 
+class CloseRequest(BaseModel):
+    """The operator's manual exit of one open position of a forward run."""
+
+    model_config = {"extra": "forbid"}
+
+    run_id: uuid.UUID
+    asset: str = Field(min_length=1, max_length=40)
+
+
 class ApprovalRequest(BaseModel):
     subject_kind: str = Field(pattern="^(strategy|capital_tier|gate_change)$")
     subject_id: uuid.UUID
@@ -931,6 +940,34 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return {"id": str(config_id), "name": body.name,
                 "limits": {k: str(v) for k, v in parsed.items()}}
 
+    def _pending_closes(session: Session) -> set[str]:
+        return {str(r) for r in session.execute(sa.text(
+            "SELECT q.subject_id FROM audit_log q WHERE q.action = 'position.close_request' "
+            "AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'position.closed' "
+            "AND a.payload->>'request' = q.id::text)")).scalars()}
+
+    @app.post("/api/positions/close", status_code=status.HTTP_202_ACCEPTED)
+    def close_position(body: CloseRequest, who: Operator = operator,
+                       session: Session = session_dep) -> dict[str, Any]:
+        """Ask the run's process to close one position at market. Accepted, not done: the
+        runner answers with a `position.closed` audit row within seconds."""
+        latest = session.execute(sa.text(
+            "SELECT p.qty, r.status FROM positions p JOIN runs r ON r.id = p.run_id "
+            "WHERE p.run_id = :run AND p.asset = :a ORDER BY p.as_of DESC LIMIT 1"),
+            {"run": body.run_id, "a": body.asset}).mappings().first()
+        if latest is None or not latest["qty"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no open position")
+        if latest["status"] != "running":
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"run is {latest['status']}; nothing will act on it")
+        subject = f"{body.run_id}:{body.asset}"
+        if subject in _pending_closes(session):
+            return {"subject": subject, "pending": True, "duplicate": True}
+        audit(session, who.email, "position.close_request", "position", subject,
+              {"run_id": str(body.run_id), "asset": body.asset, "qty": str(latest["qty"])})
+        session.commit()
+        return {"subject": subject, "pending": True, "duplicate": False}
+
     @app.get("/api/positions")
     def open_positions(who: Operator = operator,
                        session: Session = session_dep) -> dict[str, Any]:
@@ -952,6 +989,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         def number(value: Any) -> float | None:
             return None if value is None else float(value)
 
+        pending = _pending_closes(session)
+
         open_rows = [{
             "run_id": str(r["run_id"]), "asset": r["asset"],
             "as_of": r["as_of"].isoformat(), "qty": number(r["qty"]),
@@ -966,6 +1005,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             # PREREG-009: operator guided if trend != 5, else the algorithm; null if no guide.
             "guide": r["guide"], "trend": r["trend"], "trend_source": r["trend_source"],
             "book": r["book"],
+            "close_pending": f"{r['run_id']}:{r['asset']}" in pending,
+            "can_close": r["status"] == "running",
         } for r in rows if (r["qty"] or 0) != 0]
 
         totals = session.execute(sa.text(

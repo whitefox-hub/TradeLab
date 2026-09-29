@@ -5,6 +5,9 @@
     .venv/bin/python scripts/run_trend_book.py            # runs until stopped
     .venv/bin/python scripts/run_trend_book.py --once     # one tick, for a check
 
+Manual exits: the operator's close button queues an audit row; this process closes that
+asset at market within seconds and keeps it flat until the book next changes its decision.
+
 Restart (§14.3): intent log recovered, fills and book state reloaded from `state.json`;
 a reconciliation divergence halts the run rather than being adopted. Size is clipped to
 `max_position_pct_equity` before sending, not vetoed after (a veto at the cap is a cliff).
@@ -45,6 +48,7 @@ CAPITAL = Decimal(10_000)
 LABEL = "trend-book PREREG-009"
 STATE_DIR = Path("data/forward/trend-book")
 PUBLISH_MARGIN_S = 15
+POLL_S = 5
 HISTORY_DAYS = 16
 #: Registered costs: taker 0.05% plus half spread 0.005% plus slippage 0.01%,
 #: which the simulated adapter charges as a 1.5 bp price concession plus its fee.
@@ -102,6 +106,11 @@ def daily(index: np.ndarray, today: str) -> tuple[np.ndarray, np.ndarray, np.nda
         lows.append(rows[:, 3].min())
         closes.append(rows[-1, 4])
     return np.array(highs), np.array(lows), np.array(closes)
+
+
+def tickers(client: httpx.Client) -> dict[str, Decimal]:
+    rows = client.get(f"{REST}/fapi/v1/ticker/price").json()
+    return {r["symbol"]: Decimal(r["price"]) for r in rows if r["symbol"] in SYMBOLS}
 
 
 def funding(client: httpx.Client, symbol: str) -> tuple[int, float]:
@@ -165,6 +174,7 @@ def main() -> int:
     adapter._held.update(held)
     funding_paid = {k: Decimal(v) for k, v in extra.get("funding_paid", {}).items()}
     funding_seen = {k: int(v) for k, v in extra.get("funding_seen", {}).items()}
+    manual: set[str] = set(extra.get("manual_closed", []))
 
     account = AccountState(equity=CAPITAL, peak_equity=Decimal(extra.get("peak", CAPITAL)),
                            day_start_equity=CAPITAL)
@@ -179,7 +189,53 @@ def main() -> int:
         store.halt(run_id, f"reconciliation at restart: {divergences}")
         return 1
 
+    def persist(now: datetime, price: dict[str, Decimal]) -> Decimal:
+        equity = _equity(engine, price, funding_paid)
+        rows = [_snapshot(engine, s, price[s], funding_paid.get(s, Decimal(0)), book)
+                for s in SYMBOLS]
+        gross = sum(abs(r.qty) * price[r.asset] for r in rows)
+        store.write(run_id, now, rows, equity, Decimal(gross))
+        save(state_path, book, adapter, {
+            "funding_paid": funding_paid, "funding_seen": funding_seen,
+            "peak": engine.account.peak_equity, "day": extra.get("day"),
+            "manual_closed": sorted(manual)})
+        return equity
+
+    def close_requested() -> bool:
+        requests = store.pending_closes(run_id)
+        if not requests:
+            return False
+        now = datetime.now(UTC)
+        price = tickers(client)
+        adapter.prices.update(price)
+        for request, symbol in requests:
+            held = engine.account.positions.get(symbol)
+            if symbol not in SYMBOLS or held is None or held.quantity == 0:
+                store.answer_close(request, run_id, symbol, {"result": "nothing open"})
+                continue
+            quantity = held.quantity
+            order = Order(symbol, Side.SELL if quantity > 0 else Side.BUY, abs(quantity),
+                          reduce_only=True)
+            decision = engine.submit(order, price[symbol], dict(price), now,
+                                     mid_price=price[symbol])
+            engine.apply_fills(now)
+            if not decision.allowed:
+                store.answer_close(request, run_id, symbol, {
+                    "result": "refused", "breach": str(decision.breach),
+                    "detail": str(decision.detail)})
+                continue
+            manual.add(symbol)
+            fill = adapter.fills[-1]
+            store.answer_close(request, run_id, symbol, {
+                "result": "closed", "qty": str(quantity), "price": str(fill.price),
+                "fee": str(fill.fee)})
+            print(f"{now:%Y-%m-%d %H:%M:%S} manual exit {symbol} {quantity} at {fill.price}",
+                  flush=True)
+        persist(now, price)
+        return True
+
     while True:
+        close_requested()
         now = datetime.now(UTC)
         series = {s: bars(client, s, HISTORY_DAYS, now) for s in SYMBOLS}
         index = basket_series(series)
@@ -206,6 +262,8 @@ def main() -> int:
             engine.account.day_start_equity = equity
             extra["day"] = today
         if decision.changed:
+            manual.clear()          # a new decision of the book supersedes a manual exit
+        if decision.changed:
             _rebalance(engine, decision.state.exposure, equity, fill_price, limits, now)
         adapter.prices.update(price)
         engine.trim_held(price, now)
@@ -221,20 +279,13 @@ def main() -> int:
                 funding_seen[s] = stamp
 
         book = decision.state
-        equity = _equity(engine, price, funding_paid)
-        rows = [_snapshot(engine, s, price[s], funding_paid.get(s, Decimal(0)), book)
-                for s in SYMBOLS]
-        gross = sum(abs(r.qty) * price[r.asset] for r in rows)
-        store.write(run_id, now, rows, equity, Decimal(gross))
-        save(state_path, book, adapter, {
-            "funding_paid": funding_paid, "funding_seen": funding_seen,
-            "peak": engine.account.peak_equity, "day": extra.get("day")})
+        equity = persist(now, price)
         print(f"{now:%Y-%m-%d %H:%M} trend {setting.trend} ({setting.source}) "
               f"{decision.reason}: {book.guide} {book.exposure:+.2f}, "
               f"equity {equity:,.2f}", flush=True)
         if args.once:
             return 0
-        _sleep_to_next_bar()
+        _sleep_to_next_bar(close_requested)
 
 
 def _equity(engine: ExecutionEngine, price: dict[str, Decimal],
@@ -278,9 +329,15 @@ def _snapshot(engine: ExecutionEngine, symbol: str, price: Decimal, funding_paid
                     book.source if qty else None)
 
 
-def _sleep_to_next_bar() -> None:
-    now = time.time()
-    time.sleep(300 - now % 300 + PUBLISH_MARGIN_S)
+def _sleep_to_next_bar(poll) -> None:
+    """Sleep to the next bar, answering manual exits every POLL_S seconds meanwhile."""
+    wake = time.time() + 300 - time.time() % 300 + PUBLISH_MARGIN_S
+    while (left := wake - time.time()) > 0:
+        time.sleep(min(POLL_S, left))
+        try:
+            poll()
+        except httpx.HTTPError as failed:
+            print(f"  manual exit check failed, retrying: {failed}", flush=True)
 
 
 if __name__ == "__main__":

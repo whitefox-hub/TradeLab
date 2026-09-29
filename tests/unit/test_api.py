@@ -478,6 +478,9 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     # Written as equality so a new route fails here.
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
+        # The operator's manual exit. It records a request in the audit log and executes
+        # nothing: the run's own process closes the position, in the run's mode.
+        ("/api/positions/close", "POST"),
         # §12.4 puts sizing and risk limits in the operator's hands, and §20
         # gives this screen "limit changes (admin)". It creates a configuration
         # and never edits one: §14.1 versions them and has runs reference one,

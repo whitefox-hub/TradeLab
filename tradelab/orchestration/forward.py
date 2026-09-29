@@ -137,6 +137,32 @@ class Store:
                 "VALUES (:run, :t, 'USDT', :e, :f, :u) ON CONFLICT DO NOTHING"),
                 {"run": run_id, "t": at, "e": equity, "f": equity - used, "u": used})
 
+    # -- manual exits ------------------------------------------------------------
+
+    def pending_closes(self, run_id: uuid.UUID) -> list[tuple[int, str]]:
+        """Operator requests to close a position of this run, not yet answered.
+
+        The request and its answer are both audit rows, so the queue is the audit trail.
+        """
+        with self.engine.begin() as db:
+            rows = db.execute(sa.text(
+                "SELECT q.id, q.payload->>'asset' FROM audit_log q "
+                "WHERE q.action = 'position.close_request' AND q.payload->>'run_id' = :run "
+                "AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'position.closed' "
+                "AND a.payload->>'request' = q.id::text) ORDER BY q.id"),
+                {"run": str(run_id)}).all()
+        return [(int(i), str(a)) for i, a in rows]
+
+    def answer_close(self, request: int, run_id: uuid.UUID, asset: str,
+                     outcome: dict[str, Any]) -> None:
+        with self.engine.begin() as db:
+            db.execute(sa.text(
+                "INSERT INTO audit_log (actor, action, subject_kind, subject_id, payload) "
+                "VALUES ('forward-runner', 'position.closed', 'position', :s, CAST(:p AS jsonb))"),
+                {"s": f"{run_id}:{asset}",
+                 "p": json.dumps({"request": str(request), "run_id": str(run_id),
+                                  "asset": asset, **outcome})})
+
     def halt(self, run_id: uuid.UUID, reason: str) -> None:
         with self.engine.begin() as db:
             db.execute(sa.text("UPDATE runs SET status = 'halted', halt_reason = :r "
