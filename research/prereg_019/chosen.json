@@ -1,0 +1,5 @@
+{
+  "threshold": 65,
+  "aging_days": 14,
+  "target_scale": 1.25
+}
