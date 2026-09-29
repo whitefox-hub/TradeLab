@@ -196,8 +196,8 @@ def holdout() -> int:
     for rule in chosen:
         s = score(trades(ms, close, rule, *HOLDOUT), *HOLDOUT)
         report["rules"].append({"rule": rule, **s,
-                                "pattern": s["sharpe"] > report["threshold"]
-                                and s["mean_net_bps"] > 0})
+                                "pattern": bool(s["sharpe"] > report["threshold"])
+                                and bool(s["mean_net_bps"] > 0)})
     (OUT / "holdout.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
     return 0

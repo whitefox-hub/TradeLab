@@ -1,0 +1,21 @@
+{
+  "hold_final": 6.174598297129863,
+  "threshold": 0.8720520972597884,
+  "rules": [
+    {
+      "rule": {
+        "family": "weekday",
+        "day": 2,
+        "regime": "up",
+        "side": 1
+      },
+      "trades": 104,
+      "mean_net_bps": 47.71730250917463,
+      "mean_gross_bps": 70.86697783662078,
+      "win": 0.5480769230769231,
+      "sharpe": 0.6585416940364063,
+      "final": 1.5185774781611028,
+      "pattern": false
+    }
+  ]
+}
