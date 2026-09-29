@@ -70,11 +70,12 @@ def rules() -> list[dict]:
 
 
 def hourly() -> tuple[np.ndarray, np.ndarray]:
-    """A complete hourly grid; a missing hour carries the previous close."""
+    """A complete hourly grid; a missing hour (an exchange outage) is NaN, and no trade may
+    enter or exit on it."""
     frame = pl.read_parquet(DATA)
     grid = pl.DataFrame({"close_ms": np.arange(frame["close_ms"].min(),
                                                frame["close_ms"].max() + 1, 3_600_000)})
-    full = grid.join(frame, on="close_ms", how="left").with_columns(pl.col("close").forward_fill())
+    full = grid.join(frame, on="close_ms", how="left")
     return full["close_ms"].to_numpy(), full["close"].to_numpy()
 
 
@@ -83,13 +84,11 @@ def trades(ms: np.ndarray, close: np.ndarray, rule: dict, lo: date, hi: date) ->
     midnight = np.flatnonzero(ms % 86_400_000 == 0)            # index of each 00:00 close
     daily = close[midnight]
     days = [datetime.fromtimestamp(ms[i] / 1000, UTC).date() for i in midnight]
-    avg = np.full(daily.size, np.nan)
-    c = np.concatenate([[0.0], np.cumsum(daily)])
-    avg[SMA_DAYS - 1:] = (c[SMA_DAYS:] - c[:-SMA_DAYS]) / SMA_DAYS
+    avg = pl.Series(daily).fill_nan(None).forward_fill().rolling_mean(SMA_DAYS).to_numpy()
     out = []
     for k in range(1, midnight.size - 1):
         day = days[k]                    # the 00:00 close that opens this trading day
-        if not lo <= day <= hi or not np.isfinite(avg[k]):
+        if not lo <= day <= hi or not np.isfinite(avg[k]) or not np.isfinite(daily[k]):
             continue
         regime = "up" if daily[k] > avg[k] else "down"
         if rule["regime"] != "any" and rule["regime"] != regime:
@@ -107,6 +106,10 @@ def trades(ms: np.ndarray, close: np.ndarray, rule: dict, lo: date, hi: date) ->
             entry, exit_ = i, midnight[k + 1]
         else:
             entry, exit_ = i + rule["start"], i + rule["start"] + 4
+        if not (np.isfinite(close[entry]) and np.isfinite(close[exit_])):
+            continue                     # an outage: no price to trade at
+        if rule["family"] == "prev" and not np.isfinite(daily[k - 1]):
+            continue
         gross = rule["side"] * (close[exit_] / close[entry] - 1)
         out.append((day, gross, (1 - COST) ** 2 * (1 + gross) - 1))
     return pl.DataFrame(out, schema={"day": pl.Date, "gross": pl.Float64, "net": pl.Float64},
@@ -132,7 +135,7 @@ def check() -> int:
     hourly_daily = pl.DataFrame({
         "day": [(datetime.fromtimestamp(m / 1000, UTC) - timedelta(days=1)).date()
                 for m in ms[midnight]], "h": close[midnight]})
-    joined = one_day.join(hourly_daily, on="day")
+    joined = one_day.join(hourly_daily.drop_nans("h"), on="day")
     worst = float((joined["close"] - joined["h"]).abs().max())
     print(f"1d closes against 00:00 hourly closes: {joined.height} days, max diff {worst}")
     assert worst < 1e-6
@@ -141,7 +144,7 @@ def check() -> int:
         full = trades(ms, close, rule, *DISCOVER)
         cut = int(rng.integers(len(ms) // 2, len(ms) - 48))
         bent = close.copy()
-        bent[cut + 1:] *= rng.uniform(0.7, 1.3, close.size - cut - 1)
+        bent[cut + 1:] = bent[cut + 1:] * rng.uniform(0.7, 1.3, close.size - cut - 1)
         moved = trades(ms, bent, rule, *DISCOVER)
         cut_day = datetime.fromtimestamp(ms[cut] / 1000, UTC).date() - timedelta(days=2)
         a = full.filter(pl.col("day") < cut_day)
