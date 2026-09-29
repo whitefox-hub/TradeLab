@@ -83,3 +83,10 @@ RESULT-015's SMA 150 on $10,000.
 * No parameter or rule outside this text; the grid is the only optimisation.
 * The out-of-sample span is downloaded and read once, after the chosen parameters are
   committed.
+
+## Amendment, 2026-09-29 — the out-of-sample start
+
+Written after the download and before any out-of-sample figure. data.binance.vision holds
+USDⓈ-M 5-minute klines for BTCUSDT and ETHUSDT from **2019-12** only, and the score's
+volatility component needs a 30-day median. The out-of-sample span is therefore
+**2020-01-01 → 2021-10-31**. Nothing else changes.
