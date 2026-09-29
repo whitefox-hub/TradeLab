@@ -1,0 +1,17 @@
+{
+  "trials": 444,
+  "positive_discover": 203,
+  "passed_validation": 1,
+  "forward": [
+    {
+      "family": "major",
+      "signal": "mom",
+      "lookback": 30,
+      "hold": 1,
+      "direction": 1,
+      "legs": "ls",
+      "quantile": 0.0,
+      "asset": "ETH"
+    }
+  ]
+}
