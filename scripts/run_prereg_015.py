@@ -21,6 +21,7 @@ import polars as pl
 from tradelab.collectors.binance.intraday import fetch_text
 
 ARCHIVE = "https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1d"
+DAILY = "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1d"
 DATA = Path("data/parquet/spot_btc_1d.parquet")
 OUT = Path("research/prereg_015")
 COST = 0.00115
@@ -35,7 +36,11 @@ def fetch() -> int:
     with httpx.Client(timeout=60.0) as client:
         while month <= date(2026, 9, 1):
             text = fetch_text(client, f"{ARCHIVE}/BTCUSDT-1d-{month:%Y-%m}.zip")
-            for line in (text or "").splitlines():
+            if text is None:                  # the month is not closed: its daily files
+                text = "\n".join(filter(None, (
+                    fetch_text(client, f"{DAILY}/BTCUSDT-1d-{month:%Y-%m}-{d:02d}.zip")
+                    for d in range(1, 32))))
+            for line in text.splitlines():
                 cells = line.split(",")
                 if not cells[0].isdigit():
                     continue
