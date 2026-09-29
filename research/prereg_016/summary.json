@@ -1,0 +1,31 @@
+{
+  "trials": 50,
+  "base": {
+    "kind": "sma",
+    "length": 120,
+    "band": 0.0,
+    "confirm": 1,
+    "sizing": "full",
+    "final": 48.71420054721289,
+    "sharpe": 1.307263968112791,
+    "max_drawdown": -0.3232068041511392,
+    "cagr": 0.6027044305750195
+  },
+  "better_than_base": 2,
+  "holdout": [
+    {
+      "kind": "sma",
+      "length": 120,
+      "band": 0.0,
+      "confirm": 1,
+      "sizing": "vol"
+    },
+    {
+      "kind": "sma",
+      "length": 120,
+      "band": 0.01,
+      "confirm": 1,
+      "sizing": "vol"
+    }
+  ]
+}
