@@ -386,9 +386,10 @@ def _one(args):
     else:
         base = market(SEEN)
         b0, b1 = span_index(base, *TRAIN)
-        trimmed = Market(base.ms[max(b0 - 1, 0):b1], {a: base.close[a][max(b0 - 1, 0):b1] for a in ASSETS},
-                         {a: base.qv[a][max(b0 - 1, 0):b1] for a in ASSETS},
-                         {a: base.tbq[a][max(b0 - 1, 0):b1] for a in ASSETS}, base.regime[max(b0 - 1, 0):b1])
+        cut = slice(max(b0 - 1, 0), b1)
+        trimmed = Market(base.ms[cut], {a: base.close[a][cut] for a in ASSETS},
+                         {a: base.qv[a][cut] for a in ASSETS},
+                         {a: base.tbq[a][cut] for a in ASSETS}, base.regime[cut])
         days = (TRAIN[1] - TRAIN[0]).days + 150
         m = bootstrap_market(trimmed, seed, days)
         lo, hi = 150 * DAY, m.ms.size
