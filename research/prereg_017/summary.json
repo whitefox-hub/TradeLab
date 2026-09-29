@@ -1,0 +1,12 @@
+{
+  "trials": 62,
+  "positive_discover": 9,
+  "holdout": [
+    {
+      "family": "weekday",
+      "day": 2,
+      "regime": "up",
+      "side": 1
+    }
+  ]
+}
