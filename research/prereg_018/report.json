@@ -1,0 +1,117 @@
+[
+  {
+    "span": "2021-11 \u2192 2024-09",
+    "account_end": 10559.254109883112,
+    "max_drawdown": -0.13438372975329238,
+    "hold_btc_end": 10459.247954711229,
+    "sma150_end": 18629.623334669774,
+    "closed_trades": 146,
+    "realised_profit": 1339.1810508000817,
+    "median_days_to_target": 0.5173611111111112,
+    "p90_days_to_target": 11.79861111111111,
+    "longest_days_held": 845.1388888888889,
+    "worst_adverse": -0.7729211253243352,
+    "rescues": 19,
+    "scaled": 60,
+    "trapped_at_end": [
+      {
+        "asset": "ETH",
+        "opened": "2021-11-08",
+        "spent": 438.8966775534863,
+        "now": 243.50701175307688,
+        "accumulation": true
+      },
+      {
+        "asset": "ETH",
+        "opened": "2024-03-11",
+        "spent": 1000.0,
+        "now": 677.4331861014812,
+        "accumulation": true
+      },
+      {
+        "asset": "BTC",
+        "opened": "2024-04-08",
+        "spent": 903.9583648750859,
+        "now": 812.8027372548929,
+        "accumulation": true
+      },
+      {
+        "asset": "ETH",
+        "opened": "2024-06-16",
+        "spent": 466.6371680028259,
+        "now": 344.76834640347107,
+        "accumulation": true
+      },
+      {
+        "asset": "BTC",
+        "opened": "2024-07-27",
+        "spent": 414.84442018434186,
+        "now": 387.4490683518697,
+        "accumulation": false
+      }
+    ],
+    "pools_end": {
+      "operational": 4100.0,
+      "profits": 14.844420184341846,
+      "reserve": 4000.0
+    },
+    "max_locked": 3535.789709094311,
+    "days_entries_blocked": 71,
+    "days": 1058,
+    "mean_invested_share": 0.21577943217851306
+  },
+  {
+    "span": "2024-10 \u2192 2026-09",
+    "account_end": 10568.065185873196,
+    "max_drawdown": -0.12122951015591032,
+    "hold_btc_end": 13298.501976870177,
+    "sma150_end": 14498.839223887726,
+    "closed_trades": 146,
+    "realised_profit": 1352.5323070701124,
+    "median_days_to_target": 0.421875,
+    "p90_days_to_target": 8.809027777777779,
+    "longest_days_held": 244.85416666666666,
+    "worst_adverse": -0.6421097468227983,
+    "rescues": 21,
+    "scaled": 52,
+    "trapped_at_end": [
+      {
+        "asset": "ETH",
+        "opened": "2025-08-24",
+        "spent": 1000.0,
+        "now": 544.4296228847849,
+        "accumulation": true
+      },
+      {
+        "asset": "BTC",
+        "opened": "2025-10-05",
+        "spent": 931.522499562687,
+        "now": 633.2710930583876,
+        "accumulation": true
+      },
+      {
+        "asset": "BTC",
+        "opened": "2026-09-21",
+        "spent": 616.8980881139142,
+        "now": 602.397006343326,
+        "accumulation": false
+      },
+      {
+        "asset": "ETH",
+        "opened": "2026-09-21",
+        "spent": 400.0,
+        "now": 383.85574419318635,
+        "accumulation": false
+      }
+    ],
+    "pools_end": {
+      "operational": 4400.0,
+      "profits": 4.111719393511066,
+      "reserve": 4000.0
+    },
+    "max_locked": 3561.3626409826675,
+    "days_entries_blocked": 7,
+    "days": 724,
+    "mean_invested_share": 0.18195215801288617
+  }
+]
