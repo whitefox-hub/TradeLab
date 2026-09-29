@@ -5,10 +5,10 @@
     .venv/bin/python scripts/run_btc_trend.py            # runs until stopped
     .venv/bin/python scripts/run_btc_trend.py --once     # one tick, for a check
 
-Two books on Binance spot prices, each $10,000 of fake capital:
+Three books on Binance spot prices, each $10,000 of fake capital:
 
-* **BTC above SMA 150**: long while the last closed day is above its 150-day average,
-  in USDT otherwise; decided once per UTC day.
+* **BTC above SMA 150** (PREREG-015) and **SMA 120** (RESULT-015's addendum): long while
+  the last closed day is above its average, in USDT otherwise; decided once per UTC day.
 * **Hold BTC**: bought on its first tick, never sold, the reference.
 
 Both are sized at the active `max_position_pct_equity` (25% by default), so they compare
@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import ModuleType
 
 import httpx
 import numpy as np
@@ -36,13 +37,12 @@ from tradelab.execution.intent import IntentLog
 from tradelab.execution.types import AccountState, ExecutionMode, Fill, Instrument, Order, Side
 from tradelab.orchestration.forward import Snapshot, Store
 from tradelab.risk.limits import RiskEngine
-from tradelab.strategy import btc_trend
+from tradelab.strategy import btc_trend, btc_trend_120
 
 REST = "https://api.binance.com"
 SYMBOL = "BTCUSDT"
 CAPITAL = Decimal(10_000)
 STATE_DIR = Path("data/forward/btc-trend")
-IMPL = Path("tradelab/strategy/btc_trend.py")
 TICK_S = 300
 POLL_S = 5
 FEE = Decimal("0.001")
@@ -79,6 +79,7 @@ class Book:
     name: str
     label: str
     registration: str
+    rule: ModuleType | None = None      # None: the reference, bought once and held
     state: dict = field(default_factory=dict)
 
     def start(self, store: Store, inst: Instrument, limits_id, limits) -> None:
@@ -86,7 +87,8 @@ class Book:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.store = store
         self.limits = limits
-        strategy = store.ensure_strategy(self.name, IMPL)
+        strategy = store.ensure_strategy(self.name, Path((self.rule or btc_trend).__file__)
+                                         .relative_to(Path.cwd()))
         self.run_id = store.ensure_run(strategy, self.label, {
             "registration": self.registration, "purpose": "forward validation",
             "capital_is_fake": True, "prices": "binance spot"}, CAPITAL, limits_id)
@@ -195,39 +197,46 @@ def main() -> int:
     limits_id, limits = store.active_limits()
     client = httpx.Client(timeout=30.0)
     inst = instrument(client)
-    sma = Book("btc-sma150", "BTC above SMA 150 (RESULT-015)", "PREREG-015")
+    trend = [Book("btc-sma150", "BTC above SMA 150 (RESULT-015)", "PREREG-015", btc_trend),
+             Book("btc-sma120", "BTC above SMA 120 (RESULT-015 addendum)",
+                  "RESULT-015 addendum, forward only", btc_trend_120)]
     hold = Book("hold-btc", "Hold BTC (reference)", "PREREG-015 benchmark")
-    for book in (sma, hold):
+    books = [*trend, hold]
+    for book in books:
         book.start(store, inst, limits_id, limits)
 
     while True:
-        for book in (sma, hold):
+        for book in books:
             book.close_requested(client)
         now = datetime.now(UTC)
         day, closes = closed_days(client, now)
         price = ticker(client)
 
-        signal = btc_trend.long(closes)
-        if signal is not None and sma.state.get("day") != day:
-            if signal != sma.state.get("signal"):
-                sma.state["manual_flat"] = False       # a new signal supersedes a manual exit
-            sma.state.update(day=day, signal=signal)
+        for book in trend:
+            assert book.rule is not None
+            signal = book.rule.long(closes)
+            if signal is None or book.state.get("day") == day:
+                continue
+            if signal != book.state.get("signal"):
+                book.state["manual_flat"] = False     # a new signal supersedes a manual exit
+            book.state.update(day=day, signal=signal)
             # Switch only: the study held its position unchanged between signals.
-            if signal and sma.held == 0 and not sma.state.get("manual_flat"):
-                sma.trade_to(sma.full(price), price, now)
-            elif not signal and sma.held != 0:
-                sma.trade_to(Decimal(0), price, now)
-            print(f"{now:%Y-%m-%d %H:%M} {sma.name}: {day} close {closes[-1]:,.0f} vs SMA "
-                  f"{closes[-btc_trend.SMA_DAYS:].mean():,.0f} -> "
+            if signal and book.held == 0 and not book.state.get("manual_flat"):
+                book.trade_to(book.full(price), price, now)
+            elif not signal and book.held != 0:
+                book.trade_to(Decimal(0), price, now)
+            print(f"{now:%Y-%m-%d %H:%M} {book.name}: {day} close {closes[-1]:,.0f} vs SMA "
+                  f"{closes[-book.rule.SMA_DAYS:].mean():,.0f} -> "
                   f"{'long' if signal else 'flat'}", flush=True)
         if not hold.state.get("bought"):
             hold.trade_to(hold.full(price), price, now)
             hold.state["bought"] = hold.held > 0
 
-        for book in (sma, hold):
+        for book in books:
             book.engine.risk.mark_equity(book.equity(price))
-        sma.engine.risk.enforce(now)       # the reference is never stopped: it is the yardstick
-        for book in (sma, hold):
+        for book in trend:
+            book.engine.risk.enforce(now)   # the reference is never stopped: it is the yardstick
+        for book in books:
             equity = book.persist(now, price)
             print(f"{now:%Y-%m-%d %H:%M} {book.name}: {book.held} BTC, equity {equity:,.2f}",
                   flush=True)
@@ -236,7 +245,7 @@ def main() -> int:
         wake = time.time() + TICK_S - time.time() % TICK_S + 15
         while (left := wake - time.time()) > 0:
             time.sleep(min(POLL_S, left))
-            for book in (sma, hold):
+            for book in books:
                 try:
                     book.close_requested(client)
                 except httpx.HTTPError as failed:

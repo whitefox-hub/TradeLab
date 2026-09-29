@@ -42,3 +42,17 @@ and 2024-11 → 2026-09. The three with the largest discovery excess went to the
   $70,779, since 2026-08-19.
 
 Next, if pursued: a forward run in the simulator beside holding BTC, under §15.
+
+## Addendum, 2026-09-29 — the length of the average
+
+After every span had been read, the average was scanned from 20 to 300 days in steps of
+10 (holdout from 2018-07-01, so that 300 days of warm-up exist). **150 sits at the edge of
+the good region:** 110 to 140 days beat holding in all three spans with wide margins,
+while 150 beat it by 2% in the holdout and 160 and above did not. The centre of the region
+is 120 days (×15.8, ×2.50 and ×1.50 against holding's ×9.6, ×1.35 and ×1.21; worst
+drawdown −31%). Below 40 days the rule switches up to 40 times a year and costs eat it.
+
+The 120-day rule was chosen from that scan, which used the holdout, so **no historical
+figure is evidence for it**. It runs forward beside the 150-day book (`btc_trend_120`,
+book `btc-sma120`) and is judged only on data after 2026-09-29. The 150-day book is
+unchanged.
