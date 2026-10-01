@@ -45,22 +45,49 @@
   .bar { display:flex; align-items:center; margin:18px 0 0; }
   .bar .spacer { flex:1; }
   dialog { background:var(--panel); color:var(--text); border:1px solid var(--line);
-    border-radius:14px; padding:22px 24px; width:min(720px, 94vw); max-height:88vh; }
+    border-radius:14px; padding:0; width:min(860px, 96vw); max-height:92vh; }
+  dialog[open] { display:flex; flex-direction:column; }
   dialog::backdrop { background:rgba(0,0,0,.6); }
-  dialog h2 { margin:0 0 4px; font-size:19px; font-weight:630; }
-  dialog label { display:block; margin:14px 0 6px; font-size:13.5px;
-    color:var(--muted); font-weight:560; }
-  dialog input, dialog textarea { width:100%; }
-  .fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
-    gap:10px 18px; margin-top:18px; padding-top:16px;
-    border-top:1px solid var(--line); }
-  .field label { margin:0 0 4px; font-family:ui-monospace,SFMono-Regular,monospace;
-    font-size:12.5px; }
-  .field input { text-align:right; font-variant-numeric:tabular-nums; }
-  .field .rng { font-size:11.5px; color:var(--muted); margin-top:3px; }
+  .ed-head { padding:20px 24px 12px; border-bottom:1px solid var(--line); }
+  .ed-head h2 { margin:0 0 4px; font-size:19px; font-weight:630; }
+  .ed-head .sub { margin:0; font-size:14px; }
+  .ed-body { padding:6px 24px 18px; overflow-y:auto; }
+  .ed-foot { padding:12px 24px 16px; border-top:1px solid var(--line);
+    background:var(--panel-2); border-radius:0 0 14px 14px; }
+  .meta { display:grid; grid-template-columns:1fr 2fr; gap:14px; margin-top:14px; }
+  @media (max-width: 700px) { .meta { grid-template-columns:1fr; } }
+  .meta label { display:block; margin:0 0 5px; font-size:13.5px; color:var(--muted);
+    font-weight:560; }
+  .meta input, .meta textarea { width:100%; }
+  .meta .help { font-size:12px; color:var(--muted); margin-top:4px; }
+  .meta .help.bad, .field .rng.bad { color:var(--down); }
+  .meta input.bad, .meta textarea.bad { border-color:var(--down); }
+  fieldset.group { border:1px solid var(--line); border-radius:12px; margin:16px 0 0;
+    padding:6px 16px 14px; }
+  fieldset.group legend { padding:0 6px; font-size:14px; font-weight:630; }
+  fieldset.group .why { color:var(--muted); font-size:12.5px; margin:2px 0 8px; }
+  .fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    gap:12px 18px; }
+  .field { padding:8px 10px; border-radius:9px; border:1px solid transparent; }
+  .field.changed { border-color:color-mix(in srgb, var(--accent) 55%, transparent);
+    background:color-mix(in srgb, var(--accent) 7%, transparent); }
+  .field label { display:block; margin:0; font-size:13.5px; font-weight:580; color:var(--text); }
+  .field .code { font-family:ui-monospace,SFMono-Regular,monospace; font-size:11.5px;
+    color:var(--muted); }
+  .field .row { display:flex; align-items:center; gap:8px; margin-top:6px; }
+  .field input { flex:1; min-width:0; text-align:right; font-variant-numeric:tabular-nums; }
+  .field .as { font-size:12.5px; color:var(--muted); min-width:58px;
+    font-variant-numeric:tabular-nums; }
+  .field .rng { font-size:11.5px; color:var(--muted); margin-top:4px; }
+  .field .was { font-size:11.5px; color:var(--accent); margin-top:2px; }
   .field input.bad { border-color:var(--down); }
-  .actions-end { display:flex; gap:10px; align-items:center; margin-top:20px; }
+  .tag.small { font-size:10px; padding:1px 7px; margin-left:6px; vertical-align:1px; }
+  .changes { font-size:13.5px; color:var(--muted); margin:0 0 10px; }
+  .changes strong { color:var(--text); }
+  .actions-end { display:flex; gap:10px; align-items:center; }
   .actions-end .spacer { flex:1; }
+  .err { color:var(--down); font-size:13.5px; margin-top:8px; white-space:pre-line; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
 </style>
 </head>
 <body>
@@ -130,26 +157,41 @@
 </div>
 
 <dialog id="editor">
-  <h2>New configuration</h2>
-  <p class="sub">Every limit is set. One left out would take a default nobody
-    chose, so there is no partial change — a configuration is the whole set.</p>
-
-  <label for="c-name">Name</label>
-  <input id="c-name" maxlength="64" placeholder="tighter-drawdown-2026-09">
-
-  <label for="c-why">Rationale</label>
-  <textarea id="c-why" rows="3" maxlength="1000"
-    placeholder="Why these numbers. A limit change nobody can review is one nobody did."></textarea>
-
-  <div class="fields" id="fields"></div>
-
-  <div class="actions-end">
-    <button class="ghost" id="reset">Reset to current</button>
-    <div class="spacer"></div>
-    <button class="ghost" id="cancel">Cancel</button>
-    <button class="primary" id="save">Create</button>
+  <div class="ed-head">
+    <h2>New configuration</h2>
+    <p class="sub">Starts from the limits in force. Change what you need; every limit is
+      saved, so a configuration is always the whole set. The current one stays in the
+      history.</p>
   </div>
-  <div class="err" id="err"></div>
+
+  <div class="ed-body">
+    <div class="meta">
+      <div>
+        <label for="c-name">Name</label>
+        <input id="c-name" maxlength="64" placeholder="btc-plus-one-100pct" autocomplete="off">
+        <div class="help" id="h-name">3–64 characters: letters without accents, digits,
+          spaces, <code>_ . -</code></div>
+      </div>
+      <div>
+        <label for="c-why">Rationale</label>
+        <textarea id="c-why" rows="2" maxlength="1000"
+          placeholder="Why these numbers. A limit change nobody can review is one nobody did."></textarea>
+        <div class="help" id="h-why">At least 10 characters.</div>
+      </div>
+    </div>
+    <div id="groups"></div>
+  </div>
+
+  <div class="ed-foot">
+    <p class="changes" id="changes"></p>
+    <div class="actions-end">
+      <button class="ghost" id="reset">Reset to current</button>
+      <div class="spacer"></div>
+      <button class="ghost" id="cancel">Cancel</button>
+      <button class="primary" id="save">Create</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
 </dialog>
 
 <script src="/static/app.js"></script>
@@ -161,40 +203,123 @@ const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
 
 let current = [];
 
+// Grouping and plain names for the editor only; the server's names and bounds are the truth.
+const GROUPS = [
+  ["Position size", "How large one position may be.", {
+    max_position_pct_equity: ["Largest position", "pct"],
+    min_position_pct_equity: ["Smallest position", "pct"],
+    max_position_notional: ["Largest position, USDT", "usd"],
+    min_position_notional: ["Smallest position, USDT", "usd"]}],
+  ["Exposure", "How much of the account may be in the market at once.", {
+    max_gross_exposure: ["Gross exposure", "x"],
+    max_net_exposure: ["Net exposure", "x"],
+    max_leverage: ["Leverage", "x"],
+    max_open_positions: ["Open positions", ""],
+    max_positions_per_cluster: ["Positions per correlated cluster", ""]}],
+  ["Losses", "These halt the run. A halt stops new buying; it never sells a position.", {
+    max_daily_loss: ["Daily loss, from the day's opening equity", "pct"],
+    max_drawdown_from_peak: ["Drawdown from the peak", "pct"]}],
+  ["Orders", "Guards against a runaway or broken loop.", {
+    min_seconds_between_entries: ["Seconds between entries", "s"],
+    max_open_orders: ["Open orders", ""],
+    max_orders_per_minute: ["Orders per minute", ""],
+    max_consecutive_errors: ["Consecutive errors", ""],
+    max_price_deviation_bps: ["Price deviation from mid, bp", "bp"]}],
+];
+
+const NAME_OK = /^[A-Za-z0-9 _.-]{3,64}$/;
+const num = (text) => Number(String(text).trim().replace(",", "."));
+const shown = (kind, v) => !Number.isFinite(v) ? "" : kind === "pct"
+  ? `= ${(v * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })} %`
+  : kind === "x" ? `= ${v}×` : kind === "usd" ? `$${v.toLocaleString()}` : "";
+
+function fieldHtml(l, label, kind) {
+  return `
+    <div class="field" id="w-${escape(l.name)}">
+      <label for="f-${escape(l.name)}">${escape(label)}${
+        l.halts ? '<span class="tag halts small">halts</span>' : ""}</label>
+      <div class="code">${escape(l.name)}</div>
+      <div class="row">
+        <input id="f-${escape(l.name)}" inputmode="decimal" value="${escape(Number(l.value))}"
+          min="${escape(l.low)}" max="${escape(l.high)}" data-kind="${kind}" autocomplete="off">
+        <span class="as" id="a-${escape(l.name)}">${shown(kind, Number(l.value))}</span>
+      </div>
+      <div class="rng" id="r-${escape(l.name)}">allowed ${escape(l.low)} – ${escape(l.high)}${
+        l.whole ? ", whole number" : ""}</div>
+      <div class="was" id="c-${escape(l.name)}"></div>
+    </div>`;
+}
+
 function openEditor() {
   // Pre-filled with the limits in force; a config must include every field.
-  $("fields").innerHTML = current.map((l) => `
-    <div class="field">
-      <label for="f-${escape(l.name)}">${escape(l.name)}</label>
-      <input id="f-${escape(l.name)}" type="number" value="${escape(l.value)}"
-        min="${escape(l.low)}" max="${escape(l.high)}"
-        step="${l.whole ? "1" : "any"}">
-      <div class="rng">${escape(l.low)} – ${escape(l.high)}${
-        l.halts ? " · halts the run" : ""}</div>
-    </div>`).join("");
+  const placed = new Set();
+  const byName = Object.fromEntries(current.map((l) => [l.name, l]));
+  let html = GROUPS.map(([title, why, members]) => {
+    const items = Object.entries(members).filter(([n]) => byName[n]);
+    items.forEach(([n]) => placed.add(n));
+    return items.length ? `<fieldset class="group"><legend>${escape(title)}</legend>
+      <div class="why">${escape(why)}</div><div class="fields">${
+        items.map(([n, [label, kind]]) => fieldHtml(byName[n], label, kind)).join("")
+      }</div></fieldset>` : "";
+  }).join("");
+  const rest = current.filter((l) => !placed.has(l.name));
+  if (rest.length) {
+    html += `<fieldset class="group"><legend>Other</legend><div class="fields">${
+      rest.map((l) => fieldHtml(l, l.name, "")).join("")}</div></fieldset>`;
+  }
+  $("groups").innerHTML = html;
+  for (const l of current) $(`f-${l.name}`).addEventListener("input", refresh);
   $("c-name").value = "";
   $("c-why").value = "";
   $("err").textContent = "";
+  refresh();
   $("editor").showModal();
   $("c-name").focus();
 }
 
-async function create() {
-  $("err").textContent = "";
-  const limits = {};
-  let bad = null;
+// Validate as the server will, mark changed fields, and say what will change.
+function refresh() {
+  const problems = [];
+  const changed = [];
   for (const l of current) {
     const input = $(`f-${l.name}`);
-    const value = Number(input.value);
-    // Client-side hint only; the server check is authoritative.
-    const off = !Number.isFinite(value) || value < Number(l.low)
-      || value > Number(l.high) || (l.whole && !Number.isInteger(value));
+    const value = num(input.value);
+    const off = input.value.trim() === "" || !Number.isFinite(value)
+      || value < Number(l.low) || value > Number(l.high)
+      || (l.whole && !Number.isInteger(value));
     input.classList.toggle("bad", off);
-    if (off && !bad) bad = `${l.name}: ${l.bound}`;
-    limits[l.name] = value;
+    $(`r-${l.name}`).classList.toggle("bad", off);
+    $(`a-${l.name}`).textContent = shown(input.dataset.kind, value);
+    const differs = !off && value !== Number(l.value);
+    $(`w-${l.name}`).classList.toggle("changed", differs);
+    $(`c-${l.name}`).textContent = differs ? `was ${Number(l.value)}` : "";
+    if (off) problems.push(`${l.name}: ${l.bound}`);
+    if (differs) changed.push(`${l.name} ${Number(l.value)} → ${value}`);
   }
-  if (bad) { $("err").textContent = bad; return; }
+  const name = $("c-name").value.trim();
+  const why = $("c-why").value.trim();
+  const nameBad = name !== "" && !NAME_OK.test(name);
+  $("c-name").classList.toggle("bad", nameBad);
+  $("h-name").classList.toggle("bad", nameBad);
+  $("c-why").classList.toggle("bad", why !== "" && why.length < 10);
+  $("h-why").classList.toggle("bad", why !== "" && why.length < 10);
+  $("h-why").textContent = why.length < 10
+    ? `At least 10 characters (${why.length}/10).` : `${why.length}/1000 characters.`;
+  if (!NAME_OK.test(name)) problems.unshift("Name: 3–64 characters, letters without accents, digits, spaces, _ . -");
+  if (why.length < 10) problems.unshift("Rationale: at least 10 characters.");
+  $("changes").innerHTML = changed.length
+    ? `<strong>${changed.length} change${changed.length > 1 ? "s" : ""}:</strong> ${
+        changed.map(escape).join(" · ")}`
+    : "No limit changed yet.";
+  $("save").disabled = problems.length > 0 || changed.length === 0;
+  return { problems, changed };
+}
 
+async function create() {
+  $("err").textContent = "";
+  const { problems } = refresh();
+  if (problems.length) { $("err").textContent = problems.join("\n"); return; }
+  const limits = Object.fromEntries(current.map((l) => [l.name, num($(`f-${l.name}`).value)]));
   try {
     await api("/api/risk-limits", { method: "POST", body: JSON.stringify({
       name: $("c-name").value.trim(),
@@ -276,6 +401,8 @@ $("new").onclick = openEditor;
 $("cancel").onclick = () => $("editor").close();
 $("reset").onclick = openEditor;
 $("save").onclick = create;
+$("c-name").addEventListener("input", refresh);
+$("c-why").addEventListener("input", refresh);
 </script>
 </body>
 </html>
