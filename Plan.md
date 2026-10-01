@@ -8,7 +8,7 @@
 ## Current state — 2026-10-01
 
 **One strategy runs: the BTC ladder**, designed by the operator. It splits its budget into
-ten parts, each bought at its own price and sold on its own, and never sells at a loss.
+parts (now 20), each bought at its own price and sold on its own, and never sells at a loss.
 
 | Rule | |
 |---|---|
@@ -24,15 +24,15 @@ ten parts, each bought at its own price and sold on its own, and never sells at 
 | Runner | `scripts/run_btc_ladder.py`, state in `data/forward/btc-ladder/` |
 | Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
 | Screen | `http://127.0.0.1:8010/home`: the position and its P&L; the **BTC ladder** card (price, the high since the last buy, the next buy down and on a correction, and every part's cost, gain, minimum, cap and sell point, published by the book every 10 s and read by `/api/ladder`); a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours |
-| Parameters | `http://127.0.0.1:8010/parameters`: budget, parts, step, correction and pullback, validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
+| Parameters | `http://127.0.0.1:8010/parameters`: budget, parts, step, correction and pullback (now $2,000, 20, 1.5%, 5%, 2%), validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
+| Other screens | Audit, Risk limits and the scenario history page their lists, 100 records at a time. Algorithm and Market Sentiment belonged to the removed trend book; the ladder reads neither |
 
-**What the history says about it** (BTC spot hourly closes, $10,000, the rule as above):
-2018-01 → 2026-09, $55,039 against $61,242 for holding BTC, with a worst drawdown of −72%
-against −77%; 2022-01 → 2026-09, $23,573 against $18,176, with −58% against −67%; on average
-70–79% of the money in BTC. A 5% correction trigger beat a 2% one in four of five spans; it
-gives up some of a rise without real corrections (2023: $13,189 against $15,482). Sales
-rarely coincide: 3% of them in the same hour as another, never three at once. The parameters were tuned with the operator on these
-same years, so these figures flatter it; a walk-forward of the tuning (choosing each year
+**What the history says about it** (BTC spot hourly closes, $10,000, the settings now in force:
+20 parts, 1.5% step, 5% correction, 2% pullback): 2018-01 → 2026-09, $56,557 against $61,242
+for holding BTC, with a worst drawdown of −65% against −77%; 2022-01 → 2026-09, $19,424
+against $18,176, with −54% against −67%; 813 sales in 8.7 years, on average 64% of the money
+in BTC. Sales rarely coincide. The parameters were tuned with the operator on these same
+years, so these figures flatter it; a walk-forward of the tuning (choosing each year
 from the years before it) earned less than any fixed choice. The forward run is the test.
 
 The ladder replaced the **BTC +1%** book (one position, sold at +1%, bought again at once),
@@ -46,7 +46,12 @@ whose run is ended in the database.
 * the studies PREREG-007 to PREREG-019, their results, scripts and outputs. They remain in git
   history before commit `3335646`. PREREG-001 to 006 and the FINDINGs are kept;
 * the macro screen and its catalogue (§20.6, retired 2026-09-28): no strategy used them. The
-  tables remain.
+  tables remain;
+* dead code, 2026-10-01: modules nothing imported (`engines/tier_b`, `orchestration/persist`,
+  `storage/dataset`, `validation/baselines`, `validation/splits`), the 5-minute dataset
+  pipeline of the Flash Strike studies, and unused functions. Comments were removed from the
+  code (checked to leave every file's syntax tree unchanged); docstrings stay. Sections of
+  this specification that describe those modules are design, not inventory.
 
 What those studies established, in one line each: no 5-minute shock rule of 10,368 paid its
 costs (011); taking +1% without ever realising a loss converts BTC's direction into small
@@ -381,7 +386,7 @@ tradelab/
   regimes/           point-in-time regime classification
   engines/
     tier_a/          vectorized screening
-    tier_b/          nautilus adapters, cost models
+    tier_b/          nautilus adapters, cost models  (not built; removed 2026-10-01)
   validation/        CPCV, DSR, PBO, SPA, baselines, power
   portfolio/         correlation, allocation, aggregate capacity
   execution/         executor, venue adapters, reconciliation
