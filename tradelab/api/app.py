@@ -110,6 +110,15 @@ class ApprovalRequest(BaseModel):
 LADDER_STATUS = Path(__file__).resolve().parents[2] / "data/forward/btc-ladder/status.json"
 
 
+#: Every list that can grow is served a page at a time; the total goes in X-Total-Count.
+PER_PAGE = 100
+
+
+def _page(page: int) -> tuple[int, int]:
+    """(limit, offset) for a 1-based page."""
+    return PER_PAGE, (max(1, page) - 1) * PER_PAGE
+
+
 def _plain(value: Any) -> str:
     """A limit as a person writes it: 0.25, 10000, 60. The database pads NUMERIC columns
     with zeros (0.25000000), which reads as noise."""
@@ -324,11 +333,15 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return [dict(r) | {"age": str(r["age"])} for r in rows]
 
     @app.get("/api/audit")
-    def audit_trail(who: Operator = operator, session: Session = session_dep) -> list[dict]:
+    def audit_trail(response: Response, page: int = 1, who: Operator = operator,
+                    session: Session = session_dep) -> list[dict]:
+        limit, offset = _page(page)
         rows = session.execute(sa.text(
             "SELECT actor, action, subject_kind, subject_id, occurred_at "
-            "FROM audit_log ORDER BY occurred_at DESC LIMIT 500"
-        )).mappings().all()
+            "FROM audit_log ORDER BY occurred_at DESC, id DESC LIMIT :l OFFSET :o"
+        ), {"l": limit, "o": offset}).mappings().all()
+        response.headers["X-Total-Count"] = str(session.execute(
+            sa.text("SELECT count(*) FROM audit_log")).scalar())
         return [dict(r) for r in rows]
 
     @app.get("/api/approvals")
@@ -414,13 +427,17 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         }
 
     @app.get("/api/settings/{key}/history")
-    def setting_history(key: str, who: Operator = operator,
+    def setting_history(key: str, response: Response, page: int = 1,
+                        who: Operator = operator,
                         session: Session = session_dep) -> list[dict]:
+        limit, offset = _page(page)
         rows = session.execute(sa.text(
             "SELECT s.value, s.rationale, s.valid_from, u.email AS changed_by "
             "FROM app_settings s LEFT JOIN users u ON u.id = s.changed_by "
-            "WHERE s.key = :k ORDER BY s.valid_from DESC LIMIT 50"
-        ), {"k": key}).mappings().all()
+            "WHERE s.key = :k ORDER BY s.valid_from DESC LIMIT :l OFFSET :o"
+        ), {"k": key, "l": limit, "o": offset}).mappings().all()
+        response.headers["X-Total-Count"] = str(session.execute(sa.text(
+            "SELECT count(*) FROM app_settings WHERE key = :k"), {"k": key}).scalar())
         return [dict(r) for r in rows]
 
     @app.post("/api/settings/{key}", status_code=status.HTTP_201_CREATED)
@@ -552,7 +569,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                                     round(time.perf_counter() - started, 3))}
 
     @app.get("/api/scenario/history")
-    def scenario_history(limit: int = 40, who: Operator = operator,
+    def scenario_history(response: Response, limit: int = PER_PAGE, page: int = 1,
+                         who: Operator = operator,
                          session: Session = session_dep) -> list[dict[str, Any]]:
         """Scenario changes, newest first, read from `audit_log` (no second history table).
 
@@ -561,8 +579,12 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         rows = session.execute(sa.text(
             "SELECT actor, occurred_at, payload FROM audit_log "
             "WHERE subject_kind = 'scenario' AND action = 'scenario.set' "
-            "ORDER BY occurred_at DESC, id DESC LIMIT :n"
-        ), {"n": max(1, min(limit, 200))}).mappings().all()
+            "ORDER BY occurred_at DESC, id DESC LIMIT :n OFFSET :o"
+        ), {"n": max(1, min(limit, PER_PAGE)),
+            "o": (max(1, page) - 1) * max(1, min(limit, PER_PAGE))}).mappings().all()
+        response.headers["X-Total-Count"] = str(session.execute(sa.text(
+            "SELECT count(*) FROM audit_log WHERE subject_kind = 'scenario' "
+            "AND action = 'scenario.set'")).scalar())
 
         out: list[dict[str, Any]] = []
         for row in rows:
@@ -577,15 +599,19 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return out
 
     @app.get("/api/scenario/runs")
-    def scenario_runs(limit: int = 10, who: Operator = operator,
+    def scenario_runs(response: Response, limit: int = PER_PAGE, page: int = 1,
+                      who: Operator = operator,
                       session: Session = session_dep) -> list[dict[str, Any]]:
         """Scenario runs, newest first. Conditions stored per run; never join market_conditions."""
         rows = session.execute(sa.text(
             "SELECT id, ran_at, actor, trend, sentiment, "
             "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
             "  bars, baseline, conditioned, reached_step, stopped_because "
-            "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT :n"
-        ), {"n": max(1, min(limit, 100))}).mappings().all()
+            "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT :n OFFSET :o"
+        ), {"n": max(1, min(limit, PER_PAGE)),
+            "o": (max(1, page) - 1) * max(1, min(limit, PER_PAGE))}).mappings().all()
+        response.headers["X-Total-Count"] = str(session.execute(
+            sa.text("SELECT count(*) FROM scenario_runs")).scalar())
         return [{
             "id": str(r["id"]), "at": r["ran_at"].isoformat(), "actor": r["actor"],
             "trend": r["trend"], "direction": trend_direction(r["trend"]),
@@ -821,7 +847,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     ]
 
     @app.get("/api/risk-limits")
-    def risk_limits(who: Operator = operator,
+    def risk_limits(history_page: int = 1, events_page: int = 1, who: Operator = operator,
                     session: Session = session_dep) -> dict[str, Any]:
         """Every enforced limit and recorded breach.
 
@@ -881,13 +907,13 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "      AND a.action = 'risk_config.create' LIMIT 1) AS rationale, "
             "  (SELECT count(*) FROM runs r WHERE r.risk_limit_config_id = c.id) "
             "    AS runs "
-            "FROM risk_limit_configs c ORDER BY c.valid_from DESC LIMIT 50"
-        )).mappings().all()
+            "FROM risk_limit_configs c ORDER BY c.valid_from DESC LIMIT :l OFFSET :o"
+        ), dict(zip(("l", "o"), _page(history_page), strict=True))).mappings().all()
 
         events = session.execute(sa.text(
             "SELECT rule, observed, limit_value, action, occurred_at, run_id "
-            "FROM risk_events ORDER BY occurred_at DESC LIMIT 100"
-        )).mappings().all()
+            "FROM risk_events ORDER BY occurred_at DESC LIMIT :l OFFSET :o"
+        ), dict(zip(("l", "o"), _page(events_page), strict=True))).mappings().all()
 
         return {
             "source": "stored configuration" if stored is not None
@@ -912,7 +938,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "limit_value": str(e["limit_value"]), "action": e["action"],
                 "at": e["occurred_at"].isoformat(), "run_id": str(e["run_id"]),
             } for e in events],
-            "event_count": len(events),
+            # Totals for the pagers; event_count is every breach, not this page's.
+            "event_count": int(session.execute(
+                sa.text("SELECT count(*) FROM risk_events")).scalar() or 0),
+            "history_total": int(session.execute(
+                sa.text("SELECT count(*) FROM risk_limit_configs")).scalar() or 0),
         }
 
     @app.post("/api/risk-limits", status_code=status.HTTP_201_CREATED)

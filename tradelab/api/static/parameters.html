@@ -102,6 +102,7 @@
       <thead><tr><th>When</th><th>Values</th><th>By</th><th>Reason</th></tr></thead>
       <tbody id="history"></tbody>
     </table>
+    <div class="pager" id="pager"></div>
   </main>
 </div>
 
@@ -183,7 +184,12 @@ async function load() {
   const entry = data.editable.find((s) => s.key === KEY);
   current = entry && entry.value ? { ...DEFAULTS, ...entry.value } : { ...DEFAULTS };
   fill(current);
-  const history = await api(`/api/settings/${KEY}/history`);
+  await history(1);
+}
+
+async function history(page) {
+  const { items: history, total } = await apiPage(`/api/settings/${KEY}/history?page=${page}`);
+  pager("pager", page, total, history);
   $("history").innerHTML = history.length ? history.map((h) => `
     <tr><td>${escape(h.valid_from.slice(0, 16).replace("T", " "))}</td>
       <td>${escape(FIELDS.filter((f) => f in h.value).map((f) => `${f} ${h.value[f]}`)

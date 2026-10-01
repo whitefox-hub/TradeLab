@@ -137,6 +137,7 @@
       </tr></thead>
       <tbody id="history"></tbody>
     </table>
+    <div class="pager" id="pager-history"></div>
 
     <h2>Every breach the engine can raise</h2>
     <div class="kinds" id="kinds"></div>
@@ -155,6 +156,7 @@
       </tr></thead>
       <tbody id="events"></tbody>
     </table>
+    <div class="pager" id="pager-events"></div>
   </main>
 </div>
 
@@ -317,9 +319,14 @@ async function create() {
   } catch (e) { $("err").textContent = e.message; }
 }
 
-async function load() {
-  const data = await api("/api/risk-limits");
+let historyPage = 1, eventsPage = 1;
+
+async function load(h = historyPage, e = eventsPage) {
+  historyPage = h; eventsPage = e;
+  const data = await api(`/api/risk-limits?history_page=${h}&events_page=${e}`);
   current = data.limits;
+  pager("pager-history", h, data.history_total, (p) => load(p, eventsPage));
+  pager("pager-events", e, data.event_count, (p) => load(historyPage, p));
 
   $("cards").innerHTML = [
     [data.limits.length, "limits enforced"],

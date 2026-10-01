@@ -128,3 +128,8 @@ td.num, th.num { font-variant-numeric:tabular-nums; text-align:right; }
 .tag-pill.risk { color:var(--warn); border-color:var(--warn); }
 .stale { color:var(--down); font-weight:600; }
 .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:14px; }
+
+/* -- pagination ------------------------------------------------------------- */
+.pager { display:flex; align-items:center; gap:12px; margin:12px 0 4px; }
+.pager .pages { color:var(--muted); font-size:13.5px; font-variant-numeric:tabular-nums; }
+.pager button:disabled { opacity:.4; cursor:not-allowed; }

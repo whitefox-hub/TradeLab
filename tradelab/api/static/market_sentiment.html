@@ -177,6 +177,7 @@
         <div class="history">
           <div class="history-head">Changes</div>
           <ul id="t-history"></ul>
+          <div class="pager" id="t-pager"></div>
         </div>
       </section>
 
@@ -219,6 +220,7 @@
         <div class="history">
           <div class="history-head">Changes</div>
           <ul id="s-history"></ul>
+          <div class="pager" id="s-pager"></div>
         </div>
       </section>
 
@@ -488,8 +490,10 @@ function renderRun(run) {
     .map((n) => `<li>${escape(n)}</li>`).join("");
 }
 
-async function loadHistory() {
-  const raw = await api("/api/scenario/history?limit=40");
+async function loadHistory(page = 1) {
+  const { items: raw, total } = await apiPage(`/api/scenario/history?page=${page}`);
+  pager("t-pager", page, total, loadHistory);
+  pager("s-pager", page, total, loadHistory);
 
   // Missing `from` (older entries) is filled from the next (older) entry; never overwrite a
   // recorded one. The oldest row on the page stays null and counts as both dials moving.

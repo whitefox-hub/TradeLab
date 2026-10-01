@@ -33,6 +33,7 @@
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
+    <div class="pager" id="pager"></div>
   </main>
 </div>
 
@@ -40,8 +41,9 @@
 <script>
 mount("/audit", { onReady: load });
 
-async function load() {
-  const entries = await api("/api/audit");
+async function load(page = 1) {
+  const { items: entries, total } = await apiPage(`/api/audit?page=${page}`);
+  pager("pager", page, total, load);
   $("rows").innerHTML = entries.map((entry, index) => {
     const at = new Date(entry.occurred_at);
     const previous = entries[index + 1];

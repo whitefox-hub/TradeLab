@@ -2,7 +2,6 @@
    SCREENS is the single sidebar list for every page. */
 
 const SCREENS = [
-  { group: "Research" },
   { href: "/home", label: "Home" },
   { href: "/algorithm", label: "Algorithm" },
   { href: "/market-sentiment", label: "Market Sentiment" },
@@ -78,3 +77,30 @@ async function api(path, options = {}) {
 }
 
 const $ = (id) => document.getElementById(id);
+
+/* Pagination, 100 records a page. The server pages every list that can grow and sends the
+   total in X-Total-Count; `pager` draws "Page n of m" with previous and next under a table. */
+const PER_PAGE = 100;
+
+async function apiPage(path) {
+  const response = await fetch(path, { credentials: "same-origin" });
+  if (response.status === 401) {
+    location.replace("/login?next=" + encodeURIComponent(location.pathname));
+    throw new Error("unauthenticated");
+  }
+  if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
+  return { items: await response.json(),
+           total: Number(response.headers.get("X-Total-Count") || 0) };
+}
+
+function pager(id, page, total, onPage) {
+  const el = $(id);
+  if (!el) return;
+  const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+  if (total <= PER_PAGE) { el.innerHTML = total ? `<span class="pages">${total} records</span>` : ""; return; }
+  el.innerHTML = `
+    <button class="ghost" ${page <= 1 ? "disabled" : ""} data-go="${page - 1}">‹ Previous</button>
+    <span class="pages">Page ${page} of ${pages} · ${total.toLocaleString()} records</span>
+    <button class="ghost" ${page >= pages ? "disabled" : ""} data-go="${page + 1}">Next ›</button>`;
+  el.querySelectorAll("[data-go]").forEach((b) => { b.onclick = () => onPage(Number(b.dataset.go)); });
+}
