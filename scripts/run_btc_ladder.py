@@ -5,10 +5,10 @@
     .venv/bin/python scripts/run_btc_ladder.py          # runs until stopped
     .venv/bin/python scripts/run_btc_ladder.py --once   # one check, for a test
 
-The rule is `tradelab.strategy.btc_ladder`; its four numbers are the `btc_ladder` setting on
+The rule is `tradelab.strategy.btc_ladder`; its numbers are the `btc_ladder` setting on
 the Parameters screen, read every minute. A change ends the run and starts a new one from the
-budget, so a run is only ever under one configuration. The budget starts at $1,000 and
-grows with every realised profit; it sits inside a $10,000 fake account so the parts stay
+budget, so a run is only ever under one configuration. The budget (the setting's
+`budget`) grows with every realised profit; it sits inside a $10,000 fake account so the parts stay
 within the active risk limits. The price is checked every 10 seconds; the screen is written
 every 5 minutes and on every trade. Close sells every part at market, even at a loss,
 and pauses buying 24 h.
@@ -38,7 +38,6 @@ from tradelab.strategy import btc_ladder as lad
 REST = "https://api.binance.com"
 SYMBOL = "BTCUSDT"
 CAPITAL = Decimal(10_000)
-BUDGET = 1_000.0
 LABEL = "BTC ladder"
 STATE_DIR = Path("data/forward/btc-ladder")
 IMPL = Path("tradelab/strategy/btc_ladder.py")
@@ -76,12 +75,12 @@ class Book:
                     f"held; each sells on a {cfg.trail:.2%} pullback once at its "
                     "time-scaled minimum, at its cap at the latest; never at a loss",
             "config": asdict(cfg),
-            "budget": BUDGET, "capital_is_fake": True, "prices": "binance spot"},
+            "budget": cfg.budget, "capital_is_fake": True, "prices": "binance spot"},
             CAPITAL, limits_id)
         path = STATE_DIR / "state.json"
         raw = json.loads(path.read_text()) if path.exists() else {}
         s = raw.get("state", {})
-        self.cash = float(s.get("cash", BUDGET))
+        self.cash = float(s.get("cash", cfg.budget))
         self.parts = [lad.Part(p["price"], p["quantity"], p["spent"],
                                datetime.fromisoformat(p["opened"]), p.get("peak"))
                       for p in s.get("parts", [])]

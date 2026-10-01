@@ -15,7 +15,7 @@ ten parts, each bought at its own price and sold on its own, and never sells at 
 | Entry | the ladder adapts both ways. Down: a new part each time the price is **1.5%** below the cheapest part held. On a correction: a new part each time the price falls **5%** from its high since the last buy (or the last full exit), at least 1.5% from every part held. The first part is bought at once on the first start |
 | Exit | a part's minimum net gain grows with the days held: under 15 days +1%, 15–29 +3%, 30–44 +5%, 45–59 +8%, 60–89 +12%, 90 and over +20%. Once there it follows its high and sells on a 2% pullback, never below the minimum, and always at its cap (twice the minimum, at least +10%) |
 | Never at a loss | a part below its minimum waits, however long it takes |
-| Size | one part is a tenth of the budget: $1,000 to start, grown by every realised profit, inside a $10,000 fake account so the ten parts stay within the active risk limits (§14.1) |
+| Size | one part is the budget divided by the number of parts (now **$2,000 in 20 parts of $100**), grown by every realised profit, inside a $10,000 fake account so the parts stay within the active risk limits (§14.1); a part must be at least $50 |
 | Costs | Binance spot: 0.10% fee and 1.5 bp slippage on each side, checked every 10 seconds |
 
 | Where | |
@@ -24,7 +24,7 @@ ten parts, each bought at its own price and sold on its own, and never sells at 
 | Runner | `scripts/run_btc_ladder.py`, state in `data/forward/btc-ladder/` |
 | Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
 | Screen | `http://127.0.0.1:8010/home`: the position, its P&L, a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours |
-| Parameters | `http://127.0.0.1:8010/parameters`: the four numbers (parts, step, correction, pullback), validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
+| Parameters | `http://127.0.0.1:8010/parameters`: budget, parts, step, correction and pullback, validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
 
 **What the history says about it** (BTC spot hourly closes, $10,000, the rule as above):
 2018-01 → 2026-09, $55,039 against $61,242 for holding BTC, with a worst drawdown of −72%

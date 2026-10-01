@@ -32,11 +32,17 @@
 <div class="layout">
   <main class="content">
     <h1>Parameters</h1>
-    <p class="sub">The BTC ladder's numbers. Saving a change ends the current run and starts a
+    <p class="sub">The BTC ladder's settings. Saving a change ends the current run and starts a
       new one under the new numbers, so a run is only ever under one configuration.</p>
 
     <div class="panel">
       <div class="fields">
+        <div class="field" id="w-budget">
+          <label for="f-budget">Starting budget</label>
+          <div class="row"><input id="f-budget" inputmode="decimal"><span class="unit">$</span></div>
+          <div class="help">The money the ladder starts with, USDT. Realised profit adds to it;
+            each part is at least $50, which the risk limits require.</div>
+        </div>
         <div class="field" id="w-parts">
           <label for="f-parts">Parts</label>
           <div class="row"><input id="f-parts" inputmode="numeric"><span class="unit"></span></div>
@@ -106,11 +112,11 @@ mount("/parameters", { onReady: load });
 const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const KEY = "btc_ladder";
-const FIELDS = ["parts", "step_pct", "correction_pct", "trail_pct"];
+const FIELDS = ["budget", "parts", "step_pct", "correction_pct", "trail_pct"];
 // The strategy's defaults, shown until a value has been saved.
-const DEFAULTS = { parts: 10, step_pct: 1.5, correction_pct: 5, trail_pct: 2 };
+const DEFAULTS = { budget: 1000, parts: 10, step_pct: 1.5, correction_pct: 5, trail_pct: 2 };
 // Bounds as the server checks them (settings_rules._btc_ladder); the server is authoritative.
-const BOUNDS = { parts: [1, 50, true], step_pct: [0.5, 20], correction_pct: [0.5, 30],
+const BOUNDS = { budget: [100, 10000], parts: [1, 50, true], step_pct: [0.5, 20], correction_pct: [0.5, 30],
   trail_pct: [0.5, 20] };
 let current = { ...DEFAULTS };
 
@@ -138,10 +144,14 @@ function refresh() {
   }
   const ok = problems.length === 0;
   if (ok && v.step_pct * (v.parts - 1) >= 100) problems.push("the last part would be bought at zero");
+  if (ok && v.budget / v.parts < 50) {
+    problems.push(`a part would be $${(v.budget / v.parts).toFixed(2)}; the minimum is $50`);
+  }
   if (ok) {
     const last = 1 - Math.pow(1 - v.step_pct / 100, v.parts - 1);
     $("preview").innerHTML = `Each part is <strong>1/${v.parts}</strong> of the budget
-      (<strong>$${(1000 / v.parts).toFixed(2)}</strong> of $1,000 to start). Going down,
+      (<strong>$${(v.budget / v.parts).toFixed(2)}</strong> of
+      $${v.budget.toLocaleString()} to start). Going down,
       all ${v.parts} parts are held once BTC is <strong>${(last * 100).toFixed(1)}%</strong>
       below the first. A part sells on a <strong>${v.trail_pct}%</strong> pullback once at its
       minimum; a new part is also bought on every <strong>${v.correction_pct}%</strong>
@@ -176,10 +186,11 @@ async function load() {
   const history = await api(`/api/settings/${KEY}/history`);
   $("history").innerHTML = history.length ? history.map((h) => `
     <tr><td>${escape(h.valid_from.slice(0, 16).replace("T", " "))}</td>
-      <td>${escape(FIELDS.map((f) => `${f} ${h.value[f]}`).join(" · "))}</td>
+      <td>${escape(FIELDS.filter((f) => f in h.value).map((f) => `${f} ${h.value[f]}`)
+        .join(" · "))}</td>
       <td>${escape(h.changed_by || "—")}</td><td>${escape(h.rationale)}</td></tr>`).join("")
     : `<tr><td colspan="4" class="empty">No change recorded: the strategy's defaults are in
-        force (10 parts, 1.5% step, 5% correction, 2% pullback).</td></tr>`;
+        force ($1,000, 10 parts, 1.5% step, 5% correction, 2% pullback).</td></tr>`;
 }
 
 for (const f of FIELDS) $(`f-${f}`).addEventListener("input", refresh);

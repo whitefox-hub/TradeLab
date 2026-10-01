@@ -137,10 +137,11 @@ def test_every_editable_key_has_a_rule() -> None:
 
 @pytest.mark.fast
 def test_the_ladder_settings_are_bounded() -> None:
-    good = {"parts": 10, "step_pct": 1.5, "correction_pct": 5, "trail_pct": 2}
+    good = {"budget": 2000, "parts": 10, "step_pct": 1.5, "correction_pct": 5, "trail_pct": 2}
     validate("btc_ladder", good)
     for bad, why in (({"parts": 0}, "parts"), ({"parts": 2.5}, "whole"),
                      ({"step_pct": 0.1}, "step_pct"), ({"trail_pct": 25}, "trail_pct"),
-                     ({"parts": 50, "step_pct": 3}, "zero")):
+                     ({"budget": 5000, "parts": 50, "step_pct": 3}, "zero"),
+                     ({"budget": 50}, "budget"), ({"budget": 1000, "parts": 25}, "under \\$50")):
         with pytest.raises(Invalid, match=why):
             validate("btc_ladder", {**good, **bad})

@@ -128,7 +128,12 @@ def _number(value: dict, name: str, low: float, high: float, whole: bool = False
 
 
 def _btc_ladder(value: dict) -> None:
+    budget = _number(value, "budget", 100, 10_000)
     _number(value, "parts", 1, 50, whole=True)
+    if budget / value["parts"] < 50:
+        raise Invalid(f"a part would be ${budget / value['parts']:,.2f}; the risk limits refuse "
+                      "positions under $50 (0.5% of the $10,000 account): raise the budget "
+                      "or use fewer parts")
     step = _number(value, "step_pct", 0.5, 20)
     _number(value, "correction_pct", 0.5, 30)
     _number(value, "trail_pct", 0.5, 20)
@@ -137,8 +142,10 @@ def _btc_ladder(value: dict) -> None:
 
 
 RULES: dict[str, Rule] = {
-    "btc_ladder": Rule(("parts", "step_pct", "correction_pct", "trail_pct"), _btc_ladder,
-                       "parts 1-50; step_pct 0.5-20; correction_pct 0.5-30; trail_pct 0.5-20"),
+    "btc_ladder": Rule(("budget", "parts", "step_pct", "correction_pct", "trail_pct"),
+                       _btc_ladder,
+                       "budget 100-10000 USDT; parts 1-50 (at least $50 each); "
+                       "step_pct 0.5-20; correction_pct 0.5-30; trail_pct 0.5-20"),
     "history_years": Rule(("years",), _history_years,
                           "a whole number of years, 1 to what the archive holds"),
     "research_universe": Rule(("assets",), _research_universe,

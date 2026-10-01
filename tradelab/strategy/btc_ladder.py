@@ -2,7 +2,7 @@
 
 The budget is split into PARTS equal parts, each bought at its own price and sold on its own:
 
-The four numbers in `Config` are the operator's, set on the Parameters screen; the time-scaled
+The numbers in `Config` are the operator's, set on the Parameters screen; the time-scaled
 minimums are fixed here.
 
 * **Entry.** The ladder adapts to the price both ways. Down: a new part each time the price is
@@ -23,8 +23,9 @@ from datetime import datetime
 
 @dataclass(frozen=True)
 class Config:
-    """The operator's four numbers, set on the Parameters screen (setting `btc_ladder`)."""
+    """The operator's numbers, set on the Parameters screen (setting `btc_ladder`)."""
 
+    budget: float = 1_000.0      # the starting budget, USDT; realised profit adds to it
     parts: int = 10
     step: float = 0.015          # a new part this far below the cheapest part held
     reentry: float = 0.05        # a new part after this correction from the high
@@ -34,8 +35,9 @@ class Config:
     def from_setting(cls, value: dict | None) -> Config:
         if not value:
             return cls()
-        return cls(int(value["parts"]), value["step_pct"] / 100,
-                   value["correction_pct"] / 100, value["trail_pct"] / 100)
+        return cls(float(value.get("budget", cls.budget)), int(value["parts"]),
+                   value["step_pct"] / 100, value["correction_pct"] / 100,
+                   value["trail_pct"] / 100)
 
 
 DEFAULT = Config()

@@ -79,9 +79,12 @@ def test_the_ladder_also_climbs_on_a_correction_clear_of_every_part():
 
 def test_the_config_reads_the_parameters_screen_in_percent():
     assert lad.Config.from_setting(None) == lad.DEFAULT
-    cfg = lad.Config.from_setting({"parts": 20, "step_pct": 3, "correction_pct": 4,
-                                   "trail_pct": 1.5})
-    assert (cfg.parts, cfg.step, cfg.reentry, cfg.trail) == (20, 0.03, 0.04, 0.015)
+    cfg = lad.Config.from_setting({"budget": 2000, "parts": 20, "step_pct": 3,
+                                   "correction_pct": 4, "trail_pct": 1.5})
+    assert (cfg.budget, cfg.parts, cfg.step, cfg.reentry, cfg.trail) == \
+        (2000, 20, 0.03, 0.04, 0.015)
+    assert lad.Config.from_setting({"parts": 10, "step_pct": 1.5, "correction_pct": 5,
+                                    "trail_pct": 2}).budget == 1000
     assert lad.part_size(1_000.0, [], cfg) == 50.0
     assert lad.buy_now([part(100.0)], 97.0, armed=False, cfg=cfg)
     assert not lad.buy_now([part(100.0)], 97.5, armed=False, cfg=cfg)
