@@ -89,6 +89,7 @@
   .actions-end .spacer { flex:1; }
   .err { color:var(--down); font-size:13.5px; margin-top:8px; white-space:pre-line; }
   button:disabled { opacity:.45; cursor:not-allowed; }
+  .todo { color:var(--warn); font-size:13.5px; margin-top:10px; }
 </style>
 </head>
 <body>
@@ -191,6 +192,7 @@
       <button class="ghost" id="cancel">Cancel</button>
       <button class="primary" id="save">Create</button>
     </div>
+    <div class="todo" id="todo"></div>
     <div class="err" id="err"></div>
   </div>
 </dialog>
@@ -292,6 +294,10 @@ function refresh() {
         changed.map(escape).join(" · ")}`
     : "No limit changed yet.";
   $("save").disabled = problems.length > 0 || changed.length === 0;
+  // A disabled button must say why, or there is no way to find out.
+  const missing = changed.length === 0 ? ["Change at least one limit."] : [];
+  $("todo").textContent = $("save").disabled
+    ? "To enable Create: " + [...problems, ...missing].join(" · ") : "";
   return { problems, changed };
 }
 
