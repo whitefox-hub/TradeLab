@@ -213,8 +213,11 @@ async function renderLadder() {
     : `if BTC falls to ${usd(l.correction_price)}`;
   $("ladder-cards").innerHTML = [
     { n: usd(l.price), k: "BTC now", d: `High since the last buy or full exit: ${usd(l.high)}.` },
+    { n: `${Number(l.cash).toLocaleString(undefined, { minimumFractionDigits: 2,
+        maximumFractionDigits: 2 })} USDT`, k: "USDT available",
+      d: `Cash for new parts. The next part is ${usd(l.next_part_size)}.` },
     { n: `${l.parts_held} / ${c.parts}`, k: "parts held",
-      d: `${usd(l.invested)} invested, ${usd(l.cash)} in cash. ${l.realised_sales} sales so far.` },
+      d: `${usd(l.invested)} invested in BTC. ${l.realised_sales} sales so far.` },
     { n: l.full ? "—" : usd(l.next_down_price), k: "next part, going down",
       d: "A step below the cheapest part held." },
     { n: l.full || l.paused ? "—" : (l.armed ? "met" : usd(l.correction_price)),

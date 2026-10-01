@@ -222,6 +222,7 @@ class Book:
         return {
             "as_of": now.isoformat(), "run_id": str(self.run_id), "price": px,
             "config": asdict(self.cfg), "cash": round(self.cash, 2),
+            "next_part_size": round(lad.part_size(self.cash, self.parts, self.cfg), 2),
             "invested": round(sum(x.spent for x in self.parts), 2),
             "parts_held": len(self.parts), "realised_sales": self.trades,
             "high": self.high, "armed": self.armed, "paused_until": self.paused_until,
