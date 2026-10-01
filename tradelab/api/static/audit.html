@@ -39,7 +39,7 @@
 
 <script src="/static/app.js"></script>
 <script>
-mount("/audit", { onReady: load });
+mount("/audit", { onReady: () => load() });
 
 async function load(page = 1) {
   const { items: entries, total } = await apiPage(`/api/audit?page=${page}`);

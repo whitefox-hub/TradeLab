@@ -201,7 +201,7 @@
 
 <script src="/static/app.js"></script>
 <script>
-mount("/risk-limits", { onReady: load });
+mount("/risk-limits", { onReady: () => load() });
 
 const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

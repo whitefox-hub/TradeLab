@@ -1494,3 +1494,17 @@ def test_every_open_position_shows_who_guided_it(client: TestClient) -> None:
     markup = client.get("/static/index.html").text
     assert "<th>Guide</th>" in markup
     assert "not validated" in markup
+
+
+@pytest.mark.fast
+def test_a_paged_load_is_not_handed_the_session_as_its_page() -> None:
+    """mount() calls onReady(me). A screen whose load takes a page number must wrap it, or the
+    first request asks for page "[object Object]" and the screen stays empty."""
+    import re
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[2] / "tradelab/api/static"
+    for page in static.glob("*.html"):
+        markup = page.read_text()
+        if re.search(r"async function load\(\s*\w", markup):
+            assert "onReady: load }" not in markup, f"{page.name} passes the session as a page"
