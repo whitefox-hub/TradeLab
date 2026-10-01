@@ -65,9 +65,9 @@ class Book:
         limits_id, self.limits = store.active_limits()
         strategy = store.ensure_strategy("btc-ladder", IMPL)
         self.run_id = store.ensure_run(strategy, LABEL, {
-            "rule": "ten parts, a new one every 1.5% lower or after each 2% correction at "
+            "rule": "ten parts, a new one every 1.5% lower or after each 5% correction at "
                     "least 1.5% from every part held; each sells on a 2% pullback once at "
-                    "its time-scaled minimum, at its cap at the latest; re-entry on a 2% "
+                    "its time-scaled minimum, at its cap at the latest; re-entry on a 5% "
                     "correction; never at a loss",
             "budget": BUDGET, "capital_is_fake": True, "prices": "binance spot"},
             CAPITAL, limits_id)
@@ -168,7 +168,7 @@ class Book:
                 lowest = min(p.price for p in self.parts)
                 print(f"{now:%Y-%m-%d %H:%M:%S} BUY part {len(self.parts)}/{lad.PARTS} at "
                       f"{fill.price} (${spent:,.2f}); next part at or below "
-                      f"{lowest * (1 - lad.STEP):,.2f}, or after a 2% correction above",
+                      f"{lowest * (1 - lad.STEP):,.2f}, or after a 5% correction from the high",
                       flush=True)
                 traded = True
         return traded

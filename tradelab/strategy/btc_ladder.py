@@ -19,7 +19,7 @@ from datetime import datetime
 
 PARTS = 10
 STEP = 0.015
-REENTRY = 0.02
+REENTRY = 0.05
 TRAIL = 0.02
 #: (days held, minimum net gain), longest first.
 TIERS = ((90, 0.20), (60, 0.12), (45, 0.08), (30, 0.05), (15, 0.03), (0, 0.01))
