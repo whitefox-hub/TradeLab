@@ -23,7 +23,7 @@ ten parts, each bought at its own price and sold on its own, and never sells at 
 | Rule | `tradelab/strategy/btc_ladder.py` (tests in `tests/unit/test_btc_ladder.py`) |
 | Runner | `scripts/run_btc_ladder.py`, state in `data/forward/btc-ladder/` |
 | Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
-| Screen | `http://127.0.0.1:8010/home`: the position, its P&L, a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours |
+| Screen | `http://127.0.0.1:8010/home`: the position and its P&L; the **BTC ladder** card (price, the high since the last buy, the next buy down and on a correction, and every part's cost, gain, minimum, cap and sell point, published by the book every 10 s and read by `/api/ladder`); a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours |
 | Parameters | `http://127.0.0.1:8010/parameters`: budget, parts, step, correction and pullback, validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
 
 **What the history says about it** (BTC spot hourly closes, $10,000, the rule as above):

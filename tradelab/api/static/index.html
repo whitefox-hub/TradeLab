@@ -68,6 +68,17 @@
       <tbody id="book"></tbody>
     </table>
 
+    <h2 class="section">BTC ladder<span class="note" id="ladder-note"></span></h2>
+    <div class="cards context" id="ladder-cards"></div>
+    <table class="book" id="ladder-table">
+      <thead><tr>
+        <th>#</th><th class="num">Bought at</th><th class="num">Days</th><th class="num">Cost</th>
+        <th class="num">Value</th><th class="num">Gain</th><th class="num">Minimum</th>
+        <th class="num">Cap</th><th>State</th>
+      </tr></thead>
+      <tbody id="ladder"></tbody>
+    </table>
+
     <h2 class="section">Market<span class="note">Read back, never computed.</span></h2>
     <div class="cards context" id="cards"></div>
 
@@ -180,6 +191,53 @@ async function closePosition(button) {
   }
 }
 
+const usd = (v) => v === null || v === undefined ? "—"
+  : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const pct = (v, d = 2) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(d)}%`;
+
+// The ladder as its book published it; format only, every figure comes from the book.
+async function renderLadder() {
+  const l = await api("/api/ladder");
+  if (!l.available) {
+    $("ladder-note").textContent = "The book has not published yet.";
+    $("ladder-cards").innerHTML = ""; $("ladder").innerHTML = "";
+    return;
+  }
+  const c = l.config;
+  $("ladder-note").textContent = `${c.parts} parts · step ${(c.step * 100).toFixed(1)}% · `
+    + `correction ${(c.reentry * 100).toFixed(1)}% · pullback ${(c.trail * 100).toFixed(1)}%`
+    + ` · updated ${l.age_seconds}s ago`;
+  const correction = l.paused ? `paused until ${l.paused_until.slice(0, 16).replace("T", " ")}`
+    : l.full ? "all parts held"
+    : l.armed ? "met: the next price clear of every part buys"
+    : `if BTC falls to ${usd(l.correction_price)}`;
+  $("ladder-cards").innerHTML = [
+    { n: usd(l.price), k: "BTC now", d: `High since the last buy or full exit: ${usd(l.high)}.` },
+    { n: `${l.parts_held} / ${c.parts}`, k: "parts held",
+      d: `${usd(l.invested)} invested, ${usd(l.cash)} in cash. ${l.realised_sales} sales so far.` },
+    { n: l.full ? "—" : usd(l.next_down_price), k: "next part, going down",
+      d: "A step below the cheapest part held." },
+    { n: l.full || l.paused ? "—" : (l.armed ? "met" : usd(l.correction_price)),
+      k: "next part, on a correction", d: correction[0].toUpperCase() + correction.slice(1) + "." },
+  ].map((x) => `<div class="card"><div class="n">${x.n}</div><div class="k">${x.k}</div>
+    <div class="d">${x.d}</div></div>`).join("");
+  $("ladder").innerHTML = l.parts.length ? l.parts.map((p, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td class="num">${usd(p.bought_at)}</td>
+      <td class="num">${p.days.toFixed(1)}</td>
+      <td class="num">${usd(p.spent)}</td>
+      <td class="num">${usd(p.value)}</td>
+      <td class="num money ${sign(p.gain)}">${pct(p.gain)}</td>
+      <td class="num">${pct(p.minimum, 0)} at ${usd(p.minimum_price)}</td>
+      <td class="num">${pct(p.cap, 0)} at ${usd(p.cap_price)}</td>
+      <td>${p.peak
+        ? `following: peak ${usd(p.peak)}, sells at ${usd(p.sells_at)}`
+        : `waiting for ${usd(p.minimum_price)}`}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="9"><p class="empty-why">No part is held.</p></td></tr>`;
+}
+
 async function load() {
   const [book, scenario, sentiment, quality] = await Promise.all([
     api("/api/positions"),
@@ -189,6 +247,9 @@ async function load() {
   ]);
 
   renderBook(book);
+  renderLadder().catch(() => {});
+  clearInterval(load.ladder);
+  load.ladder = setInterval(() => renderLadder().catch(() => {}), 15000);
 
   // Trend is 1-10, 5 neutral; direction comes from the server.
   const pressure = scenario.direction === "NEUTRAL"

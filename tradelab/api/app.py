@@ -106,6 +106,10 @@ class ApprovalRequest(BaseModel):
     notes: str | None = None
 
 
+#: Written by scripts/run_btc_ladder.py on every price check.
+LADDER_STATUS = Path(__file__).resolve().parents[2] / "data/forward/btc-ladder/status.json"
+
+
 def _plain(value: Any) -> str:
     """A limit as a person writes it: 0.25, 10000, 60. The database pads NUMERIC columns
     with zeros (0.25000000), which reads as noise."""
@@ -1039,6 +1043,16 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "snapshots": int(session.execute(
                 sa.text("SELECT count(*) FROM positions")).scalar() or 0),
         }
+
+    @app.get("/api/ladder")
+    def ladder(who: Operator = operator) -> dict[str, Any]:
+        """The BTC ladder as its book last published it: read, never computed (§20.1)."""
+        path = LADDER_STATUS
+        if not path.exists():
+            return {"available": False}
+        status_ = json.loads(path.read_text())
+        age = (datetime.now(UTC) - datetime.fromisoformat(status_["as_of"])).total_seconds()
+        return {"available": True, "age_seconds": round(age), **status_}
 
     @app.get("/api/algorithm")
     def algorithm(who: Operator = operator,

@@ -201,6 +201,40 @@ class Book:
         self.persist(now, price)
         return True
 
+    def status(self, price: Decimal, now: datetime) -> dict:
+        """What the screen shows, computed here so the API only reads it (§20.1)."""
+        px, fee = float(price), float(FEE)
+        parts = []
+        for x in sorted(self.parts, key=lambda q: -q.price):
+            days = (now - x.opened).total_seconds() / 86_400
+            floor, top = lad.minimum(days), lad.cap(days)
+            at = lambda g, x=x: x.spent * (1 + g) / (x.quantity * (1 - SLIP) * (1 - fee))  # noqa: E731
+            parts.append({
+                "bought_at": x.price, "opened": x.opened.isoformat(), "days": round(days, 2),
+                "spent": round(x.spent, 2),
+                "value": round(x.quantity * px * (1 - SLIP) * (1 - fee), 2),
+                "gain": lad.net(x, px, fee, SLIP), "minimum": floor, "minimum_price": at(floor),
+                "cap": top, "cap_price": at(top), "peak": x.peak,
+                "sells_at": max(x.peak * (1 - self.cfg.trail), at(floor)) if x.peak else None})
+        full = len(self.parts) >= self.cfg.parts
+        cheapest = min((x.price for x in self.parts), default=None)
+        paused = bool(self.paused_until and now.isoformat() < self.paused_until)
+        return {
+            "as_of": now.isoformat(), "run_id": str(self.run_id), "price": px,
+            "config": asdict(self.cfg), "cash": round(self.cash, 2),
+            "invested": round(sum(x.spent for x in self.parts), 2),
+            "parts_held": len(self.parts), "realised_sales": self.trades,
+            "high": self.high, "armed": self.armed, "paused_until": self.paused_until,
+            "correction_price": None if self.high is None else self.high * (1 - self.cfg.reentry),
+            "next_down_price": None if full or cheapest is None
+            else cheapest * (1 - self.cfg.step),
+            "full": full, "paused": paused, "parts": parts}
+
+    def publish(self, price: Decimal, now: datetime) -> None:
+        partial = STATE_DIR / "status.partial"
+        partial.write_text(json.dumps(self.status(price, now), indent=1))
+        partial.replace(STATE_DIR / "status.json")
+
     def persist(self, now: datetime, price: Decimal) -> None:
         p = self.engine.account.positions.get(SYMBOL)
         qty = p.quantity if p else Decimal(0)
@@ -270,6 +304,7 @@ def main() -> int:
                 book.engine.account.day_start_equity = book.equity(price)
                 book.day = today
             traded = book.step(price, now)
+            book.publish(price, now)
             if traded or time.time() - last_snapshot >= SNAPSHOT_S:
                 book.engine.risk.enforce(now)
                 book.persist(now, price)
