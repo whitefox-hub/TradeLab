@@ -84,7 +84,7 @@ class Book:
                  venue_trade_id=f.get("venue_trade_id", "")) for f in raw.get("fills", []))
         self.adapter._held.update({k: Decimal(v) for k, v in raw.get("held", {}).items()})
         account = AccountState(equity=CAPITAL, peak_equity=Decimal(raw.get("peak", CAPITAL)),
-                               day_start_equity=CAPITAL)
+                               day_start_equity=Decimal(raw.get("day_start", CAPITAL)))
         self.engine = ExecutionEngine(run_id=str(self.run_id)[:8], mode=ExecutionMode.SIMULATOR,
                                       adapter=self.adapter, risk=RiskEngine(self.limits, account),
                                       instruments={SYMBOL: inst},
@@ -189,7 +189,8 @@ class Book:
             return value.isoformat() if isinstance(value, datetime) else str(value)
         payload = {"state": self.state, "fills": [asdict(f) for f in self.adapter.fills],
                    "held": {k: str(v) for k, v in self.adapter._held.items()},
-                   "peak": str(self.engine.account.peak_equity)}
+                   "peak": str(self.engine.account.peak_equity),
+                   "day_start": str(self.engine.account.day_start_equity)}
         partial = STATE_DIR / "state.partial"
         partial.write_text(json.dumps(payload, default=encode, indent=1))
         partial.replace(STATE_DIR / "state.json")
@@ -206,6 +207,11 @@ def main() -> int:
         try:
             book.close_requested(client)
             now, price = datetime.now(UTC), ticker(client)
+            # max_daily_loss is measured from the day's opening equity: reset it each UTC day.
+            today = now.strftime("%Y-%m-%d")
+            if book.state.get("day") != today:
+                book.engine.account.day_start_equity = book.equity(price)
+                book.state["day"] = today
             traded = book.step(price, now)
             if traded or time.time() - last_snapshot >= SNAPSHOT_S:
                 book.engine.risk.enforce(now)
