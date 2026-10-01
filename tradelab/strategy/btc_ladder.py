@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 PARTS = 10
-STEP = 0.10
+STEP = 0.03
 REENTRY = 0.02
 TRAIL = 0.02
 #: (days held, minimum net gain), longest first.

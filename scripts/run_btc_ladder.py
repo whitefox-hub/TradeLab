@@ -65,7 +65,7 @@ class Book:
         limits_id, self.limits = store.active_limits()
         strategy = store.ensure_strategy("btc-ladder", IMPL)
         self.run_id = store.ensure_run(strategy, LABEL, {
-            "rule": "ten parts, a new one every 10% lower; each sells on a 2% pullback once at "
+            "rule": "ten parts, a new one every 3% lower; each sells on a 2% pullback once at "
                     "its time-scaled minimum, at its cap at the latest; re-entry on a 2% "
                     "correction; never at a loss",
             "budget": BUDGET, "capital_is_fake": True, "prices": "binance spot"},

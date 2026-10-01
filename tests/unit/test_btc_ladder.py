@@ -54,12 +54,12 @@ def test_the_cap_always_sells():
     assert lad.exit_now(p, at(0.161, p), T0, FEE, SLIP)
 
 
-def test_entries_first_then_every_ten_percent_lower_up_to_ten_parts():
+def test_entries_first_then_every_three_percent_lower_up_to_ten_parts():
     assert lad.buy_now([], 100.0, armed=True)
     assert not lad.buy_now([], 100.0, armed=False)
-    held = [part(100.0), part(90.0)]
-    assert not lad.buy_now(held, 81.1, armed=True)
-    assert lad.buy_now(held, 81.0, armed=True)
+    held = [part(100.0), part(97.0)]
+    assert not lad.buy_now(held, 94.1, armed=True)
+    assert lad.buy_now(held, 94.09, armed=True)
     assert not lad.buy_now([part(100.0 - i) for i in range(10)], 1.0, armed=True)
 
 
