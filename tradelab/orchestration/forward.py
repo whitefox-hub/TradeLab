@@ -20,7 +20,6 @@ from typing import Any
 import sqlalchemy as sa
 
 from tradelab.risk.limits import RiskLimits
-from tradelab.strategy.trend_book import Setting
 
 LIMIT_FIELDS = tuple(RiskLimits.__dataclass_fields__)
 
@@ -101,23 +100,6 @@ class Store:
                  "t": datetime.now(UTC)})
             return rid
 
-    # -- the operator's setting -----------------------------------------------
-
-    def setting(self) -> Setting:
-        """The trend in force, and when it last *changed*.
-
-        Only a trend change counts; moving the sentiment dial must not re-open a barrier.
-        """
-        with self.engine.begin() as db:
-            now = db.execute(sa.text(
-                "SELECT trend, source FROM market_conditions WHERE id = 1")).mappings().one()
-            changed = db.execute(sa.text(
-                "SELECT max(occurred_at) FROM audit_log WHERE action = 'scenario.set' "
-                "AND (payload->'from'->>'trend') IS DISTINCT FROM (payload->>'trend')")
-            ).scalar()
-        return Setting(int(now["trend"]), str(now["source"]),
-                       changed or datetime(1970, 1, 1, tzinfo=UTC))
-
     # -- what the screen reads -------------------------------------------------
 
     def write(self, run_id: uuid.UUID, at: datetime, rows: list[Snapshot],
@@ -162,6 +144,12 @@ class Store:
                 {"s": f"{run_id}:{asset}",
                  "p": json.dumps({"request": str(request), "run_id": str(run_id),
                                   "asset": asset, **outcome})})
+
+    def end(self, run_id: uuid.UUID, reason: str) -> None:
+        """Close a run for good: it stops showing positions, and its history stays."""
+        with self.engine.begin() as db:
+            db.execute(sa.text("UPDATE runs SET status = 'stopped', halt_reason = :r, "
+                               "ended_at = now() WHERE id = :id"), {"r": reason, "id": run_id})
 
     def halt(self, run_id: uuid.UUID, reason: str) -> None:
         with self.engine.begin() as db:

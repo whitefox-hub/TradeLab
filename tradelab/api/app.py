@@ -971,7 +971,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     @app.get("/api/positions")
     def open_positions(who: Operator = operator,
                        session: Session = session_dep) -> dict[str, Any]:
-        """Open positions with stored P&L (read, never computed; §20.1).
+        """Open positions of the runs still open, with stored P&L (read, never computed; §20.1).
 
         `positions` is a snapshot series: current = newest row per (run, asset). Zero-qty rows are
         excluded from the list but their realised P&L still counts in the totals.
@@ -982,7 +982,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "  p.unrealised_pnl, p.realised_pnl, p.funding_paid, "
             "  p.guide, p.trend, p.trend_source, r.params->>'label' AS book, "
             "  r.mode, r.venue, r.status, r.base_currency "
-            "FROM positions p JOIN runs r ON r.id = p.run_id "
+            "FROM positions p JOIN runs r ON r.id = p.run_id WHERE r.ended_at IS NULL "
             "ORDER BY p.run_id, p.asset, p.as_of DESC"
         )).mappings().all()
 
@@ -1013,9 +1013,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "SELECT coalesce(sum(unrealised_pnl), 0) AS unrealised, "
             "       coalesce(sum(realised_pnl), 0) AS realised, "
             "       coalesce(sum(funding_paid), 0) AS funding "
-            "FROM (SELECT DISTINCT ON (run_id, asset) unrealised_pnl, "
-            "        realised_pnl, funding_paid FROM positions "
-            "      ORDER BY run_id, asset, as_of DESC) AS latest"
+            "FROM (SELECT DISTINCT ON (p.run_id, p.asset) p.unrealised_pnl, "
+            "        p.realised_pnl, p.funding_paid FROM positions p "
+            "        JOIN runs r ON r.id = p.run_id WHERE r.ended_at IS NULL "
+            "      ORDER BY p.run_id, p.asset, p.as_of DESC) AS latest"
         )).mappings().first()
 
         return {

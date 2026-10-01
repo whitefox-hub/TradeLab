@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start or stop everything the operator runs: docker (database, capture), the app on
-# http://127.0.0.1:8010, the forward trend book and the BTC trend books.
+# http://127.0.0.1:8010 and the BTC +1% book.
 #   ./tradelab.sh start
 #   ./tradelab.sh stop
 #   ./tradelab.sh status
@@ -26,7 +26,7 @@ case "${1:-}" in
     ;;
   status)
     docker compose ps --format '{{.Service}}: {{.Status}}'
-    for name in uvicorn trend_book btc_trend; do
+    for name in uvicorn btc_plus_one; do
       if running "$name"; then echo "$name: running, pid $(cat "logs/$name.pid")"
       else echo "$name: stopped"; fi
     done
