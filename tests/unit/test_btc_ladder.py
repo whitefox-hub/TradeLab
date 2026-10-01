@@ -67,3 +67,11 @@ def test_a_part_is_a_tenth_of_the_budget_including_what_is_held():
     assert lad.part_size(1_000.0, []) == 100.0
     assert lad.part_size(800.0, [part(spent=110.0), part(spent=110.0)]) == 102.0
     assert lad.part_size(50.0, [part(spent=100.0)] * 9) == 50.0
+
+
+def test_the_ladder_also_climbs_on_a_correction_clear_of_every_part():
+    held = [part(100.0)]
+    assert not lad.buy_now(held, 110.0, armed=False)          # no correction yet
+    assert lad.buy_now(held, 110.0, armed=True)               # corrected, 10% above part 1
+    assert not lad.buy_now([part(100.0), part(110.0)], 109.0, armed=True)   # too close to 110
+    assert lad.buy_now([part(100.0), part(110.0)], 105.0, armed=True)

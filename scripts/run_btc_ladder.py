@@ -65,7 +65,8 @@ class Book:
         limits_id, self.limits = store.active_limits()
         strategy = store.ensure_strategy("btc-ladder", IMPL)
         self.run_id = store.ensure_run(strategy, LABEL, {
-            "rule": "ten parts, a new one every 1.5% lower; each sells on a 2% pullback once at "
+            "rule": "ten parts, a new one every 1.5% lower or after each 2% correction at "
+                    "least 1.5% from every part held; each sells on a 2% pullback once at "
                     "its time-scaled minimum, at its cap at the latest; re-entry on a 2% "
                     "correction; never at a loss",
             "budget": BUDGET, "capital_is_fake": True, "prices": "binance spot"},
@@ -136,6 +137,12 @@ class Book:
             self.armed, self.high = False, float(fill.price)
         return True
 
+    def track(self, px: float) -> None:
+        """The high since the last buy or full exit, and whether it has corrected REENTRY."""
+        self.high = max(self.high or px, px)
+        if not self.armed and px <= self.high * (1 - lad.REENTRY):
+            self.armed = True
+
     def step(self, price: Decimal, now: datetime) -> bool:
         """One check of every part and of the entry. True if it traded."""
         traded = False
@@ -146,10 +153,7 @@ class Book:
                 assert gain >= 0, "the ladder would sell at a loss"
                 traded |= self.sell(part, price, now, "cap" if gain >= lad.cap(
                     (now - part.opened).total_seconds() / 86_400) else "pullback")
-        if not self.parts and not self.armed:
-            self.high = max(self.high or px, px)
-            if px <= self.high * (1 - lad.REENTRY):
-                self.armed = True
+        self.track(px)
         paused = self.paused_until and now.isoformat() < self.paused_until
         if not paused and lad.buy_now(self.parts, px, self.armed):
             size = lad.part_size(self.cash, self.parts)
@@ -159,10 +163,13 @@ class Book:
                 spent = float(fill.quantity * fill.price + fill.fee)
                 self.cash -= spent
                 self.parts.append(lad.Part(float(fill.price), float(fill.quantity), spent, now))
+                # The next part up needs a fresh correction from here.
+                self.armed, self.high = False, float(fill.price)
                 lowest = min(p.price for p in self.parts)
                 print(f"{now:%Y-%m-%d %H:%M:%S} BUY part {len(self.parts)}/{lad.PARTS} at "
                       f"{fill.price} (${spent:,.2f}); next part at or below "
-                      f"{lowest * (1 - lad.STEP):,.2f}", flush=True)
+                      f"{lowest * (1 - lad.STEP):,.2f}, or after a 2% correction above",
+                      flush=True)
                 traded = True
         return traded
 

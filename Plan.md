@@ -12,7 +12,7 @@ ten parts, each bought at its own price and sold on its own, and never sells at 
 
 | Rule | |
 |---|---|
-| Entry | the first part at once on the first start; a new part each time the price is **1.5%** below the cheapest part held (all ten held once BTC is 13% below the first); after every part is sold, the next first part only after a 2% correction from the high since that sale |
+| Entry | the ladder adapts both ways. Down: a new part each time the price is **1.5%** below the cheapest part held. Up: a new part after each 2% correction from the high since the last buy (or the last full exit), at least 1.5% from every part held. The first part is bought at once on the first start |
 | Exit | a part's minimum net gain grows with the days held: under 15 days +1%, 15–29 +3%, 30–44 +5%, 45–59 +8%, 60–89 +12%, 90 and over +20%. Once there it follows its high and sells on a 2% pullback, never below the minimum, and always at its cap (twice the minimum, at least +10%) |
 | Never at a loss | a part below its minimum waits, however long it takes |
 | Size | one part is a tenth of the budget: $1,000 to start, grown by every realised profit, inside a $10,000 fake account so the ten parts stay within the active risk limits (§14.1) |
@@ -26,9 +26,10 @@ ten parts, each bought at its own price and sold on its own, and never sells at 
 | Screen | `http://127.0.0.1:8010/home`: the position, its P&L, a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours |
 
 **What the history says about it** (BTC spot hourly closes, $10,000, the rule as above):
-2018-01 → 2026-09, $42,630 against $61,242 for holding BTC, with a worst drawdown of −75%
-against −77%; 2022-01 → 2026-09, $24,151 against $18,176, with −59% against −67%. 365 sales
-in 8.7 years; on average 77% of the money in BTC, all ten parts held 75% of the time. Sales
+2018-01 → 2026-09, $41,970 against $61,242 for holding BTC, with a worst drawdown of −75%
+against −77%; 2022-01 → 2026-09, $22,788 against $18,176, with −61% against −67%; on average
+83% of the money in BTC. Climbing adds 5–7% in rising years (2020, 2023, 2024) and costs 7–8%
+in falling ones (2022) against a ladder that only builds downward. Sales
 rarely coincide: 3% of them in the same hour as another, never three at once. The parameters were tuned with the operator on these
 same years, so these figures flatter it; a walk-forward of the tuning (choosing each year
 from the years before it) earned less than any fixed choice. The forward run is the test.
