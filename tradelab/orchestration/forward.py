@@ -86,6 +86,13 @@ class Store:
                 {"s": strategy_id, "l": label}).scalar()
             if found:
                 return uuid.UUID(str(found))
+            # A new version of the strategy supersedes the open run of an older one under the
+            # same label: one book, one open run, never the same position shown twice.
+            db.execute(sa.text(
+                "UPDATE runs SET status = 'stopped', ended_at = now(), "
+                "halt_reason = 'superseded by a new version of the strategy' "
+                "WHERE mode = 'simulator' AND ended_at IS NULL AND params->>'label' = :l"),
+                {"l": label})
             rid = uuid.uuid4()
             db.execute(sa.text(
                 "INSERT INTO runs (id, strategy_id, mode, venue, params, initial_capital, "
@@ -118,6 +125,18 @@ class Store:
                 "INSERT INTO balances (run_id, as_of, currency, equity, free, used_margin) "
                 "VALUES (:run, :t, 'USDT', :e, :f, :u) ON CONFLICT DO NOTHING"),
                 {"run": run_id, "t": at, "e": equity, "f": equity - used, "u": used})
+
+    # -- operator settings -------------------------------------------------------
+
+    def setting(self, key: str) -> dict | None:
+        """The newest value of an operator setting (app_settings is append-only)."""
+        with self.engine.begin() as db:
+            value = db.execute(sa.text(
+                "SELECT value FROM app_settings WHERE key = :k "
+                "ORDER BY valid_from DESC LIMIT 1"), {"k": key}).scalar()
+        if value is None:
+            return None
+        return value if isinstance(value, dict) else json.loads(value)
 
     # -- manual exits ------------------------------------------------------------
 

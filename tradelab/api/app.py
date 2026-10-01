@@ -380,26 +380,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     # -- parameters ----------------------------------------------------------
 
-    #: Operator-editable settings. LOCKED lists what §12.4 forbids tuning (it would be a new
-    #: strategy); keys here must each have a rule in settings_rules.RULES.
+    #: Operator-editable settings: the BTC ladder's four numbers, the one strategy that runs.
+    #: Each key must have a rule in settings_rules.RULES. Changing it starts a new run.
     EDITABLE = {
-        "research_universe": "Which assets are collected and studied. Not a "
-                             "strategy's universe, which is part of its identity.",
-        "history_years": "How many years of history a study may draw on.",
-        "rebalance_minutes": "How often a running strategy re-evaluates.",
-        "alert_drawdown_pct": "Drawdown at which an alert is raised.",
-        "event_retention_days": "How far back the event corpus is kept. Lowering "
-                                "it removes older events on the next prune; "
-                                "raising it rebuilds them from the announcement "
-                                "archive, which is the source of truth.",
-    }
-
-    LOCKED = {
-        "Signal parameters": "periods, thresholds, feature parameters",
-        "Entry and exit rules": "including take profit and stop loss in the logic",
-        "Feature selection": "which features a strategy reads",
-        "Label definition": "how an outcome is defined",
-        "A strategy's asset universe": "distinct from the research universe above",
+        "btc_ladder": "The BTC ladder's parts, step, correction and pullback. Saving a change "
+                      "ends the current run and starts a new one under the new numbers.",
     }
 
     @app.get("/api/settings")
@@ -422,8 +407,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                                          "valid_from": None, "changed_by": None})}
                 for key, description in EDITABLE.items()
             ],
-            "locked": [{"name": name, "detail": detail}
-                       for name, detail in LOCKED.items()],
         }
 
     @app.get("/api/settings/{key}/history")
@@ -443,9 +426,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         if key not in EDITABLE:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
-                f"{key!r} is not an operator setting. §12.4 puts it in the column "
-                f"that creates a new strategy, which returns to screening and "
-                f"adds its trials to the counter — it cannot be edited here.",
+                f"{key!r} is not an operator setting (§12.4); only the BTC ladder's "
+                f"numbers are edited here.",
             )
         # Validated server side: the endpoint is reachable without the form.
         try:

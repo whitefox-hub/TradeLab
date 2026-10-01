@@ -7,60 +7,95 @@
 <link rel="icon" type="image/png" href="/static/favicon.png">
 <link rel="stylesheet" href="/static/app.css">
 <style>
-  .setting { background:var(--panel); border:1px solid var(--line); border-radius:12px;
-    padding:18px 20px; margin-bottom:14px; }
-  .setting .k { font-size:16.5px; font-weight:620; }
-  .setting .d { color:var(--muted); font-size:14px; margin:4px 0 12px; max-width:70ch;
-    line-height:1.55; }
-  .setting .v { font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size:14.5px; background:var(--panel-2); border:1px solid var(--line);
-    border-radius:8px; padding:9px 12px; }
-  .setting .meta { color:var(--muted); font-size:13px; margin-top:10px; line-height:1.5; }
-  .edit { display:none; margin-top:14px; }
-  .edit.on { display:block; }
-  .edit textarea, .edit input { width:100%; font-family:ui-monospace, Menlo, monospace;
-    font-size:14.5px; }
-  .edit .why { font-family:inherit; }
-  .actions { display:flex; gap:10px; margin-top:12px; }
-  button.warn { background:transparent; color:var(--warn); border-color:var(--warn);
-    font-weight:600; }
-  button.warn:hover { background:color-mix(in srgb, var(--warn) 14%, transparent); }
-  .accepts { font-size:13px; color:var(--muted); margin-top:8px;
-    font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .locked { background:transparent; border:1px dashed var(--line); border-radius:12px;
-    padding:18px 20px; }
-  .locked li { margin-bottom:10px; }
-  .locked .name { font-weight:600; }
-  .locked .detail { color:var(--muted); font-size:14px; }
-  ul { padding-left:20px; margin:12px 0 0; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:20px 22px; margin-top:18px; }
+  .fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px 20px; }
+  .field label { display:block; font-size:14px; font-weight:600; margin-bottom:4px; }
+  .field .help { font-size:12.5px; color:var(--muted); margin-top:4px; line-height:1.45; }
+  .field .row { display:flex; align-items:center; gap:8px; }
+  .field input { flex:1; min-width:0; text-align:right; font-variant-numeric:tabular-nums; }
+  .field .unit { color:var(--muted); font-size:13px; min-width:16px; }
+  .field input.bad { border-color:var(--down); }
+  .field.changed input { border-color:var(--accent); }
+  .preview { margin-top:16px; font-size:14px; line-height:1.6; color:var(--muted); }
+  .preview strong { color:var(--text); }
+  .why { width:100%; margin-top:6px; }
+  .actions { display:flex; gap:10px; align-items:center; margin-top:14px; }
+  .actions .spacer { flex:1; }
+  .todo { color:var(--warn); font-size:13.5px; margin-top:8px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  table.small { margin-top:8px; font-size:14px; }
+  .note { font-size:13.5px; color:var(--muted); margin-top:10px; line-height:1.55; max-width:80ch; }
 </style>
 </head>
 <body>
 <div class="layout">
   <main class="content">
     <h1>Parameters</h1>
-    <p class="sub">What the operator may change, and what changing would cost.</p>
+    <p class="sub">The BTC ladder's numbers. Saving a change ends the current run and starts a
+      new one under the new numbers, so a run is only ever under one configuration.</p>
 
-    <h2>Operator settings</h2>
-    <div id="editable"></div>
-    <div class="err" id="err"></div>
+    <div class="panel">
+      <div class="fields">
+        <div class="field" id="w-parts">
+          <label for="f-parts">Parts</label>
+          <div class="row"><input id="f-parts" inputmode="numeric"><span class="unit"></span></div>
+          <div class="help">How many parts the budget is split into. Each part is the budget
+            divided by this number, and grows with realised profit.</div>
+        </div>
+        <div class="field" id="w-step_pct">
+          <label for="f-step_pct">Step down</label>
+          <div class="row"><input id="f-step_pct" inputmode="decimal"><span class="unit">%</span></div>
+          <div class="help">A new part is bought when BTC is this far below the cheapest part
+            held.</div>
+        </div>
+        <div class="field" id="w-correction_pct">
+          <label for="f-correction_pct">Correction</label>
+          <div class="row"><input id="f-correction_pct" inputmode="decimal"><span class="unit">%</span></div>
+          <div class="help">A new part is bought when BTC falls this much from its high since
+            the last buy or the last full exit, if it is a step away from every part held.</div>
+        </div>
+        <div class="field" id="w-trail_pct">
+          <label for="f-trail_pct">Pullback to sell</label>
+          <div class="row"><input id="f-trail_pct" inputmode="decimal"><span class="unit">%</span></div>
+          <div class="help">Once a part reaches its minimum gain, it sells when BTC falls back
+            this much from its highest price since.</div>
+        </div>
+      </div>
 
-    <h2>Not editable here</h2>
-    <div class="locked">
-      <p class="hint" style="margin-top:0">Touching any of these creates a
-        <strong>new strategy</strong> — a new id and code hash — which returns to
-        screening and adds its trials to the counter that deflates every later
-        result. That is not a policy the interface enforces; a run's parameters are
-        immutable in the schema, so modifying one produces a different run and never
-        an edit.</p>
-      <ul id="locked"></ul>
-      <p class="hint">Adjusting a signal parameter because of what the simulator
-        showed is the trap §12.4 exists to name: after three or four iterations the
-        strategy is fitted to the last few weeks of market, overfitted exactly as in
-        a backtest, only slower and more convincing because it looks live. What is
-        legitimate to conclude from a simulator run is that the strategy does not
-        work. Rejecting is free; re-tuning costs the whole validation.</p>
+      <div class="preview" id="preview"></div>
+
+      <label for="f-why" style="display:block;margin-top:16px;font-size:14px;font-weight:600">Reason</label>
+      <input class="why" id="f-why" maxlength="500" placeholder="Why these numbers (at least 10 characters)">
+      <div class="actions">
+        <button class="ghost" id="reset">Reset</button>
+        <div class="spacer"></div>
+        <button class="primary" id="save">Save and restart the book</button>
+      </div>
+      <div class="todo" id="todo"></div>
+      <div class="err" id="err"></div>
     </div>
+
+    <h2>Minimum gain by days held</h2>
+    <p class="note">Fixed in the strategy. A part never sells below its minimum; its cap is
+      twice the minimum, at least +10%.</p>
+    <table class="small">
+      <thead><tr><th>Days held</th><th class="num">Minimum</th><th class="num">Cap</th></tr></thead>
+      <tbody>
+        <tr><td>under 15</td><td class="num">+1%</td><td class="num">+10%</td></tr>
+        <tr><td>15 – 29</td><td class="num">+3%</td><td class="num">+10%</td></tr>
+        <tr><td>30 – 44</td><td class="num">+5%</td><td class="num">+10%</td></tr>
+        <tr><td>45 – 59</td><td class="num">+8%</td><td class="num">+16%</td></tr>
+        <tr><td>60 – 89</td><td class="num">+12%</td><td class="num">+24%</td></tr>
+        <tr><td>90 or more</td><td class="num">+20%</td><td class="num">+40%</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Changes</h2>
+    <table class="small">
+      <thead><tr><th>When</th><th>Values</th><th>By</th><th>Reason</th></tr></thead>
+      <tbody id="history"></tbody>
+    </table>
   </main>
 </div>
 
@@ -68,61 +103,89 @@
 <script>
 mount("/parameters", { onReady: load });
 
+const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const KEY = "btc_ladder";
+const FIELDS = ["parts", "step_pct", "correction_pct", "trail_pct"];
+// The strategy's defaults, shown until a value has been saved.
+const DEFAULTS = { parts: 10, step_pct: 1.5, correction_pct: 5, trail_pct: 2 };
+// Bounds as the server checks them (settings_rules._btc_ladder); the server is authoritative.
+const BOUNDS = { parts: [1, 50, true], step_pct: [0.5, 20], correction_pct: [0.5, 30],
+  trail_pct: [0.5, 20] };
+let current = { ...DEFAULTS };
+
+const num = (t) => Number(String(t).trim().replace(",", "."));
+
+function fill(values) {
+  for (const f of FIELDS) $(`f-${f}`).value = values[f];
+  refresh();
+}
+
+function read() {
+  return Object.fromEntries(FIELDS.map((f) => [f, num($(`f-${f}`).value)]));
+}
+
+function refresh() {
+  const v = read();
+  const problems = [];
+  for (const f of FIELDS) {
+    const [lo, hi, whole] = BOUNDS[f];
+    const x = v[f];
+    const bad = !Number.isFinite(x) || x < lo || x > hi || (whole && !Number.isInteger(x));
+    $(`f-${f}`).classList.toggle("bad", bad);
+    $(`w-${f}`).classList.toggle("changed", !bad && x !== current[f]);
+    if (bad) problems.push(`${f}: ${lo} to ${hi}${whole ? ", whole number" : ""}`);
+  }
+  const ok = problems.length === 0;
+  if (ok && v.step_pct * (v.parts - 1) >= 100) problems.push("the last part would be bought at zero");
+  if (ok) {
+    const last = 1 - Math.pow(1 - v.step_pct / 100, v.parts - 1);
+    $("preview").innerHTML = `Each part is <strong>1/${v.parts}</strong> of the budget
+      (<strong>$${(1000 / v.parts).toFixed(2)}</strong> of $1,000 to start). Going down,
+      all ${v.parts} parts are held once BTC is <strong>${(last * 100).toFixed(1)}%</strong>
+      below the first. A part sells on a <strong>${v.trail_pct}%</strong> pullback once at its
+      minimum; a new part is also bought on every <strong>${v.correction_pct}%</strong>
+      correction.`;
+  } else {
+    $("preview").textContent = "";
+  }
+  const changed = FIELDS.some((f) => v[f] !== current[f]);
+  const why = $("f-why").value.trim();
+  if (!changed) problems.push("change at least one number");
+  if (why.length < 10) problems.push(`a reason of at least 10 characters (${why.length}/10)`);
+  $("save").disabled = problems.length > 0;
+  $("todo").textContent = problems.length ? "To save: " + problems.join(" · ") : "";
+}
+
+async function save() {
+  $("err").textContent = "";
+  try {
+    await api(`/api/settings/${KEY}`, { method: "POST",
+      body: JSON.stringify({ value: read(), rationale: $("f-why").value.trim() }) });
+    $("f-why").value = "";
+    await load();
+    $("todo").textContent = "Saved. The book restarts under these numbers within a minute.";
+  } catch (e) { $("err").textContent = e.message; }
+}
+
 async function load() {
   const data = await api("/api/settings");
-
-  $("editable").innerHTML = data.editable.map((s) => `
-    <div class="setting">
-      <div class="k">${s.key}</div>
-      <div class="d">${s.description}</div>
-      <div class="v">${s.value === null ? "not set" : JSON.stringify(s.value)}</div>
-      <div class="meta">
-        ${s.valid_from
-          ? `Set ${s.valid_from.slice(0, 10)}${s.changed_by ? " by " + s.changed_by : ""}
-             · ${s.rationale}`
-          : "No value recorded yet."}
-      </div>
-      <div class="actions">
-        <button class="warn" data-open="${s.key}">Change</button>
-      </div>
-      <div class="edit" id="e-${s.key}">
-        <div class="accepts">accepts: ${s.accepts || "—"}</div>
-        <label for="v-${s.key}">New value (JSON)</label>
-        <textarea id="v-${s.key}" rows="3">${s.value === null ? "{}" : JSON.stringify(s.value, null, 1)}</textarea>
-        <label for="r-${s.key}">Why</label>
-        <input class="why" id="r-${s.key}" placeholder="The reason this is changing">
-        <div class="actions">
-          <button class="primary" data-save="${s.key}">Record change</button>
-          <button data-cancel="${s.key}">Cancel</button>
-        </div>
-      </div>
-    </div>`).join("");
-
-  $("locked").innerHTML = data.locked.map((l) => `
-    <li><span class="name">${l.name}</span>
-        <span class="detail">— ${l.detail}</span></li>`).join("");
-
-  for (const b of document.querySelectorAll("[data-open]")) {
-    b.onclick = () => $(`e-${b.dataset.open}`).classList.add("on");
-  }
-  for (const b of document.querySelectorAll("[data-cancel]")) {
-    b.onclick = () => $(`e-${b.dataset.cancel}`).classList.remove("on");
-  }
-  for (const b of document.querySelectorAll("[data-save]")) {
-    b.onclick = async () => {
-      const key = b.dataset.save;
-      $("err").textContent = "";
-      let value;
-      try { value = JSON.parse($(`v-${key}`).value); }
-      catch { $("err").textContent = `${key}: the value is not valid JSON`; return; }
-      try {
-        await api(`/api/settings/${key}`, { method: "POST",
-          body: JSON.stringify({ value, rationale: $(`r-${key}`).value }) });
-        load();
-      } catch (e) { $("err").textContent = e.message; }
-    };
-  }
+  const entry = data.editable.find((s) => s.key === KEY);
+  current = entry && entry.value ? { ...DEFAULTS, ...entry.value } : { ...DEFAULTS };
+  fill(current);
+  const history = await api(`/api/settings/${KEY}/history`);
+  $("history").innerHTML = history.length ? history.map((h) => `
+    <tr><td>${escape(h.valid_from.slice(0, 16).replace("T", " "))}</td>
+      <td>${escape(FIELDS.map((f) => `${f} ${h.value[f]}`).join(" · "))}</td>
+      <td>${escape(h.changed_by || "—")}</td><td>${escape(h.rationale)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">No change recorded: the strategy's defaults are in
+        force (10 parts, 1.5% step, 5% correction, 2% pullback).</td></tr>`;
 }
+
+for (const f of FIELDS) $(`f-${f}`).addEventListener("input", refresh);
+$("f-why").addEventListener("input", refresh);
+$("reset").onclick = () => fill(current);
+$("save").onclick = save;
 </script>
 </body>
 </html>

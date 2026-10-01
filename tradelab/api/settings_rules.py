@@ -116,7 +116,29 @@ def _alert_drawdown(value: dict) -> None:
         )
 
 
+def _number(value: dict, name: str, low: float, high: float, whole: bool = False) -> float:
+    x = value.get(name)
+    if isinstance(x, bool) or not isinstance(x, int | float):
+        raise Invalid(f"{name} must be a number, got {x!r}")
+    if whole and x != int(x):
+        raise Invalid(f"{name} must be a whole number, got {x}")
+    if not low <= x <= high:
+        raise Invalid(f"{name} must be between {low:g} and {high:g}, got {x:g}")
+    return float(x)
+
+
+def _btc_ladder(value: dict) -> None:
+    _number(value, "parts", 1, 50, whole=True)
+    step = _number(value, "step_pct", 0.5, 20)
+    _number(value, "correction_pct", 0.5, 30)
+    _number(value, "trail_pct", 0.5, 20)
+    if step * (value["parts"] - 1) >= 100:
+        raise Invalid("the last part would be bought at or below zero: lower parts or step_pct")
+
+
 RULES: dict[str, Rule] = {
+    "btc_ladder": Rule(("parts", "step_pct", "correction_pct", "trail_pct"), _btc_ladder,
+                       "parts 1-50; step_pct 0.5-20; correction_pct 0.5-30; trail_pct 0.5-20"),
     "history_years": Rule(("years",), _history_years,
                           "a whole number of years, 1 to what the archive holds"),
     "research_universe": Rule(("assets",), _research_universe,

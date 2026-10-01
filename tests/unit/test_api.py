@@ -352,12 +352,8 @@ def test_a_locked_parameter_is_refused_by_name() -> None:
 
         allowed = client.get("/api/settings").json()
         keys = {entry["key"] for entry in allowed["editable"]}
-        assert "research_universe" in keys
-        assert "rsi_period" not in keys
-        # And the locked half is shown, not hidden. Knowing why you cannot
-        # change something is the useful part.
-        assert any("asset universe" in item["name"].lower()
-                   for item in allowed["locked"])
+        # The one strategy that runs is the only thing configured here.
+        assert keys == {"btc_ladder"}
 
 
 @pytest.mark.fast
