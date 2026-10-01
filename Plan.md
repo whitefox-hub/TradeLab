@@ -1,7 +1,48 @@
 # TradeLab — Quantitative Research, Simulation and Trading Platform
 
 > Architecture specification. Supersedes the original brief, which is preserved verbatim in Appendix A.
-> Status: proposal, pre-implementation.
+> Status: implemented through the simulator rung (§12). One strategy runs; see "Current state" below.
+
+---
+
+## Current state — 2026-10-01
+
+**One strategy runs: BTC +1%**, chosen by the operator. It buys BTC spot with its budget,
+sells as soon as the sale nets +1% after the fee (0.10%) and slippage (1.5 bp), and buys
+again. It never sells at a loss: a position that falls waits as long as it takes. The budget
+starts at $1,000 and grows only by realised profit, inside a $10,000 fake account, so the
+position stays within the active risk limits (§14.1). It runs in the **simulator** (§12.1) on
+Binance spot prices, checked every 10 seconds.
+
+| | |
+|---|---|
+| Rule | `tradelab/strategy/btc_plus_one.py` |
+| Runner | `scripts/run_btc_plus_one.py`, state in `data/forward/btc-plus-one/` |
+| Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
+| Screen | `http://127.0.0.1:8010/home`: the open position, its P&L, a **Close** button |
+| Manual exit | Close sells at market, even at a loss, and pauses buying for 24 hours; both the request and the fill are audit rows |
+
+**What the history says about it** (BTC spot hourly closes, 2018-01 → 2026-09, all capital in
+each cycle): $10,000 became $36,352, against $61,242 for holding BTC. It trailed holding BTC
+in every calendar year, because each cycle gives up the rest of a rise and none avoids a fall;
+the account's drawdowns equal BTC's (−22% to −81%), and the longest wait for +1% was 1,042
+days. These are descriptive figures on data already read; the forward run is the test.
+
+**Removed, at the operator's instruction:**
+
+* the forward books: the PREREG-009 trend book, the four BTC trend books (SMA 150, SMA 120,
+  SMA 120 vol-sized, hold BTC) and Flash Strike. Their runs are ended in the database, not
+  deleted, and the home screen lists open runs only;
+* the studies PREREG-007 to PREREG-019, their results, scripts and outputs. They remain in git
+  history before commit `3335646`. PREREG-001 to 006 and the FINDINGs are kept;
+* the macro screen and its catalogue (§20.6, retired 2026-09-28): no strategy used them. The
+  tables remain.
+
+What those studies established, in one line each: no 5-minute shock rule of 10,368 paid its
+costs (011); taking +1% without ever realising a loss converts BTC's direction into small
+realised gains and large carried losses, under every refinement tried (013, 014, 018, 019);
+the one rule that beat holding BTC out of sample was long BTC above its 150-day average, flat
+otherwise (015).
 
 ---
 
@@ -2974,7 +3015,7 @@ Ordered by the phase that needs them, so none is built before there is something
 | **Data quality** | Open issues, which windows are blocked and what that blocks | issue resolution | 2 |
 | **Capital ramp** | Current tier, days at tier, criteria for advancing | tier approvals (admin) | 7 |
 | **News** | Events, extracted fields, ratings with their calibration, process state | `event_annotations`, `process_transitions` (§20.5) | 9 |
-| **Macro** | Release calendar with consensus, actual and surprise; which series carry vintages; freshness per series | consensus where no feed supplies it (§20.6) | 9 |
+| ~~**Macro**~~ | *Retired 2026-09-28: no strategy used it (§20.6).* | — | — |
 
 Parameter configuration deserves its own note, because it is where the interface is most likely to do damage: **signal parameters are not editable anywhere.** §12.4 makes changing one create a new strategy that re-enters the funnel, and `runs.params` is immutable in the schema. The interface exposes the operational settings of §12.4's left-hand column — sizing, risk limits, order type, alert thresholds — and displays the rest read-only.
 
@@ -3052,6 +3093,10 @@ position built on the prior state goes to zero at the transition rather than
 decaying from it (§11.8).
 
 ### 20.6 The macro screen, and where the boundary falls
+
+> **Retired 2026-09-28.** The screen, its routes and its daily refresh were removed because no
+> strategy read them; the `macro_series` and `macro_releases` tables remain. The design below
+> is kept for the day a strategy needs it.
 
 Macro is a clean illustration of §20.1's rule, because it lands on both sides of
 it.
