@@ -55,6 +55,18 @@
     <h1>Home</h1>
     <p class="sub">Quantitative research laboratory · single operator</p>
 
+    <h2 class="section">BTC ladder<span class="note" id="ladder-note"></span></h2>
+    <div class="cards context" id="ladder-cards"></div>
+    <table class="book" id="ladder-table">
+      <thead><tr>
+        <th>#</th><th class="num">Bought at</th><th class="num">Days</th><th class="num">Cost</th>
+        <th class="num">Value</th><th class="num">Gain</th><th class="num">Minimum</th>
+        <th class="num">Cap</th><th>State</th>
+      </tr></thead>
+      <tbody id="ladder"></tbody>
+    </table>
+
+
     <div class="cards" id="book-cards"></div>
 
     <h2 class="section">Open positions<span class="note" id="book-note"></span></h2>
@@ -66,17 +78,6 @@
         <th>Guide</th><th>Mode</th><th class="num">As of</th><th></th>
       </tr></thead>
       <tbody id="book"></tbody>
-    </table>
-
-    <h2 class="section">BTC ladder<span class="note" id="ladder-note"></span></h2>
-    <div class="cards context" id="ladder-cards"></div>
-    <table class="book" id="ladder-table">
-      <thead><tr>
-        <th>#</th><th class="num">Bought at</th><th class="num">Days</th><th class="num">Cost</th>
-        <th class="num">Value</th><th class="num">Gain</th><th class="num">Minimum</th>
-        <th class="num">Cap</th><th>State</th>
-      </tr></thead>
-      <tbody id="ladder"></tbody>
     </table>
 
     <h2 class="section">Market<span class="note">Read back, never computed.</span></h2>
@@ -242,6 +243,13 @@ async function renderLadder() {
 }
 
 async function load() {
+  // The ladder first and on its own: nothing else on the page can stop it from showing.
+  const ladder = () => renderLadder().catch((e) => {
+    $("ladder-note").textContent = `Could not read the ladder: ${e.message}`;
+  });
+  ladder();
+  clearInterval(load.ladder);
+  load.ladder = setInterval(ladder, 15000);
   const [book, scenario, sentiment, quality] = await Promise.all([
     api("/api/positions"),
     api("/api/scenario"),
@@ -250,9 +258,6 @@ async function load() {
   ]);
 
   renderBook(book);
-  renderLadder().catch(() => {});
-  clearInterval(load.ladder);
-  load.ladder = setInterval(() => renderLadder().catch(() => {}), 15000);
 
   // Trend is 1-10, 5 neutral; direction comes from the server.
   const pressure = scenario.direction === "NEUTRAL"
