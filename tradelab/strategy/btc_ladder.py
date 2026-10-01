@@ -41,7 +41,6 @@ class Config:
 
 
 DEFAULT = Config()
-PARTS, STEP, REENTRY, TRAIL = DEFAULT.parts, DEFAULT.step, DEFAULT.reentry, DEFAULT.trail
 #: (days held, minimum net gain), longest first.
 TIERS = ((90, 0.20), (60, 0.12), (45, 0.08), (30, 0.05), (15, 0.03), (0, 0.01))
 #: A part this close above its minimum sells rather than risk slipping under it.

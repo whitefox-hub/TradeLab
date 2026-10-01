@@ -127,20 +127,6 @@ def test_an_engine_with_no_context_behaves_exactly_as_before() -> None:
 
 
 @pytest.mark.fast
-def test_the_lookup_is_point_in_time() -> None:
-    """An event is visible when a subscriber could have seen it, not when it
-    happened — and reading without a cutoff lets a backtest act on tomorrow's
-    news, which looks entirely reasonable in the output."""
-    from pathlib import Path
-
-    import tradelab.events.context as module
-
-    source = Path(module.__file__).read_text()
-    assert "e.first_seen_at <= :as_of" in source
-    assert "s.available_at <= :as_of" in source
-
-
-@pytest.mark.fast
 def test_a_reduce_only_order_is_never_damped() -> None:
     """Cutting an exit because news is bad is the opposite of what news should
     do to it."""

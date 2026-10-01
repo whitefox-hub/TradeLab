@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from tradelab.engines.tier_a.costs import BINANCE_RETAIL, PESSIMISTIC, CostModel
+from tradelab.engines.tier_a.costs import BINANCE_RETAIL, CostModel
 from tradelab.engines.tier_a.engine import BacktestResult, run, threshold_position
 from tradelab.features.materialise import materialise
 from tradelab.validation.deflated import sharpe_stats
@@ -301,12 +301,3 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
         robustness=robustness,
         tier_a_rows=tier_a_rows,
     )
-
-
-def cost_sensitivity(bars: pl.DataFrame, spec: StudySpec) -> dict[str, Verdict]:
-    """The same study under realistic and pessimistic fills (§9.5); promotion needs both."""
-    out = {}
-    for label, costs in (("realistic", BINANCE_RETAIL), ("pessimistic", PESSIMISTIC)):
-        variant = StudySpec(**{**spec.__dict__, "costs": costs})
-        out[label] = run_study(bars, variant).verdict
-    return out
