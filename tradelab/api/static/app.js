@@ -66,7 +66,13 @@ async function api(path, options = {}) {
     throw new Error("unauthenticated");
   }
   if (!response.ok) {
-    throw new Error((await response.json()).detail || response.statusText);
+    const detail = (await response.json()).detail;
+    // A 422 from request validation carries a list of {loc, msg}; show it, not "[object Object]".
+    const text = Array.isArray(detail)
+      ? detail.map((d) => `${(d.loc || []).filter((p) => p !== "body").join(".")}: ${d.msg}`)
+          .join("; ")
+      : detail;
+    throw new Error(text || response.statusText);
   }
   return response.json();
 }
