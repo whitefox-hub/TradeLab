@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import numpy as np
 
-#: Exposure change at either end of the scale.
 TILT_CEILING = 0.5
 
-#: Must leave a position exactly as it was.
 NEUTRAL = 5
 
-#: The scale's ends.
 LOWEST, HIGHEST = 1, 10
 
 
@@ -37,8 +34,6 @@ def direction(magnitude: int) -> str:
     return "UP" if tilt > 0 else "DOWN" if tilt < 0 else "NEUTRAL"
 
 
-#: Discrete market-state buckets (§11.4): the vendor's bands, read off published days
-#: (the vendor documents names, not cut points).
 SENTIMENT_BUCKETS = (
     (25, "Extreme Fear"), (46, "Fear"), (54, "Neutral"), (75, "Greed"),
     (100, "Extreme Greed"),

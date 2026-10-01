@@ -10,10 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-#: How much a live regime shift cuts a new position. Not zero: the prior is worse (§11.7).
 REGIME_SIZE_MULTIPLIER = 0.5
 
-#: A pending scheduled event inside this many days damps size too (§11.6).
 ANTICIPATION_DAYS = 3
 ANTICIPATION_MULTIPLIER = 0.7
 
@@ -25,7 +23,6 @@ class EventContext:
     regime_shifts: int
     pending_schedules: int
     active_shocks: int
-    #: Net direction of everything live, in -1/0/+1. Reported, not acted on.
     net_direction: int
 
     @property

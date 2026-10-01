@@ -27,8 +27,8 @@ class Progress:
     assets_done: int = 0
     assets_total: int = 0
     days_written: int = 0
-    days_skipped: int = 0     # already on disk
-    days_absent: int = 0      # not listed that day: expected, not an error
+    days_skipped: int = 0
+    days_absent: int = 0
     rows: int = 0
     bytes_written: int = 0
     issues: list[Issue] = field(default_factory=list)
@@ -95,7 +95,6 @@ def backfill_asset(
             _write_days(collector, result, frame, root, asset, timeframe, set(wanted))
             continue
 
-        # No monthly archive (trailing month or pre-listing): per-day requests tell them apart.
         for day in wanted:
             _fetch_one_day(collector, result, root, asset, day, timeframe)
 
@@ -135,12 +134,10 @@ def _fetch_one_day(collector, result: Progress, root: Path, asset: str,
     try:
         frame = collector.fetch_day(asset, day)
     except Exception as exc:
-        # One bad day must not abandon the asset; the gap shows in the manifest.
         log.warning("fetch_failed", asset=asset, day=str(day), error=str(exc))
         return
 
     if frame is None or not frame.height:
-        # Not listed yet: not a gap (§4.4).
         result.days_absent += 1
         return
 

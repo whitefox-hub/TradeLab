@@ -47,8 +47,6 @@ def write_partition(
     target.parent.mkdir(parents=True, exist_ok=True)
 
     table = frame.select([f.name for f in schema]).to_arrow().cast(schema)
-    # Row groups sized for the scan pattern; zstd because the archive is
-    # write-once, read-many and CPU is cheaper than IO here.
     pq.write_table(
         table, target, compression="zstd", compression_level=3,
         row_group_size=200_000, use_dictionary=["venue", "asset"],

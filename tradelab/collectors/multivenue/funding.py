@@ -12,8 +12,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import polars as pl
 
-#: A funding observation, venue-independent once normalised.
-Rate = tuple[int, float]   # (settlement time in ms, rate as a fraction)
+Rate = tuple[int, float]
 
 VENUES = ("binance", "bybit", "okx", "gate", "bitget")
 
@@ -45,7 +44,6 @@ def _binance(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> l
 
 
 def _bybit(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> list[Rate]:
-    # Paginates backwards from `endTime`; there is no forward cursor.
     out: list[Rate] = []
     cursor = end_ms
     while cursor > start_ms:
@@ -65,8 +63,6 @@ def _bybit(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> lis
     return out
 
 
-#: Measured: OKX serves ~96 days and Bitget ~90 of funding history; earlier requests
-#: return empty, not an error. Their price history is not limited.
 FUNDING_HISTORY_DAYS: dict[str, int | None] = {
     "binance": None, "bybit": None, "gate": None, "okx": 96, "bitget": 90,
 }
@@ -107,7 +103,6 @@ def _gate(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -> list
         if oldest >= cursor:
             break
         cursor = oldest - 1
-    # Gate pages by an upper bound only, so the last page runs past `start`: filter.
     return [r for r in out if start_ms <= r[0] <= end_ms]
 
 
@@ -183,7 +178,6 @@ def spread(a: pl.DataFrame, b: pl.DataFrame, min_days: int = 30) -> pl.DataFrame
     )
 
 
-#: Daily closes per venue: the price leg is required (RESULT-003 was voided for omitting it).
 def closes(venue: str, base: str, start: datetime, end: datetime,
            client: httpx.Client | None = None) -> dict[int, float]:
     """Daily closes keyed by UTC-midnight epoch ms."""
@@ -206,7 +200,6 @@ def closes(venue: str, base: str, start: datetime, end: datetime,
             out = {int(b[0]): float(b[4])
                    for b in (payload.get("result", {}).get("list") or [])}
         elif venue == "okx":
-            # Caps at 100 candles per call; page backwards from `after`.
             out = {}
             cursor = end_ms
             while cursor > start_ms:
@@ -227,7 +220,7 @@ def closes(venue: str, base: str, start: datetime, end: datetime,
                 params={"contract": symbol, "interval": "1d", "limit": 1000}).json()
             out = {int(r["t"]) * 1000: float(r["c"])
                    for r in rows} if isinstance(rows, list) else {}
-        else:  # bitget, which pages backwards from `endTime`
+        else:
             out = {}
             cursor = end_ms
             while cursor > start_ms:

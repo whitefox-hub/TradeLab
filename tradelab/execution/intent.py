@@ -17,17 +17,16 @@ from tradelab.execution.types import Order
 
 
 class IntentState(StrEnum):
-    WANTED = "wanted"          # the strategy asked
-    VETOED = "vetoed"          # the risk engine refused
-    SENT = "sent"              # written before the venue was called
+    WANTED = "wanted"
+    VETOED = "vetoed"
+    SENT = "sent"
     ACKNOWLEDGED = "acknowledged"
     FILLED = "filled"
     REJECTED = "rejected"
-    UNKNOWN = "unknown"        # sent, never acknowledged: must be resolved
-    ABSENT = "absent"          # resolved on restart: the venue never saw it
+    UNKNOWN = "unknown"
+    ABSENT = "absent"
 
 
-#: An order may exist at the venue; resolved on startup before anything is sent.
 UNRESOLVED: frozenset[IntentState] = frozenset({IntentState.SENT, IntentState.UNKNOWN})
 
 
@@ -43,7 +42,6 @@ class Intent:
     state: IntentState
     reason: str = ""
     venue_order_id: str = ""
-    #: FILLED records only; needed to rebuild the average price (reconcile checks size only).
     price: Decimal | None = None
     fee: Decimal | None = None
 

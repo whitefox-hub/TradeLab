@@ -50,8 +50,6 @@ def main() -> int:
         asset.removesuffix("USDT")
         for asset in pl.read_parquet(args.binance)["asset"].to_list()
     }
-    # PREREG-002: Bybit-only tokens. A token listed on both venues is one price
-    # move observed twice, whatever the gap between the two dates.
     targets = sorted(set(perpetuals) - already)
     print(f"bybit perpetuals {len(perpetuals)}, of which never on binance {len(targets)}")
 
@@ -67,13 +65,12 @@ def main() -> int:
                         "start": start, "limit": WINDOW_DAYS},
             ).json()
             bars = payload.get("result", {}).get("list") or []
-            # Bybit returns newest first; unreversed, every return inverts silently.
             bars = list(reversed(bars))
             if len(bars) < 9:
                 return {"_drop": "short_history" if bars else "no_klines"}
 
             closes = [float(bar[4]) for bar in bars]
-            entry_ms = int(bars[1][0]) + 86_400_000  # close of the entry bar
+            entry_ms = int(bars[1][0]) + 86_400_000
             exit_ms = int(bars[8][0]) + 86_400_000
             funding_payload = client.get(
                 FUNDING,

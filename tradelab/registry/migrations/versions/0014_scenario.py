@@ -20,7 +20,6 @@ def upgrade() -> None:
     op.alter_column('market_conditions', 'direction', new_column_name='wave_direction')
     op.alter_column('market_conditions', 'magnitude', new_column_name='wave_magnitude')
 
-    # Rename constraints to match the new table name.
     for old, new in (
         ('ck_market_wave_singleton', 'ck_market_conditions_singleton'),
         ('ck_market_wave_direction', 'ck_market_conditions_wave_direction'),

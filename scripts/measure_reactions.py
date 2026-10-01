@@ -24,7 +24,6 @@ from tradelab.events.reaction import Window, leakage_flag, measure
 KLINES = "https://fapi.binance.com/fapi/v1/klines"
 MARKET = "BTCUSDT"
 BARS_PER_DAY = 1
-#: Only horizons a daily bar can carry.
 DAILY_HORIZONS = (-1440, 1440, 4320, 10080)
 
 
@@ -94,13 +93,10 @@ def main() -> int:
                 symbol = asset if asset.endswith(("USDT", "USDC")) else f"{asset}USDT"
                 series = closes(symbol, start, end, client)
                 if len(series) < 25:
-                    # Usually a listing: no pre-event baseline (PREREG-001 measures
-                    # listings forward instead).
                     skip("no pre-event history (listing, or too new)")
                     continue
                 asset_days, asset_returns = returns(series)
 
-                # Inner join, never a fill: a zero-filled missing bar invents a quiet day.
                 shared = np.intersect1d(asset_days, market_days)
                 if shared.size < 25:
                     skip("too few shared days with the market")
@@ -115,8 +111,6 @@ def main() -> int:
                     continue
 
                 window = Window(shared, aligned_asset, aligned_market, event_index)
-                # BTC vs itself is zero by construction; use the time-series
-                # counterfactual, as for market-wide events.
                 self_benchmarked = symbol == MARKET
                 results = measure(
                     window, symbol, BARS_PER_DAY,

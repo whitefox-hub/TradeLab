@@ -16,11 +16,11 @@ from tradelab.engines.tier_a.costs import CostModel
 
 @dataclass(frozen=True, slots=True)
 class CrossSectionalResult:
-    returns: np.ndarray          # per-bar portfolio return, net
+    returns: np.ndarray
     gross_returns: np.ndarray
     turnover: float
     rebalances: int
-    avg_names: float             # mean assets held per bar
+    avg_names: float
     effective_n: float
 
     @property
@@ -56,7 +56,6 @@ def rank_positions(
         if long_short:
             weights[t, order[:k]] = -1.0 / k
 
-    # Hold between rebalances rather than reverting to flat.
     held = np.maximum.accumulate(
         np.where(np.arange(n_bars) % rebalance == 0, np.arange(n_bars), 0)
     )
@@ -74,7 +73,6 @@ def run_cross_sectional(
     costs = costs or BINANCE_RETAIL
     weights = rank_positions(signals, k, long_short, rebalance)
 
-    # A ranking from bar t takes effect at t+1 (§9.1).
     lagged = np.vstack([np.zeros((1, weights.shape[1])), weights[:-1]])
 
     returns = np.zeros_like(closes)
@@ -93,6 +91,5 @@ def run_cross_sectional(
         returns=net, gross_returns=gross, turnover=float(traded.sum()),
         rebalances=rebalances,
         avg_names=float(np.mean((lagged != 0).sum(axis=1))),
-        # Independent bets are rebalances, not bars.
         effective_n=float(max(rebalances, 1)),
     )

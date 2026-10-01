@@ -93,8 +93,6 @@ def stationary_bootstrap(
     p = 1.0 / expected
     rng = np.random.default_rng(seed)
 
-    # Wrap indices so blocks near the end stay whole rather than truncating,
-    # which would under-weight the tail of the sample.
     starts = rng.integers(0, n, size=(n_samples, n))
     continues = rng.random((n_samples, n)) > p
     idx = np.empty((n_samples, n), dtype=np.int64)

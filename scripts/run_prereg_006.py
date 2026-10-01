@@ -18,9 +18,9 @@ from tradelab.validation.deflated import sharpe_stats
 from tradelab.validation.gates import evaluate
 from tradelab.validation.power import assess
 
-TRIALS = 3                 # third on this panel; the bar moves with it
-BREADTH_WINDOW = 30        # inherited from FEASIBILITY-006
-FLIP_LEGS = 2              # one side of each of two legs, per pair
+TRIALS = 3
+BREADTH_WINDOW = 30
+FLIP_LEGS = 2
 YEAR = 365.25
 
 
@@ -83,7 +83,6 @@ def main() -> int:
     breadth = breadth_series(matrix, BREADTH_WINDOW)
     held = gate(breadth)
 
-    # Leak probe: perturbing day t must not change whether day t is held.
     probe = matrix.copy()
     probe[:, BREADTH_WINDOW + 5] += 0.05
     moved = int(np.sum(gate(breadth_series(probe, BREADTH_WINDOW))[:BREADTH_WINDOW + 6]

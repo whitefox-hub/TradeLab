@@ -22,8 +22,6 @@ def test_sigterm_sets_the_stop_event() -> None:
         stop = asyncio.Event()
         install_shutdown_handler(stop)
         signal.raise_signal(signal.SIGTERM)
-        # add_signal_handler schedules the callback on the loop, so the event is
-        # set on a later iteration rather than synchronously.
         try:
             await asyncio.wait_for(stop.wait(), timeout=2)
         except TimeoutError:
@@ -77,7 +75,6 @@ def test_watermark_survives_a_restart() -> None:
         watermark.advance(session, run, mark, rows=1440)
         watermark.finish(session, run)
 
-    # A "restart": fresh session, same source.
     with db_session() as session:
         source = watermark.source_id(session, "test-resume", "ohlcv", "binance")
         assert watermark.read(session, source) is not None
@@ -98,7 +95,7 @@ def test_refuses_to_start_when_the_archive_is_not_writable(tmp_path) -> None:
 
     archive = tmp_path / "archive"
     archive.mkdir()
-    assert_writable(archive)  # writable: no complaint
+    assert_writable(archive)
 
     if os.getuid() == 0:
         pytest.skip("running as root; permissions cannot be exercised")

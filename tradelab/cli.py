@@ -108,7 +108,6 @@ def backfill_universe_cmd(
     archive = root or get_settings().archive_root
     archive.mkdir(parents=True, exist_ok=True)
     assets = listing_dates(limit=limit or None, min_history_days=min_history_days)
-    # Yesterday: today's daily archive may not be published yet.
     end = _date.today() - _td(days=1)
 
     typer.echo(f"{len(assets)} contracts, {timeframe}, through {end} -> {archive}")

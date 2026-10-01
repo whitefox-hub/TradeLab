@@ -20,11 +20,11 @@ from tradelab.validation.deflated import sharpe_stats
 from tradelab.validation.gates import evaluate
 from tradelab.validation.power import assess
 
-TRIALS = 2                    # second trial on this panel; the threshold moves
-VOL_WINDOW = 90               # PREREG-003's quarter, reused so as not to add one
-CALIBRATION_DAYS = 90         # sets sigma_target, then evaluation opens
+TRIALS = 2
+VOL_WINDOW = 90
+CALIBRATION_DAYS = 90
 LEVERAGE_CAP = float(RiskLimits().max_gross_exposure)
-RESIZE_LEGS = 4               # two legs, both sides of the change
+RESIZE_LEGS = 4
 YEAR = 365.25
 
 
@@ -42,7 +42,7 @@ def unsized_portfolio(root: Path) -> tuple[np.ndarray, list[str], np.ndarray, in
     for frame in pairs.values():
         aligned = frame.sort("day")
         daily, _ = simulate(aligned["spread"].to_numpy(), aligned["basis"].to_numpy())
-        daily = daily / 2.0          # capital committed on both venues
+        daily = daily / 2.0
         positions = np.array([index[d] for d in aligned["day"].to_list()])
         live = np.arange(daily.size) >= LOOKBACK_DAYS
         contribution[positions[live]] += daily[live]
@@ -66,8 +66,6 @@ def size(portfolio: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Returns (sized net series, leverage path, evaluation mask)."""
     vol = trailing_vol(portfolio, VOL_WINDOW)
 
-    # sigma_target: realised vol of the first CALIBRATION_DAYS live days, fixed before
-    # evaluation opens (causal).
     sigma_target = portfolio[:CALIBRATION_DAYS].std(ddof=1)
 
     leverage = np.zeros(portfolio.size)
@@ -77,7 +75,6 @@ def size(portfolio: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     delta = np.zeros(portfolio.size)
     delta[1:] = np.abs(np.diff(leverage))
     delta[0] = leverage[0]
-    # Charge every notional change, not only sign flips.
     sized = leverage * portfolio - delta * RESIZE_LEGS * float(BINANCE_RETAIL.per_side)
 
     evaluated = np.zeros(portfolio.size, dtype=bool)
@@ -114,7 +111,6 @@ def main() -> int:
 
     sized, leverage, evaluated = size(portfolio)
 
-    # Leak probe: perturbing day t must not change the leverage applied on day t.
     probe = portfolio.copy()
     probe[VOL_WINDOW + 5] += 0.05
     moved = int(np.sum(size(probe)[1][:VOL_WINDOW + 6] != leverage[:VOL_WINDOW + 6]))
@@ -145,7 +141,6 @@ def main() -> int:
     print("\nby quarter, sized vs unsized (trimmed drops the most extreme 1%)")
     qs, qu = quarters(eval_days, live_sized), quarters(eval_days, live_unsized)
     ql = quarters(eval_days, live_lev)
-    # Pairs live per quarter: the registered confound (more pairs -> lower vol -> more leverage).
     qp = quarters(eval_days, present[evaluated])
     print(f"{'':8s} {'pairs':>6s} {'lev':>6s} {'unsized':>10s} {'sized':>10s} "
           f"{'unsz trim':>10s} {'sz trim':>10s}")

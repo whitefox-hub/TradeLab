@@ -66,7 +66,7 @@ def test_a_detectable_result_survives_a_pessimistic_target() -> None:
     rng = np.random.default_rng(3)
     result = evaluate(
         sharpe_stats(rng.normal(0.0015, 0.01, 5000)), trials=1000, n_oos_trades=500,
-        min_detectable_sharpe=0.001,        # far below the detectable floor
+        min_detectable_sharpe=0.001,
     )
     assert result.verdict is Verdict.PASS
 

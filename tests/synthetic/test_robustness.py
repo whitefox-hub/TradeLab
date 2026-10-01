@@ -85,8 +85,6 @@ def test_observed_drawdown_is_one_draw_from_a_distribution() -> None:
 
     assert result.samples.std() > 0, "every reordering gave the same drawdown"
     assert result.quantile(0.05) < result.quantile(0.5) < 0
-    # The tail is materially worse than the middle, and that gap is exactly the
-    # information a single backtest number hides.
     assert result.quantile(0.05) < result.quantile(0.5) * 1.2
 
 
@@ -101,8 +99,8 @@ def test_a_drawdown_inside_the_distribution_is_not_evidence_of_failure() -> None
     trades = rng.normal(0.004, 0.03, 200)
     result = drawdown_distribution(trades, n_samples=2000)
 
-    ordinary = result.quantile(0.20)       # worse than typical, still unremarkable
-    extreme = result.quantile(0.001) * 2   # far outside anything observed
+    ordinary = result.quantile(0.20)
+    extreme = result.quantile(0.001) * 2
 
     assert result.is_within_expectation(ordinary, q=0.95)
     assert not result.is_within_expectation(extreme, q=0.95)

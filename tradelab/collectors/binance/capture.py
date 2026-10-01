@@ -30,12 +30,10 @@ class _Buffer:
 
     def __init__(self, root: Path, kind: str, schema, flush_rows: int, flush_after: timedelta):
         self.root, self.kind, self.schema = root, kind, schema
-        # Set by the supervisor to record progress on every flush.
         self.on_flush: Callable[[int, datetime], None] | None = None
         self.flush_rows, self.flush_after = flush_rows, flush_after
         self.rows: list[dict] = []
         self.last_flush = datetime.now(UTC)
-        # Rows that reached disk; the watermark may only advance on this.
         self.flushed_rows = 0
 
     def add(self, row: dict) -> None:
@@ -68,7 +66,6 @@ class _Buffer:
         self.rows.clear()
         self.last_flush = datetime.now(UTC)
         if self.on_flush is not None:
-            # Only after files are on disk, so the watermark never claims unpersisted data.
             self.on_flush(frame.height, frame["event_time"].max())
         return written
 
@@ -81,7 +78,6 @@ class LiquidationCapture:
 
     def __init__(self, root: Path, flush_rows: int = 200,
                  flush_after: timedelta = timedelta(seconds=60)) -> None:
-        # Short flush budget: data is unrecoverable, small files are cheap.
         self.buffer = _Buffer(root, self.kind, schemas.LIQUIDATIONS, flush_rows, flush_after)
 
     @staticmethod
@@ -106,8 +102,6 @@ class LiquidationCapture:
         backoff = 1.0
         while not stop.is_set():
             try:
-                # Liveness via ping/pong only: liquidations can be silent for minutes,
-                # so silence must not trigger a reconnect.
                 async with websockets.connect(
                     f"{WS}/!forceOrder@arr", ping_interval=20, ping_timeout=20
                 ) as socket:
@@ -126,7 +120,6 @@ class LiquidationCapture:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                # A reconnect loses events; logged so the gap can be filed.
                 log.warning("liquidation_stream_reconnect", error=str(exc), backoff=backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)

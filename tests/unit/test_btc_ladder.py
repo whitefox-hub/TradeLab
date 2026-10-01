@@ -24,7 +24,7 @@ def test_the_minimum_grows_with_the_days_held_and_the_cap_is_twice_it():
 
 
 def test_it_never_sells_below_the_minimum():
-    p = part(days=20)                                    # minimum 3%
+    p = part(days=20)
     assert not lad.exit_now(p, at(0.025, p), T0, FEE, SLIP)
     assert not lad.exit_now(p, at(-0.30, p), T0, FEE, SLIP)
 
@@ -37,7 +37,7 @@ def test_reaching_the_minimum_starts_following_it_does_not_sell():
 
 def test_it_sells_two_percent_under_the_peak_and_not_before():
     p = part()
-    lad.exit_now(p, at(0.06, p), T0, FEE, SLIP)          # peak at +6%
+    lad.exit_now(p, at(0.06, p), T0, FEE, SLIP)
     top = p.peak
     assert not lad.exit_now(p, top * 0.981, T0, FEE, SLIP)
     assert lad.exit_now(p, top * 0.98, T0, FEE, SLIP)
@@ -45,12 +45,12 @@ def test_it_sells_two_percent_under_the_peak_and_not_before():
 
 def test_falling_onto_the_minimum_sells_there():
     p = part()
-    lad.exit_now(p, at(0.025, p), T0, FEE, SLIP)         # peak +2.5%: 2% back is under 1%
+    lad.exit_now(p, at(0.025, p), T0, FEE, SLIP)
     assert lad.exit_now(p, at(0.0105, p), T0, FEE, SLIP)
 
 
 def test_the_cap_always_sells():
-    p = part(days=50)                                    # minimum 8%, cap 16%
+    p = part(days=50)
     assert lad.exit_now(p, at(0.161, p), T0, FEE, SLIP)
 
 
@@ -71,9 +71,9 @@ def test_a_part_is_a_tenth_of_the_budget_including_what_is_held():
 
 def test_the_ladder_also_climbs_on_a_correction_clear_of_every_part():
     held = [part(100.0)]
-    assert not lad.buy_now(held, 110.0, armed=False)          # no correction yet
-    assert lad.buy_now(held, 110.0, armed=True)               # corrected, 10% above part 1
-    assert not lad.buy_now([part(100.0), part(110.0)], 109.0, armed=True)   # too close to 110
+    assert not lad.buy_now(held, 110.0, armed=False)
+    assert lad.buy_now(held, 110.0, armed=True)
+    assert not lad.buy_now([part(100.0), part(110.0)], 109.0, armed=True)
     assert lad.buy_now([part(100.0), part(110.0)], 105.0, armed=True)
 
 

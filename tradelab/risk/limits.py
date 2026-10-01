@@ -40,14 +40,12 @@ class Breach(StrEnum):
     EVENT_CONTEXT = "event_context"
 
 
-#: Breaches that stop the whole run rather than one order.
 HALTING: frozenset[Breach] = frozenset({
     Breach.MAX_DAILY_LOSS,
     Breach.MAX_DRAWDOWN_FROM_PEAK,
     Breach.MAX_CONSECUTIVE_ERRORS,
 })
 
-#: A halt a human must clear; the review is the control (§14.1).
 REQUIRES_HUMAN: frozenset[Breach] = frozenset({Breach.MAX_DRAWDOWN_FROM_PEAK})
 
 
@@ -61,17 +59,16 @@ class RiskLimits:
     min_position_pct_equity: Decimal = Decimal("0.005")
     max_position_pct_equity: Decimal = Decimal("0.25")
     min_seconds_between_entries: int = 60
-    max_gross_exposure: Decimal = Decimal("2.0")   # multiples of equity
+    max_gross_exposure: Decimal = Decimal("2.0")
     max_net_exposure: Decimal = Decimal("1.0")
     max_leverage: Decimal = Decimal("3.0")
-    max_daily_loss: Decimal = Decimal("0.05")      # fraction of day-start equity
+    max_daily_loss: Decimal = Decimal("0.05")
     max_drawdown_from_peak: Decimal = Decimal("0.20")
     max_orders_per_minute: int = 20
     max_consecutive_errors: int = 3
     max_price_deviation_bps: Decimal = Decimal(50)
 
 
-#: What each limit stops, one line per `RiskLimits` field (a test enforces full coverage).
 STOPS: dict[str, str] = {
     "max_open_positions":
         "A book wide enough that no single position matters is also one nobody "
@@ -118,9 +115,6 @@ STOPS: dict[str, str] = {
         "neither should reach a venue.",
 }
 
-#: How the risk screen's form groups and names each limit: (group, plain name, unit).
-#: Unit "pct" is a fraction shown as a percentage, "x" a multiple of equity, "usd" a USDT
-#: amount. Kept beside STOPS so a new limit is described and placed in one edit.
 PRESENTATION: dict[str, tuple[str, str, str]] = {
     "max_position_pct_equity": ("Position size", "Largest position", "pct"),
     "min_position_pct_equity": ("Position size", "Smallest position", "pct"),
@@ -171,14 +165,10 @@ class RiskEngine:
     ) -> None:
         self.limits = limits
         self.account = account
-        # Injected so a backtest can supply a point-in-time view. Conditions size only,
-        # never direction (§11.7).
         self.event_context = event_context
-        # One correlation cluster is one bet (§13.1).
         self.clusters = clusters or {}
         self._order_times: list[datetime] = []
 
-    # -- state the engine owns, rather than asking the strategy for ----------
 
     def record_order(self, at: datetime) -> None:
         self._order_times.append(at)
@@ -199,7 +189,6 @@ class RiskEngine:
         self.account.halted = True
         self.account.halt_reason = reason
 
-    # -- the veto ------------------------------------------------------------
 
     def check(
         self, order: Order, price: Decimal, instrument: Instrument,
@@ -209,7 +198,6 @@ class RiskEngine:
         account = self.account
         limits = self.limits
 
-        # reduce_only first, ahead of the halt check: a halted run must still get flat.
         if order.reduce_only:
             return Decision(allowed=True)
 
@@ -220,8 +208,6 @@ class RiskEngine:
         if not loss_check.allowed:
             return loss_check
 
-        # §14.1: reject orders far from mid. A mid <= 0 is corrupt data and refuses (never
-        # skip). None skips: no reference (backtest); venue paths must supply one.
         if mid_price is not None:
             if mid_price <= 0:
                 return _refuse(
@@ -276,7 +262,6 @@ class RiskEngine:
                 f"last entry {(at - position.last_entry_at).total_seconds():.0f}s ago",
             )
 
-        # News before size, so min-viable is judged on the damped size.
         context = self.event_context(order.asset, at) if self.event_context else None
         if context is not None and context.size_multiplier < 1.0:
             order = Order(
@@ -288,7 +273,6 @@ class RiskEngine:
                 strategy_id=order.strategy_id,
             )
 
-        # Size is judged on the quantised quantity, as the venue will round.
         def with_event_reason(detail: str) -> str:
             """Append the event damping to a size refusal that news caused."""
             if context is None or context.size_multiplier >= 1.0:
@@ -317,7 +301,6 @@ class RiskEngine:
             if fraction > limits.max_position_pct_equity:
                 return _refuse(Breach.MAX_POSITION_PCT_EQUITY, f"{fraction:.4f}")
 
-        # Portfolio exposure, computed with this order included.
         projected = dict(prices) | {order.asset: price}
         gross = account.gross_exposure(projected) + notional
         signed = quantity * price * order.side.sign

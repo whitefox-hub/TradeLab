@@ -23,7 +23,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Rows with regime_shift would violate the old constraint; deleted, not reclassified.
     op.execute("DELETE FROM events WHERE shape = 'regime_shift'")
     op.execute("ALTER TABLE events DROP CONSTRAINT IF EXISTS ck_events_shape")
     op.execute(

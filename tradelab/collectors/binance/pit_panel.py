@@ -29,12 +29,10 @@ REST = "https://fapi.binance.com"
 ARCHIVE = "https://data.binance.vision/data/futures/um/monthly"
 BUCKET = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 
-#: Crypto perpetuals only (excludes TradFi and index perpetuals).
 CONTRACT = "PERPETUAL"
 UNDERLYING = "COIN"
 QUOTE = "USDT"
 
-#: Published funding limit is 500 requests / 300 s; paced a little under it.
 FUNDING_INTERVAL_S = 300 / 450
 
 
@@ -45,7 +43,7 @@ class Refused(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class Contract:
     symbol: str
-    status: str                  # TRADING, SETTLING, or ARCHIVED (not in exchangeInfo)
+    status: str
     delisted_at: datetime | None
 
     @property
@@ -89,9 +87,6 @@ def archived_symbols(client: httpx.Client) -> list[str]:
     return sorted(n for n in names if n.endswith(QUOTE) and "_" not in n)
 
 
-# -- prices --------------------------------------------------------------------
-
-
 def live_days(bars: Iterable[tuple[int, float, float]],
               delisted_at: datetime | None) -> pl.DataFrame:
     """Daily closes on traded days, none after delisting. `bars` is (open ms, close, volume).
@@ -121,9 +116,6 @@ def rest_bars(client: httpx.Client, symbol: str,
     return out
 
 
-# -- funding -------------------------------------------------------------------
-
-
 def rest_funding(client: httpx.Client, symbol: str, start: datetime, end: datetime,
                  pace: float = FUNDING_INTERVAL_S) -> list[tuple[int, float]]:
     """Every settlement in the window, paced under the shared limit.
@@ -151,16 +143,13 @@ def rest_funding(client: httpx.Client, symbol: str, start: datetime, end: dateti
     return out
 
 
-# -- the archive, for symbols the REST endpoint no longer knows ----------------
-
-
 def archive_bars(client: httpx.Client, symbol: str,
                  months: Iterable[date]) -> list[tuple[int, float, float]]:
     out: list[tuple[int, float, float]] = []
     for month in months:
         for row in _archive_rows(client, f"{ARCHIVE}/klines/{symbol}/1d/"
                                  f"{symbol}-1d-{month:%Y-%m}.zip"):
-            if row and row[0].isdigit():            # newer files carry a header
+            if row and row[0].isdigit():
                 out.append((int(row[0]), float(row[4]), float(row[5])))
     return out
 
@@ -179,7 +168,7 @@ def archive_funding(client: httpx.Client, symbol: str,
 def _archive_rows(client: httpx.Client, url: str) -> list[list[str]]:
     response = client.get(url)
     if response.status_code == 404:
-        return []                                   # not listed that month
+        return []
     response.raise_for_status()
     with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
         text = bundle.read(bundle.namelist()[0]).decode()
@@ -194,9 +183,6 @@ def months_between(start: datetime, end: datetime) -> list[date]:
     return out
 
 
-# -- one asset -----------------------------------------------------------------
-
-
 def collect(client: httpx.Client, contract: Contract,
             start: datetime, end: datetime) -> pl.DataFrame | None:
     """Daily close and funding for one contract. None if it never traded in
@@ -205,8 +191,6 @@ def collect(client: httpx.Client, contract: Contract,
         bars = rest_bars(client, contract.symbol, start, end)
         rates = rest_funding(client, contract.symbol, start, end) if bars else []
         source = "rest"
-        # REST forgets removed contracts silently (empty, not -1121), e.g. LUNA or MATIC
-        # for 2022; for a symbol known only to the archive, empty means ask the archive.
         if not bars and contract.status == "ARCHIVED":
             raise Refused("-1121: empty REST history for an archive-only symbol")
     except Refused as refused:
@@ -223,7 +207,6 @@ def collect(client: httpx.Client, contract: Contract,
         return None
     window = [r for r in rates if _to_ms(start) <= r[0] <= _to_ms(end)]
     daily = to_daily(window)
-    # Left join from prices: a settlement without a price is a day nothing could be held.
     return (prices.join(daily, on="day", how="left")
             .with_columns(pl.lit(contract.asset).alias("asset"),
                           pl.lit("binance").alias("venue"),

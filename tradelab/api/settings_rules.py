@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-#: USD-M perpetuals launched Sept 2019; the years ceiling is derived from it, not hard-coded.
 HISTORY_BEGINS = datetime(2019, 9, 1, tzinfo=UTC)
 
 SYMBOL = re.compile(r"^[A-Z0-9]{2,20}(USDT|USDC|USD)$")
@@ -170,7 +169,6 @@ def validate(key: str, value: Any) -> None:
     missing = [f for f in rule.fields if f not in value]
     if missing:
         raise Invalid(f"missing {missing}; expected {rule.describes}")
-    # Unknown fields are refused, not dropped: the operator would think they took effect.
     extra = sorted(set(value) - set(rule.fields))
     if extra:
         raise Invalid(f"unknown fields {extra}; expected only {list(rule.fields)}")

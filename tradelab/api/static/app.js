@@ -1,5 +1,3 @@
-/* Shared navigation and session handling. Plan.md §20.3.
-   SCREENS is the single sidebar list for every page. */
 
 const SCREENS = [
   { href: "/home", label: "Home" },
@@ -32,8 +30,6 @@ function renderSidebar(active) {
     </aside>`;
 }
 
-/* Called by every screen: draws the menu, resolves the session, and redirects an
-   unauthenticated visitor to /login with `next`. */
 async function mount(active, { onReady } = {}) {
   document.querySelector(".layout")
     .insertAdjacentHTML("afterbegin", renderSidebar(active));
@@ -66,7 +62,6 @@ async function api(path, options = {}) {
   }
   if (!response.ok) {
     const detail = (await response.json()).detail;
-    // A 422 from request validation carries a list of {loc, msg}; show it, not "[object Object]".
     const text = Array.isArray(detail)
       ? detail.map((d) => `${(d.loc || []).filter((p) => p !== "body").join(".")}: ${d.msg}`)
           .join("; ")
@@ -78,8 +73,6 @@ async function api(path, options = {}) {
 
 const $ = (id) => document.getElementById(id);
 
-/* Pagination, 100 records a page. The server pages every list that can grow and sends the
-   total in X-Total-Count; `pager` draws "Page n of m" with previous and next under a table. */
 const PER_PAGE = 100;
 
 async function apiPage(path) {

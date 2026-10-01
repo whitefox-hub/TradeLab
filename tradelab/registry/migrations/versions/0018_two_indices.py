@@ -19,7 +19,6 @@ def upgrade() -> None:
                        type_='primary')
     op.create_primary_key('sentiment_readings_pkey', 'sentiment_readings',
                           ['day', 'source'])
-    # Reads are "latest of one series", so the index leads with source.
     op.create_index('ix_sentiment_source_day', 'sentiment_readings',
                     ['source', 'day'])
 

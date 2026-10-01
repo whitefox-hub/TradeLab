@@ -41,8 +41,6 @@ def main() -> int:
     args = parser.parse_args()
     set_window(args.start, args.end)
     args.out.mkdir(parents=True, exist_ok=True)
-    # END must be a completed UTC day: an in-progress day has a partial close and
-    # partial settlements (the five-venue panel carries exactly that on 2026-09-25).
     today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     if today <= END:
         raise SystemExit(f"END {END:%Y-%m-%d} is not a completed UTC day yet")

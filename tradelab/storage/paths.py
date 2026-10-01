@@ -16,8 +16,6 @@ DataKind = Literal[
     "announcements",
 ]
 
-# Data that CANNOT be backfilled: no historical REST endpoint, or a very short
-# window. Capture must start before it is needed (Plan.md §4.1 note).
 NON_BACKFILLABLE: frozenset[str] = frozenset({"liquidations", "open_interest", "book_features"})
 
 
@@ -28,15 +26,12 @@ class Partition:
     asset: str
     day: date
     revision: int = 0
-    timeframe: str | None = None  # ohlcv only
-    # Streams flush repeatedly within a day, so a capture partition is written as
-    # numbered parts. Backfilled partitions leave this None and stay one file.
+    timeframe: str | None = None
     part: int | None = None
 
     def relative_path(self) -> Path:
         parts = [self.kind]
         if self.asset == "_all":
-            # Venue-wide sources keep the asset key so one scan pattern covers every kind.
             pass
         if self.timeframe:
             parts.append(f"tf={self.timeframe}")

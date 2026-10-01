@@ -77,7 +77,6 @@ $("form").addEventListener("submit", async (event) => {
       $("err").textContent = (await response.json()).detail || "sign in failed";
       return;
     }
-    // Same-origin paths only: prevents an open redirect.
     location.href = next.startsWith("/") && !next.startsWith("//") ? next : "/trade_lab";
   } catch {
     $("err").textContent = "could not reach the server";

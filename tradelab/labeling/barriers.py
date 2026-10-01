@@ -26,10 +26,9 @@ class BarrierSpec:
 
     profit_mult: float = 2.0
     stop_mult: float = 1.0
-    max_holding: int = 120          # bars; bounded to the §0.2 band
+    max_holding: int = 120
     vol_period: int = 100
     min_vol: float = 1e-6
-    # Scale barriers by sqrt(max_holding); off makes the horizon barrier ~unreachable.
     scale_to_horizon: bool = True
 
 
@@ -58,7 +57,6 @@ def _first_touch(
         hit_stop = valid & (low[j] <= lower)
         hit_profit = valid & (high[j] >= upper)
 
-        # Both barriers in one bar: order unknowable, so the adverse one wins.
         stop_wins = hit_stop
         profit_wins = hit_profit & ~hit_stop
 
@@ -68,7 +66,6 @@ def _first_touch(
         bars_held[newly] = step
         settled |= newly
 
-    # Horizon past end of data: undetermined, dropped rather than labelled HORIZON.
     incomplete = np.arange(n) + horizon >= n
     bars_held[incomplete & ~settled] = -1
     return label, bars_held
@@ -84,8 +81,6 @@ def triple_barrier(
     spec = spec if spec is not None else BarrierSpec()
     frame = bars.sort("event_time")
 
-    # EWM, not rolling: a rolling window's trailing edge moves the estimate on a quiet bar,
-    # widening barriers for an old shock (RESULT-004; tests/unit/test_estimator_echo.py).
     vol = (
         frame.select(
             (pl.col("close") / pl.col("close").shift(1)).log()
@@ -117,8 +112,6 @@ def triple_barrier(
     return frame.select("event_time", "available_at", "close").with_columns(
         label=pl.Series(label, dtype=pl.Int8),
         bars_held=pl.Series(bars_held, dtype=pl.Int32),
-        # When the outcome became knowable; what the purge must cover. Gathered, not via
-        # numpy: `to_numpy` strips the timezone and breaks tz-aware comparisons (§5).
         determined_at=frame["event_time"].gather(exit_idx),
         exit_price=pl.Series(close[exit_idx]),
         vol=pl.Series(vol),

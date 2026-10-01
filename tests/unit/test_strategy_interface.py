@@ -59,7 +59,6 @@ def test_the_context_stops_before_the_bar_being_decided() -> None:
     source = inspect.getsource(Context)
     assert "does not include it" in source
 
-    # The simulation passes close[:i], never close[:i + 1].
     from pathlib import Path
     script = (Path(__file__).resolve().parents[2]
               / "scripts/simulate_capital.py").read_text()
@@ -133,7 +132,6 @@ def test_entries_and_exits_both_reach_the_order_path() -> None:
     probe = AboveLevel()
     assert isinstance(probe, Strategy)
 
-    # Up, down, up: two entries and two exits are reachable.
     series = np.concatenate([
         np.linspace(90, 110, 20), np.linspace(110, 90, 20),
         np.linspace(90, 110, 20), np.linspace(110, 90, 20),

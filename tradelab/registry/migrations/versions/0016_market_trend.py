@@ -12,7 +12,6 @@ down_revision = '0015'
 branch_labels = None
 depends_on = None
 
-#: (table, old column, new column)
 COLUMNS = (
     ('market_conditions', 'wave_direction', 'trend_direction'),
     ('market_conditions', 'wave_magnitude', 'trend_magnitude'),
@@ -20,7 +19,6 @@ COLUMNS = (
     ('scenario_runs', 'wave_magnitude', 'trend_magnitude'),
 )
 
-#: (table, old constraint, new constraint)
 CONSTRAINTS = (
     ('market_conditions', 'ck_market_conditions_wave_direction',
      'ck_market_conditions_trend_direction'),
@@ -38,7 +36,6 @@ def upgrade() -> None:
         op.alter_column(table, old, new_column_name=new)
     for table, old, new in CONSTRAINTS:
         op.execute(f'ALTER TABLE {table} RENAME CONSTRAINT {old} TO {new}')
-    # Postgres rewrites CHECK bodies on column rename; only names need touching.
 
 
 def downgrade() -> None:

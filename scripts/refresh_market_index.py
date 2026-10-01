@@ -40,13 +40,10 @@ def main() -> int:
     engine = sa.create_engine(Settings().database_url)
     since = INCEPTION if args.full else resume_from(engine)
 
-    # Historical endpoint only: the SDK drops `latest`'s time of day, which would leak an
-    # 18:00 quote to midnight. The historical series already includes today.
     try:
         collected = fetch_history(since=since)
         print(f"{store(engine, collected)} changed, from {since}")
     except QuotaReached as stopped:
-        # Store before reporting so the pages already fetched are kept.
         print(f"{store(engine, stopped.collected)} changed from {since}, "
               f"then {stopped}")
     _report_budget("budget")

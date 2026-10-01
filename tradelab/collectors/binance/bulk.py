@@ -29,16 +29,13 @@ from tradelab.collectors.base import (
 BASE = "https://data.binance.vision/data/futures/um/daily"
 VENUE = "binance"
 
-# A kline is usable at close; the archive merely records it later.
 KLINE_PUBLICATION_DELAY = timedelta(milliseconds=0)
 
-# Positional layout of the headerless archives.
 _KLINE_COLUMNS = [
     "open_time", "open", "high", "low", "close", "volume", "close_time",
     "quote_volume", "count", "taker_buy_volume", "taker_buy_quote_volume", "ignore",
 ]
 
-# Binance header names -> ours. Header names changed over the years; headerless files exist.
 _RENAME = {
     "count": "trade_count",
     "number_of_trades": "trade_count",
@@ -98,7 +95,6 @@ class BinanceKlineBulk:
         return self._parse(raw, asset)
 
     def _parse(self, raw: str, asset: str) -> pl.DataFrame:
-        # Some archives have a header row, some do not.
         has_header = raw.lstrip().startswith("open_time")
         frame = pl.read_csv(
             io.StringIO(raw), has_header=has_header,
@@ -116,13 +112,11 @@ class BinanceKlineBulk:
         return self._normalise(frame, asset)
 
     def _normalise(self, frame: pl.DataFrame, asset: str) -> pl.DataFrame:
-        # Older archives use epoch ms, newer ones us; detect by magnitude.
         unit = "us" if frame["open_time"].max() > 1e15 else "ms"  # type: ignore[operator]
         ingest = datetime.now(UTC)
         close_time = pl.from_epoch(pl.col("close_time"), time_unit=unit).dt.replace_time_zone("UTC")
 
         return frame.select(
-            # event_time is the bar close.
             event_time=close_time,
             ingest_time=pl.lit(ingest),
             available_at=close_time + KLINE_PUBLICATION_DELAY,
@@ -222,7 +216,6 @@ class BinanceFundingBulk:
         unit = "us" if frame["event_time_raw"].max() > 1e15 else "ms"  # type: ignore[operator]
         settle = pl.from_epoch(pl.col("event_time_raw"), time_unit=unit).dt.replace_time_zone("UTC")
         return frame.select(
-            # The rate is known and applied at the settlement instant.
             event_time=settle,
             ingest_time=pl.lit(datetime.now(UTC)),
             available_at=settle,
@@ -246,7 +239,6 @@ class BinanceFundingBulk:
             *check_schema(batch),
             *check_timestamps(batch),
             *check_duplicates(batch, ["event_time", "asset"]),
-            # |rate| >= 5% per interval indicates a parsing error.
             *(
                 [_out_of_range(batch, "funding_rate", "|rate| must be < 0.05")]
                 if batch.frame.filter(pl.col("funding_rate").abs() >= 0.05).height

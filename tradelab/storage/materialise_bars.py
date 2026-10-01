@@ -85,7 +85,6 @@ def materialise_asset(
 
     path = target_path(root, asset, timeframe)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Overwritten, not revisioned: a derived cache, not an observation (§3.2).
     frame.write_parquet(path, compression="zstd", compression_level=3)
     return Materialised(asset, timeframe, path, frame.height, digest)
 

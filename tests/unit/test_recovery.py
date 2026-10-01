@@ -30,7 +30,7 @@ def test_klines_gap_is_fully_recoverable() -> None:
     assert plan.recoverability is Recoverability.FULL
     assert plan.needs_backfill
     assert plan.permanent_loss is None
-    assert plan.issue is None  # nothing lost, so nothing to report
+    assert plan.issue is None
 
 
 @pytest.mark.fast
@@ -39,8 +39,8 @@ def test_open_interest_recovers_only_inside_its_window() -> None:
     plan = plan_recovery("open_interest", NOW - timedelta(days=45), NOW)
     assert plan is not None
     assert plan.recoverability is Recoverability.WINDOW
-    assert plan.needs_backfill                      # the recent 30 days
-    assert plan.permanent_loss is not None          # the older 15
+    assert plan.needs_backfill
+    assert plan.permanent_loss is not None
     lost_start, lost_end = plan.permanent_loss
     assert (lost_end - lost_start) == timedelta(days=15)
 

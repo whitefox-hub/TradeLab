@@ -36,7 +36,6 @@ def _report_budget(label: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    # alternative.me only; 0 is the whole history (first load).
     parser.add_argument("--limit", type=int, default=30)
     parser.add_argument("--cmc-history", action="store_true",
                         help="also page CoinMarketCap's full published history")
@@ -45,7 +44,6 @@ def main() -> int:
     engine = sa.create_engine(Settings().database_url)
     reached = 0
 
-    # Sources are independent so one failing (e.g. suddenly requiring a key) keeps the other.
     sources = [("alternative.me", lambda: fetch(limit=args.limit)),
                ("coinmarketcap", fetch_cmc)]
     if args.cmc_history:
@@ -67,7 +65,6 @@ def main() -> int:
               f"{newest.day.date()} = {newest.value} ({newest.classification})")
 
     _report_budget("budget")
-    # Fail only if every source failed; zero rows written is normal when up to date.
     return 0 if reached else 1
 
 

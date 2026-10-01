@@ -24,7 +24,7 @@ def file_hash(path: Path) -> str:
 
 @dataclass(frozen=True, slots=True)
 class FileEntry:
-    path: str  # relative to the archive root
+    path: str
     sha256: str
     size_bytes: int
     rows: int | None = None

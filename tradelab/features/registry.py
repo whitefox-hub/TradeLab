@@ -18,7 +18,6 @@ import polars as pl
 
 from tradelab.features.params import ParamSpace
 
-#: Families from §6. Closed (like §11.1) so importance clustering does not fragment.
 FAMILIES = frozenset({
     "momentum", "trend", "volatility", "volume", "structure", "vwap",
     "orderflow", "open_interest", "funding", "liquidations", "basis",
@@ -92,7 +91,6 @@ class Registry:
         return len(self.features)
 
 
-#: Residual weight below which an EWM's memory counts as exhausted (sets its lookback).
 MEMORY_EPSILON = 1e-6
 
 
@@ -131,8 +129,6 @@ def feature(
             code_hash=hashlib.sha256(source.encode()).hexdigest(),
             requires=requires,
         )
-        # `is not None`, never `or`: an empty Registry is falsy (__len__), so `or` would
-        # register test/canary features in the global REGISTRY.
         target = registry if registry is not None else REGISTRY
         target.add(definition)
         return definition

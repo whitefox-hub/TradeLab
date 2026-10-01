@@ -30,9 +30,6 @@ def test_symmetric_barriers_are_balanced_on_driftless_data(noise: pl.DataFrame) 
     assert stops + profits > 1000, "too few resolved labels to judge balance"
 
     share = profits / (stops + profits)
-    # The tie-break is deliberately pessimistic — a bar touching both barriers is
-    # scored as a stop — so a modest tilt toward stops is expected and correct.
-    # A large one is not.
     assert 0.40 <= share <= 0.52, (
         f"profit share {share:.3f} on driftless data. Symmetric barriers should be "
         f"near balanced, with only the conservative tie-break tilting it down."
@@ -70,9 +67,6 @@ def test_horizon_is_reachable(noise: pl.DataFrame) -> None:
 def test_determination_time_is_never_before_entry(noise: pl.DataFrame) -> None:
     """`determined_at` is what the purge covers, so it must be sane (§8.2)."""
     out = triple_barrier(noise, BarrierSpec(max_holding=60, vol_period=100))
-    # Timezone must survive the labeller. It did not at first: a numpy round trip
-    # stripped it, producing a naive timestamp that would compare wrongly against
-    # the tz-aware archive without ever raising (§5).
     assert out.schema["determined_at"].time_zone == "UTC"
     assert (out["determined_at"] >= out["event_time"]).all()
     assert out["bars_held"].min() >= 1
@@ -88,11 +82,7 @@ def test_incomplete_events_at_the_end_are_dropped(noise: pl.DataFrame) -> None:
     spec = BarrierSpec(max_holding=200, vol_period=100)
     out = triple_barrier(noise, spec)
 
-    # Not a simple height bound: an event near the end that settled early DOES
-    # have an outcome and must be kept. What must hold is that every surviving
-    # label was actually observable within the data.
     assert out["bars_held"].min() >= 1
     last = noise["event_time"].max()
     assert (out["determined_at"] <= last).all()
-    # And the tail that could neither settle nor reach its horizon is gone.
     assert out["event_time"].max() < last

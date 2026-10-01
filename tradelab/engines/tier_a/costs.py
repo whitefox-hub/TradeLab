@@ -12,13 +12,11 @@ from dataclasses import dataclass
 class CostModel:
     """All rates are fractions of notional, per side unless stated."""
 
-    taker_fee: float = 0.0005          # Binance USD-M VIP0
+    taker_fee: float = 0.0005
     maker_fee: float = 0.0002
     half_spread: float = 0.00005
-    slippage: float = 0.0001           # beyond the spread, taker
-    maker_fill_rate: float = 0.0       # tier A assumes taker: the honest default
-    #: Per-bar fallback when no funding series is given; longs pay, shorts receive.
-    #: BTCUSDT 2020-2026 averaged 0.0108%/8h (~11.8%/yr).
+    slippage: float = 0.0001
+    maker_fill_rate: float = 0.0
     funding_per_bar: float = 0.0
 
     @property
@@ -44,8 +42,6 @@ class CostModel:
         return drag
 
 
-#: Retail Binance USD-M (VIP0), deliberately not a better fee tier.
 BINANCE_RETAIL = CostModel()
 
-#: Reported alongside the realistic model in promotion (§9.5).
 PESSIMISTIC = CostModel(taker_fee=0.0005, half_spread=0.0002, slippage=0.0005)

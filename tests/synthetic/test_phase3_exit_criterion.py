@@ -69,9 +69,6 @@ def test_noise_survives_no_strategy() -> None:
 
     best_idx = int(np.argmax([r.sharpe for r in results]))
     best = results[best_idx]
-    # Effective observations, not bars. A position held for 200 bars yields 200
-    # serially dependent returns; counting them as 200 observations overstates
-    # every significance figure downstream (§7).
     stats = sharpe_stats(matrix[:, best_idx], effective_n=best.effective_n)
 
     dsr = deflated_sharpe(stats, trials=trials)
@@ -94,18 +91,12 @@ def test_pbo_detects_that_selection_is_worthless_on_noise() -> None:
     entries = np.arange(55.0, 75.0, 2.0)
     _, net, gross, turnover = _search(bars, periods, entries, BINANCE_RETAIL, "1h")
 
-    # On GROSS returns, selection on noise must be unreliable.
     on_gross = probability_of_backtest_overfitting(gross, n_blocks=10, turnover=turnover)
     assert on_gross.pbo > 0.35, (
         f"PBO={on_gross.pbo:.3f} on gross returns over pure noise. Selection cannot "
         f"be reliable on data with nothing to select."
     )
 
-    # On NET returns it collapses to ~0, and that is not a bug. Net Sharpe
-    # correlates about -0.95 with turnover, so the search selects the
-    # configuration that trades least — which persists out of sample perfectly
-    # well without being alpha. The diagnostic exists so this is visible instead
-    # of being read as a clean bill of health.
     on_net = probability_of_backtest_overfitting(net, n_blocks=10, turnover=turnover)
     assert on_net.pbo < on_gross.pbo
     assert on_net.measures_turnover_not_alpha, (
@@ -206,8 +197,6 @@ def test_selection_never_sees_the_evaluation_window() -> None:
             name="leak-probe", params=tuple(range(10, 40, 4)),
             entries=tuple(np.arange(55.0, 75.0, 4.0)), min_trades=15,
             oos_fraction=oos_fraction,
-            # Verifying the selection boundary, not power. Waived explicitly,
-            # which is the distinction §8.8's check exists to force.
             require_power=False,
         )
         return np.array([r["sharpe"] for r in run_study(frame, spec).tier_a_rows])

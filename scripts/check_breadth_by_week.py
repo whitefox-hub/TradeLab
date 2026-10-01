@@ -14,11 +14,9 @@ from pathlib import Path
 import numpy as np
 from check_cross_sectional_breadth import returns_matrix
 
-#: Portfolios drawn once and held across periods; redrawing would measure the draw.
 DRAWS = 200
 SEED = 20260926
 
-#: Trailing-beta fit window: one quarter, inherited from PREREG-003.
 BETA_WINDOW = 90
 
 
@@ -92,8 +90,6 @@ def main() -> int:
     market = block.mean(axis=0)
     weights = fixed_portfolios(count, DRAWS, SEED)
 
-    # Full-sample beta (FEASIBILITY-008's) is a lookahead, kept only as an upper bound;
-    # trailing beta is the causal one.
     residuals = {"full-sample beta (lookahead)": _full_sample(block, market),
                  "trailing beta (causal)": _trailing(block, market)}
 
@@ -110,7 +106,6 @@ def main() -> int:
     residual = np.nan_to_num(
         residuals["trailing beta (causal)"][:, BETA_WINDOW:])
 
-    # Name the worst periods: an average hiding them is what FINDING-004 got wrong.
     size = 30
     values = [(s, breadth_over(residual[:, s:s + size], weights))
               for s in range(0, residual.shape[1] - size + 1, size)]

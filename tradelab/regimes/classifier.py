@@ -36,11 +36,10 @@ class Structure(StrEnum):
 class RegimeSpec:
     trend_period: int = 100
     vol_period: int = 100
-    warmup: int = 500               # bars before any threshold is trustworthy
+    warmup: int = 500
     vol_high_quantile: float = 0.66
     vol_low_quantile: float = 0.33
-    trend_quantile: float = 0.60    # |trend| above this is directional
-    # Efficiency ratio: net move / total path travelled.
+    trend_quantile: float = 0.60
     efficiency_quantile: float = 0.60
 
 
@@ -68,8 +67,6 @@ def classify(bars: pl.DataFrame, spec: RegimeSpec | None = None) -> pl.DataFrame
     log_returns = np.zeros(n)
     log_returns[1:] = np.log(close[1:] / close[:-1])
 
-    # EWM, not rolling: a rolling window's trailing edge moves the estimate on a quiet bar
-    # and mislabels its regime (§13.1, FINDING-004; see labeling/barriers.py).
     vol = (
         pl.Series(log_returns)
         .ewm_std(span=spec.vol_period, min_samples=spec.vol_period)
@@ -80,7 +77,6 @@ def classify(bars: pl.DataFrame, spec: RegimeSpec | None = None) -> pl.DataFrame
         close[spec.trend_period:] / close[: n - spec.trend_period] - 1.0
     )
 
-    # Efficiency ratio (Kaufman): |net move| / sum |bar moves| over the window.
     net = np.abs(pl.Series(close).diff(spec.trend_period).to_numpy())
     path = pl.Series(np.abs(np.diff(close, prepend=close[0]))).rolling_sum(
         spec.trend_period).to_numpy()

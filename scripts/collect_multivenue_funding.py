@@ -91,18 +91,16 @@ def main() -> int:
     def collect(base: str) -> tuple[str, int]:
         target = args.out / f"{base}.parquet"
         if target.exists():
-            return base, -1          # already collected; resume rather than refetch
+            return base, -1
         frames = []
         with httpx.Client(timeout=20.0) as client:
             for venue in SPECS:
                 try:
                     daily = to_daily(fetch(venue, base, start, end, client=client))
                 except Exception:
-                    continue          # one venue missing is a narrower panel, not a failure
+                    continue
                 if not daily.height:
                     continue
-                # Price leg is required: RESULT-003 was voided for omitting it
-                # (basis volatility ran 42x the funding spread).
                 marks = closes(venue, base, start, end, client=client)
                 price = pl.DataFrame({
                     "day": [

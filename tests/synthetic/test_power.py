@@ -72,8 +72,6 @@ def test_the_pilot_reads_structure_and_not_performance() -> None:
 
     count = pilot_effective_n(close, position, oos_fraction=1.0)
     assert count > 0
-    # The same holding structure at a different price path gives the same answer:
-    # the estimate cannot depend on whether the strategy made money.
     assert count == pilot_effective_n(np.linspace(200.0, 50.0, 1_000), position,
                                       oos_fraction=1.0)
 

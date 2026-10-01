@@ -98,7 +98,6 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("period_end >= period_start", name="ck_dqi_period"),
     )
-    # Blocking issues gate promotion (§4.6), so they are queried constantly.
     op.create_index(
         "ix_dqi_open_blocking", "data_quality_issues", ["source_id", "period_start"],
         postgresql_where=sa.text("resolved_at IS NULL AND severity = 'blocking'"),

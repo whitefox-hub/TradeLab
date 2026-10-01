@@ -28,11 +28,9 @@ from tradelab.execution.types import (
 )
 from tradelab.risk.limits import RiskEngine, RiskLimits
 
-#: Not BTC: these have a $5 venue floor vs BTC's $50 (§14.5).
 BASKET = ["ADAUSDT", "XRPUSDT", "XLMUSDT", "SUIUSDT", "ALGOUSDT"]
 DRILL = "ADAUSDT"
 
-#: Entry spacing relaxed for drills only; at 60 s the drills would never reach the venue.
 LIMITS = RiskLimits(min_seconds_between_entries=0, max_orders_per_minute=60)
 
 
@@ -109,16 +107,13 @@ def main() -> int:
 def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
            quantity: Decimal, now: datetime) -> int:
     """The drills; separate from `main` so its `finally` flattens even if one raises."""
-    # -- 1. reconciliation against what the venue really holds ---------------
     heading(1, "Reconciliation against the venue's own position view")
     engine = build(adapter, "drill-1", equity)
     print(f"  venue holds {adapter.positions() or 'nothing'}, we hold nothing")
     print(f"  divergences: {engine.reconcile(now) or 'none'} — halted: {engine.account.halted}")
-    # Prime after reconcile, or the first order folds the venue's recent history as ours.
     print(f"  trades already at the venue, marked seen and not folded: "
           f"{adapter.prime([DRILL])}")
 
-    # -- 2. an order through the whole path ----------------------------------
     heading(2, "One order, engine to venue and back")
     decision = engine.submit(Order(DRILL, Side.BUY, quantity), price,
                              {DRILL: price}, now)
@@ -131,7 +126,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  venue    {theirs}")
     print(f"  AGREE: {(ours.quantity if ours else Decimal(0)) == theirs}")
 
-    # -- 3. the crash ---------------------------------------------------------
     heading(3, "Restart with a position open and no memory of it")
     print("  a second engine, as after a process death: it knows nothing")
     restarted = build(adapter, "drill-3", equity)
@@ -143,7 +137,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print("  correct: the gap is the only evidence the bug exists, so it is not")
     print("  silently adopted (§14.2).")
 
-    # -- 4. the id already sent ----------------------------------------------
     heading(4, "Resolving an id the venue may already have executed")
     sent = next(i.client_order_id for i in reversed(engine.intents.records)
                 if i.state is IntentState.ACKNOWLEDGED)
@@ -152,7 +145,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
         print(f"  {label:22} -> {found.status if found else 'never seen'}")
     print("  this is what a restart asks instead of resending and doubling.")
 
-    # -- 5. partial fills -----------------------------------------------------
     heading(5, "One order, several trades")
     before = len(adapter.fills)
     big = adapter.instruments[DRILL].quantise(Decimal(400) / price)
@@ -165,12 +157,10 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  distinct identities: {len({p.identity for p in pieces})}")
     print(f"  folded whole: {sum(p.quantity for p in pieces)} of {big}")
     if len(pieces) < 2:
-        # Multi-trade fills depend on the day's book; the unit test holds the behaviour.
         print("  NOT EXERCISED today: one level covered the order. The book, not")
         print("  the adapter, decides this — see test_a_fill_carries_the_venue_"
               "trade_id.")
 
-    # Start flat: a fresh engine reconciling against a held position is drill 3 again.
     flatten(adapter, datetime.now(UTC))
     below = adapter.instruments[DRILL].round_price(price * Decimal("0.97"))
 
@@ -179,7 +169,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
         return Order(DRILL, Side.BUY, quantity, OrderType.LIMIT,
                      limit_price=below).with_id(f"drill-{tag}-{int(now.timestamp())}", 0)
 
-    # -- 6. the dead man's switch, left to fire -------------------------------
     heading(6, "Dead man's switch: stop talking and let the venue cancel")
     order = resting("dms")
     adapter.submit(order, now)
@@ -196,7 +185,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
         print(f"  cancelled by the venue after {time.monotonic() - started:.1f} s, "
               "with no call from us")
 
-    # -- 7. idempotency where the venue does enforce it ----------------------
     heading(7, "The same id twice, while the first still rests")
     order = resting("dup")
     first, second = adapter.submit(order, now), adapter.submit(order, now)
@@ -210,9 +198,7 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print("  one is refused with -4116 and resolved to the order already there.")
     adapter.cancel_all(now)
 
-    # -- 8. rejection for margin, until the error limit halts ----------------
     heading(8, "Insufficient margin, three times, and the engine stops")
-    # Limits wide enough that the venue, not the risk engine, refuses.
     wide = RiskLimits(min_seconds_between_entries=0, max_orders_per_minute=60,
                       max_position_notional=Decimal(10_000_000),
                       max_position_pct_equity=Decimal(1_000),
@@ -239,7 +225,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  reason: {engine.account.halt_reason}")
     print(f"  on the book: {adapter.open_orders(DRILL) or 'nothing'}")
 
-    # -- 9. clock drift -------------------------------------------------------
     heading(9, "Clock drift past the receive window")
     good = adapter._clock_offset_ms
     adapter._clock_offset_ms = good - 20_000
@@ -253,7 +238,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  with it: answered ({held or 'flat'}), offset "
           f"{good - 20_000} -> {adapter._clock_offset_ms} ms")
 
-    # -- 10. corrupt data -----------------------------------------------------
     heading(10, "Corrupt prices never reach the venue")
     engine = build(adapter, "drill-10", equity)
     engine.reconcile(now)
@@ -268,7 +252,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  venue rejections caused: {len(adapter.rejections) - before}; "
           f"on the book: {adapter.open_orders(DRILL) or 'nothing'}")
 
-    # -- 11. the kill switch, mid-flight -------------------------------------
     heading(11, "Kill switch with a position open and an order resting")
     engine = build(adapter, "drill-11", equity)
     engine.reconcile(now)
@@ -288,7 +271,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  a new order afterwards: allowed={decision.allowed} "
           f"{decision.breach or ''} {decision.detail}")
 
-    # -- 12. a restart with memory ------------------------------------------
     heading(12, "Die between send and answer, then restart from the log")
     with tempfile.TemporaryDirectory() as scratch:
         path = Path(scratch) / "intents.jsonl"
@@ -316,7 +298,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
         print(f"  venue holds {adapter.positions().get(DRILL, 0)}; "
               f"unresolved in the log: {len(before.intents.unresolved())}")
 
-        # New adapter and engine: only the intent file survives the "death".
         fresh = BinanceFuturesAdapter.from_environment(ExecutionMode.TESTNET,
                                                        symbols=BASKET)
         after = build(fresh, run_id, equity)
@@ -335,9 +316,7 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
                      {DRILL: price}, datetime.now(UTC), mid_price=price)
         print(f"  next id is new: {after.intents.records[-1].client_order_id not in used}")
 
-    # -- 13. a held position over its cap ------------------------------------
     heading(13, "A position that outgrew its cap is trimmed back at the venue")
-    # Fresh adapter: a new engine folds every fill the old adapter carries.
     flatten(adapter, now)
     adapter = BinanceFuturesAdapter.from_environment(ExecutionMode.TESTNET,
                                                      symbols=BASKET)
@@ -347,7 +326,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     engine.submit(Order(DRILL, Side.BUY, quantity), price, {DRILL: price}, now,
                   mid_price=price)
     engine.apply_fills(now)
-    # Price growth can't be forced on testnet; mark equity down instead to exceed the cap.
     engine.risk.mark_equity(quantity * price * Decimal(2))
     print(f"  holding {quantity} ≈ ${quantity * price:.2f}, equity marked "
           f"${engine.account.equity:.2f}: {quantity * price / engine.account.equity:.0%} "
@@ -361,7 +339,6 @@ def drills(adapter: BinanceFuturesAdapter, equity: Decimal, price: Decimal,
     print(f"  after: ours {ours}, venue {adapter.positions().get(DRILL, 0)}, "
           f"{ours * price / engine.account.equity:.0%} of equity")
 
-    # -- not drilled here -----------------------------------------------------
     print(f"\n{'─' * 72}\n  NOT DRILLED, and why\n{'─' * 72}")
     print("  websocket drop   this adapter is REST only; there is no socket to drop")
     print("  venue rate limit reaching -1003 costs the key a ban of minutes to days;")

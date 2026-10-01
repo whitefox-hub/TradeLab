@@ -12,7 +12,6 @@ import numpy as np
 
 from tradelab.engines.tier_a.costs import BINANCE_RETAIL, CostModel
 
-#: Bars per year by timeframe, for annualisation.
 BARS_PER_YEAR = {"1m": 525_600, "5m": 105_120, "15m": 35_040,
                  "1h": 8_760, "4h": 2_190, "1d": 365}
 
@@ -26,10 +25,9 @@ class BacktestResult:
     turnover: float
     avg_holding_bars: float
     gross_sharpe: float
-    cost_drag: float            # turnover plus funding
+    cost_drag: float
     funding_drag: float
     exposure: float
-    # Independent bets, not bars: held bars are serially dependent (§7).
     effective_n: float
 
 
@@ -50,7 +48,6 @@ def _legs(
     gross = position * returns
     traded = np.abs(np.diff(np.concatenate([[0.0], position])))
 
-    # Charged on the position held, signed: longs pay, shorts receive.
     if funding is not None:
         funding_cost = position * np.asarray(funding, dtype=np.float64)
     else:
@@ -94,7 +91,6 @@ def run(
     entries = int(np.sum((traded > 0) & (np.abs(position) > 0)))
     exposure = float(np.mean(np.abs(position) > 0))
 
-    # Effective observations: holding periods plus flat stretches; >= 1 to avoid div by zero.
     flat_runs = int(np.sum(np.diff(np.concatenate([[0.0], (position == 0).astype(float)])) > 0))
     effective_n = float(max(entries + flat_runs, 1))
 
@@ -121,11 +117,9 @@ def threshold_position(signal: np.ndarray, entry: float, exit_: float | None = N
     """
     exit_ = entry if exit_ is None else exit_
 
-    # +1 enter, -1 exit, 0 undecided (inside the band, or not a number).
     decision = np.where(signal > entry, 1, np.where(signal <= exit_, -1, 0)).astype(np.int8)
     decision[np.isnan(signal)] = -1
 
-    # Forward-fill the last decision: index of the most recent non-zero entry.
     made = decision != 0
     last = np.maximum.accumulate(np.where(made, np.arange(decision.size), -1))
     held = np.where(last >= 0, decision[last], -1)

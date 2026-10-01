@@ -9,7 +9,6 @@ import pytest
 from tradelab.collectors.binance.capture import LiquidationCapture
 from tradelab.storage.paths import NON_BACKFILLABLE
 
-# A real !forceOrder@arr payload, recorded from the live stream.
 SAMPLE = {
     "e": "forceOrder", "E": 1758573248123,
     "o": {
@@ -25,8 +24,6 @@ def test_parses_a_real_liquidation_payload() -> None:
     row = LiquidationCapture.parse(SAMPLE)
     assert row["asset"] == "BTCUSDT"
     assert row["side"] == "SELL"
-    # Average fill price is preferred over the order price: it is what actually
-    # transacted, and liquidation prices routinely slip from the order price.
     assert row["price"] == pytest.approx(106880.50)
     assert row["qty"] == pytest.approx(0.014)
 
@@ -73,7 +70,7 @@ def test_buffer_flushes_each_day_into_its_own_partition(tmp_path) -> None:
                 "side": "SELL", "price": 100.0, "qty": 1.0, "order_type": "LIMIT",
             })
     written = buffer.flush()
-    assert len(written) == 4  # 2 assets x 2 days, never a file spanning both
+    assert len(written) == 4
     assert buffer.rows == []
     assert all("_p0000.parquet" in p.name for p in written)
 
@@ -98,7 +95,7 @@ def test_successive_flushes_increment_the_part_number(tmp_path) -> None:
     buffer.add(dict(row))
     second = buffer.flush()
     assert "_p0000" in first[0].name
-    assert "_p0001" in second[0].name  # immutable: the first file is never touched
+    assert "_p0001" in second[0].name
 
 
 @pytest.mark.integration

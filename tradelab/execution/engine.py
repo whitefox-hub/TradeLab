@@ -50,7 +50,6 @@ class ExecutionEngine:
     intents: IntentLog = field(default_factory=IntentLog)
     _sequence: int = 0
     _reconciled: bool = False
-    #: Set by a reconciliation gap and never cleared: later agreement does not fix the bug.
     _diverged: bool = False
     _applied: set[str] = field(default_factory=set)
 
@@ -58,7 +57,6 @@ class ExecutionEngine:
     def account(self) -> AccountState:
         return self.risk.account
 
-    # -- startup -------------------------------------------------------------
 
     def reconcile(self, at: datetime) -> list[Divergence]:
         """Compare our position view against the venue's. Plan.md §14.2.
@@ -150,7 +148,6 @@ class ExecutionEngine:
             venue_trade_id=intent.venue_order_id))
         self._applied.add(identity)
 
-    # -- the loop ------------------------------------------------------------
 
     def submit(
         self, order: Order, price: Decimal, prices: dict[str, Decimal],
@@ -176,22 +173,18 @@ class ExecutionEngine:
 
         decision = self.risk.check(order, price, instrument, prices, at, mid_price)
         if not decision.allowed:
-            # Vetoes are logged: a refused order is a decision.
             self.intents.record(order, self.run_id, self._sequence, IntentState.VETOED,
                                 at, f"{decision.breach}: {decision.detail}")
             if decision.halts:
                 self.halt(f"{decision.breach}: {decision.detail}", at)
             return decision
 
-        # Written before the venue call, so a crash leaves a record to resolve on startup.
         self.intents.record(order, self.run_id, self._sequence, IntentState.SENT, at)
         self.risk.record_order(at)
 
         try:
             ack = self.adapter.submit(order, at)
         except Exception as error:
-            # Broad on purpose: dying here leaves an order in flight untracked.
-            # max_consecutive_errors stops the run.
             self.risk.record_error()
             self.intents.record(order, self.run_id, self._sequence, IntentState.UNKNOWN,
                                 at, f"{type(error).__name__}: {error}")
@@ -215,7 +208,6 @@ class ExecutionEngine:
         applied = 0
         for fill in self.adapter.fills:
             if not fill.identity:
-                # An empty key would make the first fill swallow all the rest.
                 raise ValueError(
                     f"{self.run_id}: a fill on {fill.asset} carries neither a "
                     f"venue trade id nor a client order id, so it cannot be "
@@ -256,7 +248,6 @@ class ExecutionEngine:
             orders.append(order)
         return orders
 
-    # -- stopping ------------------------------------------------------------
 
     def halt(self, reason: str, at: datetime) -> None:
         """Stop trading without stopping the process; reduce-only exits still reach the venue."""

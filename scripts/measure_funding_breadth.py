@@ -73,7 +73,6 @@ def main() -> int:
     start = end - timedelta(days=args.days)
     start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
-    # Alphabetical selection, so the sample does not depend on the signal.
     binance_universe = {
         s["symbol"].removesuffix("USDT")
         for s in httpx.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=30)
@@ -122,7 +121,6 @@ def main() -> int:
     off = corr[~np.eye(len(corr), dtype=bool)]
     mean_rho = float(np.nanmean(off))
     n = len(corr)
-    # Mean-rho adjustment, and eigenvalue participation ratio (no single-factor assumption).
     n_eff_rho = n / (1 + (n - 1) * mean_rho) if mean_rho > 0 else float(n)
     eigenvalues = np.linalg.eigvalsh(np.nan_to_num(corr))
     n_eff_pr = float(eigenvalues.sum() ** 2 / (eigenvalues**2).sum())
@@ -137,7 +135,6 @@ def main() -> int:
     print(f"\nmean |daily spread|       : {mean_abs:.5%} "
           f"({mean_abs * 365:.2%}/yr gross)")
 
-    # A spread that does not persist over the holding period is not harvestable.
     print("\nspread autocorrelation (mean across assets):")
     for lag in (1, 3, 7, 14, 30):
         rhos = [

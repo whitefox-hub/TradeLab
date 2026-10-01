@@ -42,7 +42,7 @@ def _same_training_different_future(
         close=pl.Series(alt), high=pl.Series(alt * 1.001), low=pl.Series(alt * 0.999),
         open=pl.Series(np.concatenate([[alt[0]], alt[:-1]])),
     )
-    assert np.array_equal(close[:split], alt[:split])  # the premise of the test
+    assert np.array_equal(close[:split], alt[:split])
     return base, perturbed
 
 
@@ -151,10 +151,6 @@ def test_effective_n_reaches_the_verdict() -> None:
     and far fewer independent bets; §8.3's arithmetic is meaningless on the
     former.
     """
-    # Thresholds low enough that the chosen configuration trades often, so the
-    # gate reaches the statistics rather than stopping on the trade minimum. A
-    # skipped test verifies nothing, and this invariant is one of the two the
-    # whole validation rests on.
     bars = make_noise(n=20_000, seed=31)
     spec = StudySpec(name="eff", params=(8, 14), entries=(50.0, 52.0),
                      min_trades=10, timeframe="4h", require_power=False)
@@ -220,8 +216,8 @@ def test_funding_is_charged_at_settlements_not_every_bar() -> None:
     n = 2_400
     close = np.full(n, 100.0)
     settlements = np.zeros(n)
-    settlements[::8] = 1e-4                     # one per eight bars
-    carried = np.full(n, 1e-4)                  # what forward-filling would give
+    settlements[::8] = 1e-4
+    carried = np.full(n, 1e-4)
 
     correct = run(close, np.ones(n), CostModel(0, 0, 0, 0), funding=settlements,
                   already_lagged=True)

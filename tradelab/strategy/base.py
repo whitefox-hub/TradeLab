@@ -25,11 +25,8 @@ class Context:
 
     at: datetime
     asset: str
-    #: Closes up to but not including the decision bar.
     history: np.ndarray
-    #: The last close the strategy may see.
     last_close: Decimal
-    #: Signed, in units of the asset. Negative is short.
     held: Decimal
     equity: Decimal
 
@@ -56,7 +53,6 @@ class Strategy(Protocol):
     One method on purpose: state held between entry/exit hooks is where lookahead hides.
     """
 
-    #: Stable; a change to entry or exit is a new strategy and name (§12.4).
     name: str
 
     def decide(self, context: Context) -> Target:

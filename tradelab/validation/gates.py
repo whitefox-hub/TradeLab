@@ -33,9 +33,6 @@ class Verdict(StrEnum):
     INCONCLUSIVE = "inconclusive"
 
 
-#: Defaults matching §15's `validating → candidate` row. Persisted to
-#: `gate_configs` at startup; changing them is an audited event with a mandatory
-#: rationale and a 24h cooling-off before any approval may rely on the change.
 DEFAULT_THRESHOLDS: dict = {
     "dsr_min": 0.95,
     "pbo_max": 0.30,
@@ -73,14 +70,8 @@ def evaluate(
     """
     t = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     reasons: list[str] = []
-    # Recorded before any early exit. The trial counter is monotonic and feeds
-    # every later verdict (§8.3), so a study that stops early still spent its
-    # configurations — and a record that omits them makes the count
-    # unauditable precisely where it is least obvious that any were spent.
     metrics: dict = {"trials_considered": trials, "n_oos_trades": n_oos_trades}
 
-    # Sample size first. Below the minimum there is nothing to judge, and a
-    # verdict of `fail` would imply the evidence pointed the other way.
     if n_oos_trades < t["min_oos_trades"]:
         return GateEvaluation(
             Verdict.INCONCLUSIVE,
@@ -100,18 +91,12 @@ def evaluate(
         "null_benchmark_sharpe": benchmark,
     }
 
-    # The smallest effect this sample and trial count can resolve at all (§8.8).
     detectable_floor = required_sharpe(trials, stats.n_obs)
     metrics["detectable_floor_sharpe"] = detectable_floor
     underpowered = (
         min_detectable_sharpe is not None and min_detectable_sharpe < detectable_floor
     )
 
-    # Moments far outside the range the deflation formula was derived for. The
-    # skew term *raises* the deflated Sharpe, so a return series dominated by a
-    # few days inflates its own confidence — exactly backwards. Measured: skew
-    # 14.4 and kurtosis 308 on a series where one day was 67% of the return,
-    # which lifted DSR from 0.894 under normal moments to 0.965.
     if abs(stats.skew) > 3.0 or stats.kurtosis > 30.0:
         metrics["moments_out_of_range"] = True
         return GateEvaluation(
@@ -125,17 +110,7 @@ def evaluate(
             metrics,
         )
 
-    # Two very different situations that both make MinTRL infinite, and
-    # collapsing them would cost the system its most useful distinction.
     if stats.sharpe <= benchmark:
-        # Performance at or below what this many trials produce by chance. What
-        # that means depends entirely on whether the search could have seen
-        # anything: a negative result from an underpowered search says nothing
-        # about the hypothesis, only about the sample.
-        #
-        # The check qualifies a negative result and only a negative one. A study
-        # that declared too small a target but found something clearly resolvable
-        # made a planning error, not a discovery to be discarded.
         if underpowered:
             return GateEvaluation(
                 Verdict.INCONCLUSIVE,
@@ -156,14 +131,6 @@ def evaluate(
             metrics,
         )
 
-    # Beats the benchmark, and still below what the sample can resolve.
-    #
-    # Placed after the comparison above on purpose: a powered search that finds
-    # nothing is a real negative and must stay FAIL. This is the other case —
-    # a figure that looks positive but sits under the detection floor. It was
-    # missing entirely, and the gate returned PASS on the cross-venue funding
-    # study at a per-observation Sharpe of 0.0495 against its own floor of
-    # 0.0651, having computed both numbers in the same call.
     if min_detectable_sharpe is not None and stats.sharpe < detectable_floor:
         return GateEvaluation(
             Verdict.INCONCLUSIVE,
@@ -176,8 +143,6 @@ def evaluate(
         )
 
     if required_obs > stats.n_obs:
-        # A positive signal the sample is too small to confirm. The question is
-        # open, and saying so is the point (§8.8).
         return GateEvaluation(
             Verdict.INCONCLUSIVE,
             [
@@ -196,8 +161,6 @@ def evaluate(
         metrics["pbo"] = pbo.pbo
         metrics["turnover_correlation"] = pbo.turnover_correlation
         if pbo.measures_turnover_not_alpha:
-            # A low PBO here is about trading frequency, not skill (§8.3), so it
-            # cannot be read as evidence either way.
             reasons.append(
                 f"PBO is turnover-driven (correlation {pbo.turnover_correlation:.2f}); "
                 f"it carries no information about selection quality here"

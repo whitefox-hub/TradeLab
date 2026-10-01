@@ -76,7 +76,7 @@ def test_one_day_dominating_a_series_is_visible_in_its_moments() -> None:
     """The link the guard relies on, verified rather than assumed."""
     rng = np.random.default_rng(5)
     returns = rng.normal(0, 0.001, 640)
-    returns[100] = 0.5                      # one day worth more than all the rest
+    returns[100] = 0.5
     centred = returns - returns.mean()
     std = returns.std(ddof=1)
     skew = float((centred**3).mean() / std**3)

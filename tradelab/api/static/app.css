@@ -1,6 +1,4 @@
-/* Shared chrome for every screen. Plan.md §20.4.
-   One file rather than a copy per page: three copies drift, and the copy nobody
-   is looking at is the one that keeps styling a class that was renamed. */
+
 
 :root {
   --bg:#0d1017; --panel:#171b24; --panel-2:#1e232e; --line:#2f3644;
@@ -21,8 +19,6 @@ body {
   font:16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing:antialiased;
 }
-
-/* -- sidebar ------------------------------------------------------------- */
 
 .layout { display:grid; grid-template-columns:var(--sidebar) 1fr; min-height:100vh; }
 
@@ -59,10 +55,6 @@ body {
 .side .foot .email { color:var(--text); font-weight:550; word-break:break-all;
   display:block; margin-bottom:8px; }
 
-/* Full width. The cap was there to keep prose readable, but these screens are
-   mostly tables, and a table that stops short of the window wastes the column
-   the headline needs. Prose keeps its own limit through `.hint` and `.prose`,
-   which is where the constraint belongs. */
 .content { min-width:0; padding:28px 28px 64px; width:100%; }
 .prose { max-width:74ch; }
 
@@ -73,8 +65,6 @@ body {
   .content { padding:20px 16px 48px; }
 }
 
-/* -- type ---------------------------------------------------------------- */
-
 h1 { font-size:25px; margin:0 0 6px; font-weight:650; letter-spacing:-.01em; }
 h2 { font-size:18px; margin:32px 0 12px; font-weight:620; }
 .sub { color:var(--muted); margin:0 0 22px; font-size:15.5px; }
@@ -82,8 +72,6 @@ h2 { font-size:18px; margin:32px 0 12px; font-weight:620; }
   line-height:1.6; }
 .err { color:var(--down); font-size:14.5px; margin-top:10px; }
 .empty { color:var(--muted); padding:16px 0; font-size:15px; }
-
-/* -- controls ------------------------------------------------------------ */
 
 button, input, select, textarea {
   font:inherit; border-radius:8px; border:1px solid var(--line);
@@ -96,9 +84,7 @@ button { cursor:pointer; font-weight:550; }
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
 button.ghost { background:transparent; color:var(--muted); padding:6px 12px; }
 button.ghost:hover { color:var(--text); border-color:var(--muted); }
-/* Actions carry their weight in colour: one advances the work, one ends
-   something. A row of identical grey boxes makes the operator read the labels
-   every time, and read them wrong once. */
+
 button.accent { background:transparent; color:var(--accent); border-color:var(--accent);
   font-weight:600; }
 button.accent:hover { background:color-mix(in srgb, var(--accent) 15%, transparent); }
@@ -109,14 +95,10 @@ label.inline { display:flex; align-items:center; gap:8px; color:var(--text);
   font-size:15px; }
 label.inline input { width:auto; }
 
-/* -- tables -------------------------------------------------------------- */
-
 table { width:100%; border-collapse:collapse; font-size:15px; }
 th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line);
   vertical-align:top; }
-/* The action column sized itself from its contents and wrapped the buttons onto
-   separate lines, which reads as two rows of one control rather than one row of
-   two. */
+
 td.actions { white-space:nowrap; text-align:right; }
 td.actions button + button { margin-left:8px; }
 th { color:var(--muted); font-weight:600; font-size:13px; text-transform:uppercase;
@@ -129,7 +111,6 @@ td.num, th.num { font-variant-numeric:tabular-nums; text-align:right; }
 .stale { color:var(--down); font-weight:600; }
 .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:14px; }
 
-/* -- pagination ------------------------------------------------------------- */
 .pager { display:flex; align-items:center; gap:12px; margin:12px 0 4px; }
 .pager .pages { color:var(--muted); font-size:13.5px; font-variant-numeric:tabular-nums; }
 .pager button:disabled { opacity:.4; cursor:not-allowed; }

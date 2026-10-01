@@ -44,9 +44,6 @@ NOW = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
 BTC = Instrument("BTCUSDT", Decimal("0.1"), Decimal("0.001"), Decimal(50))
 TESTNET = Credentials("key", "secret", ExecutionMode.TESTNET)
 
-#: Exactly what the testnet returns for a market order that goes on to fill:
-#: the acknowledgement is written before the trade is, so it carries neither
-#: the quantity nor the price the order eventually got.
 MARKET_ACK = {"orderId": 28605172275, "status": "NEW", "executedQty": "0",
               "avgPrice": "0.00", "symbol": "BTCUSDT"}
 TRADE = {"id": 4227901, "symbol": "BTCUSDT", "qty": "0.002", "price": "84419.10",
@@ -89,9 +86,6 @@ def _seen(store: dict, order_response=MARKET_ACK, trades: list | None = None):
             store.update(parse_qs(request.url.query.decode()))
         return inner(request)
     return handler
-
-
-# -- credentials and the wire ------------------------------------------------
 
 
 @pytest.mark.fast
@@ -147,9 +141,6 @@ def test_request_weight_is_read_from_the_response() -> None:
     adapter = _adapter(_routed(MARKET_ACK))
     adapter.submit(Order("BTCUSDT", Side.BUY, Decimal("0.01")).with_id("r", 1), NOW)
     assert adapter.weight_used == 12
-
-
-# -- rounding, which is knowable before the venue says so --------------------
 
 
 @pytest.mark.fast
@@ -211,9 +202,6 @@ def test_a_symbol_the_venue_does_not_list_is_refused_at_startup() -> None:
     adapter = _adapter(lambda r: httpx.Response(200, json=info), instruments={})
     with pytest.raises(VenueError, match="LUNAUSDT"):
         adapter.load_instruments(["BTCUSDT", "LUNAUSDT"])
-
-
-# -- what the venue says back ------------------------------------------------
 
 
 @pytest.mark.fast
@@ -289,9 +277,6 @@ def test_equity_is_read_from_the_venue_not_tracked() -> None:
                                          "positions": []})
 
     assert _adapter(handler).equity() == Decimal("4987.31")
-
-
-# -- fills, which is where the sandbox disagreed with the mocks --------------
 
 
 @pytest.mark.fast
@@ -419,9 +404,6 @@ def test_the_same_trade_is_not_folded_twice_across_orders() -> None:
     for i in range(3):
         adapter.submit(Order("BTCUSDT", Side.BUY, Decimal("0.002")).with_id("r", i), NOW)
     assert len(adapter.fills) == 1
-
-
-# -- idempotency, which is ours and not the venue's --------------------------
 
 
 @pytest.mark.fast
@@ -561,9 +543,6 @@ def test_an_unreadable_answer_is_not_read_as_never_sent() -> None:
         _adapter(handler).already_executed("BTCUSDT", "run-1-3")
 
 
-# -- stopping ----------------------------------------------------------------
-
-
 @pytest.mark.fast
 def test_open_orders_are_read_from_the_venue_by_our_name_for_them() -> None:
     seen: dict = {}
@@ -640,5 +619,4 @@ def test_the_heartbeat_re_arms_with_margin() -> None:
     """Re-arming at the last moment lets one slow request cancel the book."""
     assert not heartbeat_due(NOW, 30_000, NOW + timedelta(seconds=10))
     assert heartbeat_due(NOW, 30_000, NOW + timedelta(seconds=16))
-    # One missed beat survivable, two not.
     assert heartbeat_due(NOW, 30_000, NOW + timedelta(seconds=31))

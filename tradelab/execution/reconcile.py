@@ -79,8 +79,6 @@ def reconcile(
             f"{backtest_returns.shape} and {simulator_returns.shape}"
         )
     difference = simulator_returns - backtest_returns
-    # Sharpe excluding zero == mean excluding zero; reuses the stationary bootstrap
-    # (preserves serial dependence).
     interval = sharpe_interval(difference, n_samples=n_samples)
     return Reconciliation(
         n_periods=int(difference.size),
@@ -92,7 +90,6 @@ def reconcile(
     )
 
 
-#: §14.5's ladder. Capital is a fraction of target, subject to the floor below.
 TIERS: tuple[tuple[str, Decimal, int], ...] = (
     ("L0", Decimal("0.01"), 14),
     ("L1", Decimal("0.10"), 28),

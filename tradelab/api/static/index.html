@@ -17,9 +17,6 @@
   .card .d { color:var(--muted); font-size:13.5px; margin-top:10px; line-height:1.55; }
   .card .n.up { color:var(--up); } .card .n.down { color:var(--down); }
 
-  /* Indicators first: the book, then the market it sits in. Two rows rather
-     than one, because a position and a sentiment reading are not comparable
-     numbers and a single grid invites reading them as if they were. */
   h2.section { margin:34px 0 0; font-size:17px; font-weight:640; }
   h2.section .note { font-weight:450; color:var(--muted); font-size:14px;
     margin-left:10px; }
@@ -30,8 +27,7 @@
   .side { font-weight:650; font-size:12.5px; letter-spacing:.04em; }
   .side.LONG { color:var(--up); } .side.SHORT { color:var(--down); }
   .money.up { color:var(--up); } .money.down { color:var(--down); }
-  /* Mode is shown and never editable (§20.2). A book whose mode is not on
-     screen is one where nobody can see which money it is. */
+  
   .mode { display:inline-block; padding:2px 9px; border-radius:99px;
     font-size:12px; font-weight:650; letter-spacing:.04em; text-transform:uppercase;
     border:1px solid currentColor; color:var(--muted); }
@@ -98,7 +94,6 @@ mount("/home", { onReady: load });
 const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-// Format only; never derive figures here (§20.1).
 const money = (v, ccy) => v === null || v === undefined
   ? "—"
   : `${v >= 0 ? "+" : "−"}${Math.abs(v).toLocaleString(undefined,
@@ -131,7 +126,6 @@ function renderBook(book) {
     : `${book.fills.toLocaleString()} fills folded.`;
 
   if (!book.positions.length) {
-    // Explain the empty state rather than show a blank table.
     $("book").innerHTML = `<tr><td colspan="12"><p class="empty-why">No position is
       open. ${book.runs_live
         ? `${book.runs_live} forward book(s) run in the simulator on fake capital
@@ -168,7 +162,6 @@ function renderBook(book) {
     </tr>`).join("");
   document.querySelectorAll("button.exit[data-run]").forEach((b) =>
     b.addEventListener("click", () => closePosition(b)));
-  // A queued exit is answered by the runner within seconds; refresh until it is.
   clearTimeout(renderBook.poll);
   if (book.positions.some((p) => p.close_pending)) {
     renderBook.poll = setTimeout(async () => renderBook(await api("/api/positions")), 3000);
@@ -196,7 +189,6 @@ const usd = (v) => v === null || v === undefined ? "—"
   : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pct = (v, d = 2) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(d)}%`;
 
-// The ladder as its book published it; format only, every figure comes from the book.
 async function renderLadder() {
   const l = await api("/api/ladder");
   if (!l.available) {
@@ -243,7 +235,6 @@ async function renderLadder() {
 }
 
 async function load() {
-  // The ladder first and on its own: nothing else on the page can stop it from showing.
   const ladder = () => renderLadder().catch((e) => {
     $("ladder-note").textContent = `Could not read the ladder: ${e.message}`;
   });
@@ -259,7 +250,6 @@ async function load() {
 
   renderBook(book);
 
-  // Trend is 1-10, 5 neutral; direction comes from the server.
   const pressure = scenario.direction === "NEUTRAL"
     ? "NEUTRAL" : `${scenario.direction} ${scenario.trend}/10`;
   const fg = sentiment.available ? sentiment.primary : null;

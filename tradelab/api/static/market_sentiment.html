@@ -14,7 +14,6 @@
   .pane h2 { margin:0 0 2px; font-size:17px; font-weight:630; }
   .pane .lead { color:var(--muted); font-size:13.5px; margin:0 0 18px; line-height:1.5; }
 
-  /* -- what the operator reads in the news, as one number -- */
   .choice { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; }
   .choice button { font-weight:620; letter-spacing:.04em; padding:11px 6px; }
   .choice button[aria-pressed="true"].up {
@@ -29,18 +28,12 @@
   label.field { display:block; margin:20px 0 6px; font-size:13.5px; color:var(--muted);
     font-weight:560; }
   select { width:100%; }
-  /* Magnitude has no meaning while the trend is NORMAL, so it is not merely
-     ignored — it is visibly unavailable. A control that accepts input the
-     system discards teaches the operator it did something. */
+  
   .magnitude.muted { opacity:.4; pointer-events:none; }
-  /* Bearish left, neutral in the middle, bullish right — the same direction as
-     the sentiment scale beneath it, so the two cannot disagree about which way
-     is which. */
+  
   .trend-scale { background:linear-gradient(90deg,#ff6b63 0%,#e3a72c 30%,
     #c9c9c9 44.4%,#9fd66f 65%,#4ac26b 100%); }
-  /* The action sits with the title, not under the panes: one control governs
-     both of them, so putting it below either one would read as belonging to
-     that one. */
+  
   .page-head { display:flex; align-items:flex-start; justify-content:space-between;
     gap:24px; flex-wrap:wrap; }
   .page-title { min-width:0; flex:1 1 320px; }
@@ -50,7 +43,6 @@
   .saved.pending { color:var(--warn); }
   .err:empty { display:none; }
 
-  /* -- the assumption, set on the same bar that shows the measurement -- */
   .adjust-head { display:flex; align-items:center; justify-content:space-between;
     margin:18px 0 10px; }
   .assume-label { font-size:13px; color:var(--muted); font-weight:620;
@@ -65,7 +57,6 @@
   .scale.small .pin { top:-3px; height:13px; }
   .assume-band { margin:10px 0 0; font-size:13.5px; font-weight:560; }
 
-  /* -- what this dial has been set to before -- */
   .history { margin-top:20px; padding-top:16px; border-top:1px solid var(--line); }
   .history-head { font-size:13px; color:var(--muted); font-weight:620;
     letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
@@ -83,7 +74,6 @@
   .history .empty-note { color:var(--muted); font-size:13.5px; line-height:1.5;
     margin:0; }
 
-  /* -- what Save started -- */
   .run-pane { margin:18px 0 8px; }
   .run-table { margin-top:14px; }
   .run-table td, .run-table th { padding:9px 10px; }
@@ -96,7 +86,6 @@
   .run-notes { margin:14px 0 0; padding-left:18px; color:var(--muted);
     font-size:13px; line-height:1.55; }
 
-  /* -- the index the market prints -- */
   .gauge { display:flex; align-items:baseline; gap:12px; margin:2px 0 4px; }
   .gauge .v { font-size:54px; font-weight:660; letter-spacing:-.03em;
     font-variant-numeric:tabular-nums; line-height:1; }
@@ -106,7 +95,7 @@
       #9fd66f 68%,#4ac26b 100%); }
   .scale .pin { position:absolute; top:-4px; width:4px; height:18px; border-radius:2px;
     background:var(--text); box-shadow:0 0 0 2px var(--panel); transform:translateX(-2px); }
-  /* The measurement: present, and visibly not the thing being set. */
+  
   .scale .mark { position:absolute; top:-1px; width:2px; height:12px; border-radius:1px;
     background:color-mix(in srgb, var(--text) 45%, transparent);
     transform:translateX(-1px); }
@@ -160,7 +149,6 @@
           from a list. It has no date, because it is a condition to test under and
           not a record of something that happened.</p>
 
-        <!-- One 1-10 scale, 5 neutral (no tilt). Not direction + magnitude. -->
         <div class="slider-row">
           <input type="range" id="t-mag" min="1" max="10" step="1" value="5">
           <input type="number" id="t-mag-value" min="1" max="10" step="1" value="5">
@@ -189,10 +177,8 @@
           <span class="v" id="fg-value">—</span>
           <span class="band" id="fg-band"></span>
         </div>
-        <!-- Both indices side by side, never averaged. -->
         <p class="cross" id="fg-cross"></p>
 
-        <!-- Slider must share the scale's width so the thumb aligns with the gradient. -->
         <div class="adjust-head">
           <span class="assume-label">Test under</span>
           <button class="ghost tiny" id="fg-match">Match today</button>
@@ -201,7 +187,6 @@
           <input type="range" id="s-range" min="1" max="100" step="1" value="50">
           <input type="number" id="s-value" min="1" max="100" step="1" value="50">
         </div>
-        <!-- mark = measured index; pin = applied value, moves only on Save. -->
         <div class="scale">
           <span class="mark" id="fg-pin" style="left:50%"></span>
           <span class="pin" id="s-pin" style="left:50%"></span>
@@ -228,7 +213,6 @@
 
 
 
-    <!-- The run Save started; below both panes since it uses both dials. -->
     <section class="pane run-pane" id="run-pane" style="display:none">
       <h2>Last run</h2>
       <p class="lead" id="run-lead"></p>
@@ -271,14 +255,11 @@ const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
 let measured = null;      // the printed reading, kept apart from the assumed one
 let stored = null;        // what the server last confirmed, for the dirty check
 
-// Only the scale's defined points get a word.
 const TREND_WORDS = { 1: "as bearish as it gets", 5: "nothing new",
                       10: "as bullish as it gets" };
 
-// 1-10 track position: nine steps, so (n - 1) / 9, not n / 10.
 const trackPct = (n) => ((n - 1) / 9) * 100;
 
-// Dirty check: Save is far from the sliders, so unsaved changes must be flagged.
 function current() {
   return { trend: Number($("t-mag").value), sentiment: Number($("s-value").value) };
 }
@@ -291,7 +272,6 @@ function paintDirty() {
   $("saved").className = dirty ? "saved pending" : "saved";
 }
 
-// Pins show the applied (saved) values; sliders show the pending ones.
 function paintApplied() {
   if (stored === null) return;
   $("t-pin").style.left = `${trackPct(stored.trend)}%`;
@@ -315,11 +295,9 @@ function bandClass(c) {
 
 function paintTrend(value) {
   const n = Math.min(10, Math.max(1, Number(value) || 5));
-  // Keep both controls in sync; the pin is updated only on save.
   $("t-mag").value = String(n);
   $("t-mag-value").value = String(n);
 
-  // Mirrors the engine's tilt: each side normalised by its own reach (4 below 5, 5 above).
   const reach = n > 5 ? 5 : 4;
   const tilt = n === 5 ? 0 : ((n - 5) / reach) * 0.5;
   const word = TREND_WORDS[n];
@@ -334,7 +312,6 @@ function paintTrend(value) {
 
 function paintSentiment(value) {
   const n = Math.min(100, Math.max(1, Number(value) || 1));
-  // Keep both controls in sync.
   $("s-range").value = String(n);
   $("s-value").value = String(n);
   const word = band(n);
@@ -347,7 +324,6 @@ function paintSentiment(value) {
   paintDirty();
 }
 
-// Local time; date shown only when not today.
 function when(iso) {
   const at = new Date(iso);
   const clock = at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -360,7 +336,6 @@ function trendText(entry) {
 }
 
 function renderHistory(id, entries, label, moved) {
-  // Only entries where this dial moved.
   const mine = entries.filter(moved);
   if (!mine.length) {
     $(id).innerHTML = `<li><p class="empty-note">Nothing changed yet. Only changes
@@ -431,13 +406,11 @@ async function load() {
     $("fg-source").className = head.days_old > 1 ? "hint stale" : "hint";
   }
 
-  // After `measured` is set: the text compares against it.
   paintSentiment(scenario.sentiment);
   stored = {trend: scenario.trend, sentiment: scenario.sentiment};
   paintApplied();
   paintDirty();
   await loadHistory();
-  // Show the last run even if another session started it.
   const runs = await api("/api/scenario/runs?limit=1");
   renderRun(runs[0] ? {...runs[0], notes: []} : null);
 }
@@ -495,8 +468,6 @@ async function loadHistory(page = 1) {
   pager("t-pager", page, total, loadHistory);
   pager("s-pager", page, total, loadHistory);
 
-  // Missing `from` (older entries) is filled from the next (older) entry; never overwrite a
-  // recorded one. The oldest row on the page stays null and counts as both dials moving.
   const entries = raw.map((e, i) => ({
     ...e,
     from: e.from ?? (raw[i + 1] ? {
@@ -515,14 +486,12 @@ $("t-mag-value").oninput = () => paintTrend($("t-mag-value").value);
 
 $("s-range").oninput = () => paintSentiment($("s-range").value);
 $("s-value").oninput = () => paintSentiment($("s-value").value);
-// Explicit copy of the measured value; never the default.
 $("fg-match").onclick = () => { if (measured !== null) paintSentiment(measured); };
 
 $("save").onclick = async () => {
   $("err").textContent = ""; $("saved").textContent = "";
   const trend = Number($("t-mag").value);
   const sentiment = Number($("s-value").value);
-  // Client-side hint; the request model and a DB CHECK also enforce this.
   if (!Number.isInteger(trend) || trend < 1 || trend > 10) {
     $("err").textContent = "The market trend is a whole number from 1 to 10.";
     return;
@@ -532,7 +501,6 @@ $("save").onclick = async () => {
     return;
   }
   try {
-    // Baseline from the response, not the request.
     const saved = await api("/api/scenario", { method: "PUT",
       body: JSON.stringify({ trend, sentiment }) });
     stored = {trend: saved.trend, sentiment: saved.sentiment};
@@ -542,7 +510,6 @@ $("save").onclick = async () => {
     setTimeout(paintDirty, 2500);
     if (saved.changed) {
       await loadHistory();
-      // Notes exist only on the fresh run response, not on stored rows.
       renderRun(saved.run);
       if (saved.run_error) {
         $("err").textContent = `Saved, but the run could not start: ${saved.run_error}`;

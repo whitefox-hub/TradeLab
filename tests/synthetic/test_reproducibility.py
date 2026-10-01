@@ -19,9 +19,6 @@ def _spec(**overrides) -> StudySpec:
     base = {
         "name": "repro", "params": (10, 20), "entries": (58.0, 62.0),
         "min_trades": 5, "timeframe": "4h", "min_detectable_sharpe": 0.05,
-        # These verify identity and cost handling, not power. The §8.8 check is
-        # waived explicitly rather than by accident, which is the distinction it
-        # was added to enforce.
         "require_power": False,
     }
     return StudySpec(**{**base, **overrides})
@@ -70,9 +67,6 @@ def test_a_changed_grid_is_a_different_study() -> None:
     assert wide.gate.metrics["trials_considered"] == wide.executed_trials
     assert narrow.gate.metrics["trials_considered"] == narrow.executed_trials
 
-    # Asserted against the arithmetic rather than against a gate metric that is
-    # only written when the gate reaches its late path: a test that depends on
-    # which branch ran is testing the branch, not the invariant.
     obs = 1_000
     assert required_sharpe(wide.executed_trials, obs) > required_sharpe(
         narrow.executed_trials, obs

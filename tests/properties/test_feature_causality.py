@@ -41,7 +41,6 @@ def bars() -> pl.DataFrame:
     rng = np.random.default_rng(20260101)
     n = frame.height
     synthetic = {
-        # Funding: 8-hourly settlement on hourly-or-finer bars, zero elsewhere.
         "funding_rate": np.where(np.arange(n) % 8 == 0,
                                  rng.normal(1.1e-4, 8e-5, n), 0.0),
         "open_interest": np.abs(np.cumsum(rng.normal(0, 50, n))) + 10_000,
@@ -88,11 +87,6 @@ def test_truncation_invariance(name: str, bars: pl.DataFrame) -> None:
         truncated = materialise(bars.head(cut + 1), feature_set)
         a, b = truncated[column][cut], full[column][cut]
 
-        # A null under truncation where the full history is non-null is not
-        # "nothing to compare" — it is the leak signature itself: the feature
-        # needed data beyond the cut and had none. Treating it as a skip, as
-        # this first did, made the whole test blind to shift(-1), which the
-        # canaries in §16.5 then exposed.
         assert not (a is None and b is not None), (
             f"{name} is null at row {cut} when the future is withheld but has a "
             f"value with full history. The feature reads beyond {cut}."
@@ -137,12 +131,6 @@ def test_declared_lookback_is_honest(name: str, bars: pl.DataFrame) -> None:
     if original is None or perturbed is None:
         pytest.skip("insufficient warmup in the fixture")
 
-    # Tolerance is measured against the feature's OWN scale, not against its
-    # value at one row. Several features are differences of nearly-equal
-    # quantities (ema_cross), so their value passes through zero and any
-    # relative tolerance there is meaningless. What "the lookback is honest"
-    # should mean is that older data moves the feature by a negligible fraction
-    # of its typical variation — which is what this measures.
     scale = baseline[column].std()
     if scale is None or scale == 0:
         pytest.skip("feature is constant over the fixture")

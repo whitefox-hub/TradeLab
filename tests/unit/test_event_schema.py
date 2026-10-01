@@ -132,8 +132,6 @@ def test_a_schedule_revision_records_the_date_believed_at_the_time(engine, event
             "SELECT scheduled_for FROM schedule_revisions WHERE event_id = :e "
             "AND available_at <= :t ORDER BY revision"), {"e": event_id,
             "t": NOW - timedelta(days=10)}).scalars().all()
-    # As of ten days ago only the first revision existed, so the date the market
-    # could have known is the rumoured one — not the postponed one it became.
     assert len(rows) == 1
 
 

@@ -57,7 +57,6 @@ def test_min_viable_uses_lot_size_when_it_binds() -> None:
     lets through an order the venue rejects.
     """
     assert BTC.min_viable(Decimal(84_532)) == Decimal("84.532")
-    # And where the notional binds instead, it wins.
     ada = Instrument("ADAUSDT", Decimal("0.0001"), Decimal("1"), Decimal(5))
     assert ada.min_viable(Decimal("0.249")) == Decimal(5)
 
@@ -65,18 +64,11 @@ def test_min_viable_uses_lot_size_when_it_binds() -> None:
 @pytest.mark.fast
 def test_quantity_is_judged_after_quantisation() -> None:
     """The venue rounds, so approving an unrounded size approves a fiction."""
-    # Raw 0.0015 is worth 120 and would pass; quantised to 0.001 it is worth 80
-    # and falls under this instrument's 100 minimum. Only the order of the two
-    # operations decides the outcome, which is the point.
     strict = Instrument("BTCUSDT", Decimal("0.1"), Decimal("0.001"), Decimal(100))
-    # The equity-fraction floor is disabled so it cannot be what refuses either
-    # order; this test is about quantisation and nothing else.
     engine = _engine(min_position_pct_equity=Decimal(0))
     decision = engine.check(_order("0.0015"), PRICE, strict, {}, NOW)
     assert decision.breach is Breach.BELOW_MIN_VIABLE
     assert BTC.quantise(Decimal("0.0015")) == Decimal("0.001")
-    # And the unquantised order would have been accepted, so the test is not
-    # passing for some unrelated reason.
     assert engine.check(_order("0.002"), PRICE, strict, {}, NOW).allowed
 
 
@@ -146,16 +138,14 @@ def test_corrupt_price_is_refused() -> None:
 @pytest.mark.fast
 def test_gross_exposure_includes_the_order_being_judged() -> None:
     """Checking exposure before adding the order approves the breach."""
-    # Every other cap is opened up so gross exposure is provably the one that
-    # bound. A limit that was never the binding constraint has not been tested.
     engine = _engine(
         max_gross_exposure=Decimal("0.5"), max_position_pct_equity=Decimal(1),
         max_position_notional=Decimal(1_000_000), max_leverage=Decimal(100),
         max_net_exposure=Decimal(100),
     )
     engine.account.positions["ETHUSDT"] = Position("ETHUSDT", quantity=Decimal(10))
-    prices = {"ETHUSDT": Decimal(4_000)}   # 40,000 of 100,000 equity
-    decision = engine.check(_order("0.2"), PRICE, BTC, prices, NOW)  # +16,000 => 0.56x
+    prices = {"ETHUSDT": Decimal(4_000)}
+    decision = engine.check(_order("0.2"), PRICE, BTC, prices, NOW)
     assert decision.breach is Breach.MAX_GROSS_EXPOSURE
 
 
@@ -179,7 +169,7 @@ def test_drawdown_halt_needs_a_human() -> None:
 
     engine = _engine(max_drawdown_from_peak=Decimal("0.10"))
     engine.account.equity = Decimal(85_000)
-    engine.account.day_start_equity = Decimal(85_000)  # so the daily cap is not the one firing
+    engine.account.day_start_equity = Decimal(85_000)
     decision = engine.enforce(NOW)
     assert decision.breach is Breach.MAX_DRAWDOWN_FROM_PEAK
     assert decision.breach in REQUIRES_HUMAN

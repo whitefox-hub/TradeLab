@@ -22,7 +22,6 @@ class BuyAndHold:
     exposure: Decimal = Decimal(2) / Decimal(3) * Decimal("0.25")
 
     def decide(self, context: Context) -> Target:
-        # Deliberately ignores the data: a benchmark that read it would be a strategy.
         del context
         return Target(exposure=self.exposure,
                       reason="reference: always long, no condition")

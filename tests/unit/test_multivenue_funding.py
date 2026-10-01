@@ -48,7 +48,6 @@ def test_daily_aggregation_makes_different_schedules_comparable() -> None:
     slow, fast = to_daily(eight_hourly), to_daily(four_hourly)
     assert slow["n"][0] == 3
     assert fast["n"][0] == 6
-    # Both collected the same amount over the day, which is the point.
     assert slow["rate"][0] == pytest.approx(fast["rate"][0])
 
 
@@ -84,7 +83,7 @@ def test_a_missing_day_is_an_absence_not_a_zero_spread() -> None:
     """Filling gaps with zero pulls every statistic toward "no dispersion",
     which is the conclusion the study is trying to test."""
     complete = _daily(60, 0.0003)
-    partial = _daily(30, 0.0001)          # the second venue quotes half the window
+    partial = _daily(30, 0.0001)
     result = spread(complete, partial, min_days=10)
 
     assert result is not None

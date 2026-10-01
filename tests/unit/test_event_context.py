@@ -87,13 +87,9 @@ def test_the_two_conditions_compound() -> None:
 @pytest.mark.fast
 def test_damping_happens_before_the_minimum_viable_check() -> None:
     """Otherwise an order is approved at a size it will never be sent at."""
-    # 0.002 BTC is 160, above min_viable of 80. Halved it is 80, still at the
-    # boundary; quartered by both conditions it is 56 and must be refused.
     decision = _engine(_context(regime_shifts=1, pending_schedules=1)).check(
         Order("BTCUSDT", Side.BUY, Decimal("0.002")), PRICE, BTC, {}, NOW)
     assert decision.breach is Breach.BELOW_MIN_VIABLE
-    # And the refusal says news caused it, because "below min_viable" on an
-    # order the strategy sized correctly is otherwise unaccountable.
     assert "event damping" in decision.detail
 
 

@@ -26,50 +26,31 @@ from tradelab.collectors.base import (
 CMS = "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
 VENUE = "binance"
 
-#: Catalogue 48 is "New Cryptocurrency Listing".
 CATALOGS = {48: "listing"}
 
-#: How late a real subscriber sees an announcement: not ingest time (breaks backfill), not
-#: publication (zero latency flatters backtests). 60s = one-minute poller; §11.8 tests it.
 SUBSCRIBER_DELAY = timedelta(seconds=60)
 
-#: Closed taxonomy (§11.1): unmatched titles become `unclassified`, never a new class.
-#: Irrelevant patterns match FIRST so `unclassified` means "could not tell" (an alarm).
 _IRRELEVANT: tuple[re.Pattern[str], ...] = (
     re.compile(r"bStocks|Tokenized Securit|Stock Trading|TradFi", re.I),
     re.compile(r"on Earn|Buy Crypto|Convert|VIP Loan|Collateral Asset", re.I),
     re.compile(r"Trading Bots|Margin Will Add New Pairs", re.I),
-    # Pre-2019 spot/margin housekeeping (USD-M perpetuals launched Sept 2019).
     re.compile(r"Adds? (BUSD )?Margin (Trading|Pairs)|Stablecoin Trading Pairs", re.I),
     re.compile(r"Lottery|Leveraged Token", re.I),
-    # Copy Trading notices concern existing contracts, not listings; the largest
-    # false-positive source in 2024-2025.
     re.compile(r"Copy Trading", re.I),
-    # Negations ("... Listing is Cancelled/Postponed") must precede listing patterns.
-    # A postponed listing gets its own later announcement.
     re.compile(r"Listing (is )?(Cancell?ed|Postponed|Delayed|Suspended)", re.I),
     re.compile(r"Will Cancel.*Delisting", re.I),
 )
 
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # Delivery first: quarterly titles also say "Will Launch" and would match perpetuals.
     ("futures_delivery", re.compile(
         r"(Quarterly|Bi-Quarterly|Delivery).{0,40}(Contract|Futures)"
         r"|Futures Will List.*?(Delivery|Quarterly)", re.I)),
-    # Perpetual listings: the venue changes wording without notice; each alternative
-    # covers an era. Missing one gives a time-varying miss rate.
     ("futures_listing", re.compile(
-        # 2019-2020: "Binance Futures Launches ETH/USDT Perpetual Contract".
         r"Futures Launch(es)?.*?Perpetual Contract"
-        # 2020-2023.
         r"|Futures Will Launch.*?Perpetual Contract"
-        # Coin-margined: "Binance Will Launch a FIL/USD Coin-Margined Perpetual Contract".
         r"|Will (Launch|List).{0,40}Perpetual Contract"
-        # 2024: "Binance Will Launch Sleepless AI (AI) on Margin & Futures".
         r"|(Will Launch|Adds?).{0,60}on Margin (&|and) Futures"
-        # 2025: "Obol (OBOL) Will Be Available on Binance Alpha and Binance Futures".
         r"|Will (Be Available|Open for Trading).{0,40}Binance Futures"
-        # Weekly batches name no asset; they end up `needs_body`.
         r"|Futures: New Listings This Week", re.I)),
     ("futures_delisting", re.compile(r"Futures Will (Delist|Close|Remove|Settle)", re.I)),
     ("spot_delisting", re.compile(r"Will Delist|Notice of Removal", re.I)),
@@ -77,23 +58,18 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("margin_change", re.compile(r"(Leverage|Margin) (Tier|Bracket|Adjust)", re.I)),
     ("trading_halt", re.compile(r"Temporary Trading Halt|Will Suspend Trading", re.I)),
     ("trading_resume", re.compile(r"Will Resume Trading|Resumption of", re.I)),
-    # "Binance Lists X" is the pre-2020 phrasing of "Binance Will List X".
     ("spot_listing", re.compile(r"Will List\b|Binance Lists\b", re.I)),
 )
 
-#: Classes whose events must name at least one asset to be usable in §11.3.
 ASSET_BEARING = frozenset({
     "futures_listing", "futures_delisting", "spot_listing", "spot_delisting", "seed_tag",
     "trading_halt", "trading_resume",
 })
 
-# Tickers may be non-ASCII: Binance lists tokens with CJK names.
 _TICKER = re.compile(r"\(([^\s()]{2,14})\)")
 _PAIR = re.compile(r"\b(\w{2,12}(?:USDT|USDC))\b", re.UNICODE)
 
-#: Quote and margin vocabulary, which is never the listed asset.
 _QUOTE = r"USD[ⓈS]?|USDT|USDC|BUSD|COIN|USD1"
-#: Words that sit in ticker position but are prose.
 _NOT_TICKER_WORDS = frozenset({
     "PERPETUAL", "CONTRACT", "CONTRACTS", "FUTURES", "LEVERAGE", "MARGINED",
     "WITH", "UP", "TO", "AND", "THE", "NEW", "LISTINGS", "THIS", "WEEK",
@@ -101,21 +77,14 @@ _NOT_TICKER_WORDS = frozenset({
     "MARGIN", "QUARTERLY", "DELIVERY", "INDEX", "COMPOSITE",
 })
 
-#: Separator/margin-prefixed forms `_PAIR` misses; over half of listing titles use them.
 _ASSET_FORMS: tuple[re.Pattern[str], ...] = (
-    # "RLC/USDT Perpetual Contract", "FIL/USD Coin-Margined"
     re.compile(rf"\b([A-Z0-9]{{2,}})/(?:{_QUOTE})\b"),
-    # "USDⓈ-M BLUR", "USDT-Margined OP", "BUSD-Margined SAND and LTC",
-    # "USDC-Margined 1000SHIB", "USDⓈ-Margined VIDT"
     re.compile(
         rf"(?:{_QUOTE})[-\s](?:M|Margined)\s+"
         rf"([A-Z0-9]{{2,}}(?:\s+and\s+[A-Z0-9]{{2,}})*)"
     ),
-    # "YFI USDT-Margined Perpetual Contract": ticker ahead of the margin type.
     re.compile(rf"\b([A-Z0-9]{{2,}})\s+(?:{_QUOTE})[-\s](?:M|Margined)\b"),
 )
-# Rejects parenthesised release dates the ticker pattern captures; a phantom asset
-# would hide that the announcement needs its body resolved.
 _NOT_A_TICKER = re.compile(r"^[\d\W_]+$|\d{4}-\d{2}", re.UNICODE)
 
 
@@ -128,7 +97,6 @@ def classify(title: str) -> str:
     return "unclassified"
 
 
-#: Quote suffixes stripped so `BLUR`, `BLUR/USDT`, `USDⓈ-M BLUR` share one key.
 _QUOTE_SUFFIX = ("USDT", "USDC", "BUSD", "USD1", "USD")
 
 
@@ -241,7 +209,6 @@ class BinanceAnnouncements:
             return ValidationReport(issues)
         times = batch.frame["event_time"]
 
-        # A rise in `unclassified` means the venue changed wording.
         unknown = batch.frame.filter(pl.col("event_class") == "unclassified").height
         if unknown / batch.frame.height > 0.15:
             issues.append(Issue(
@@ -251,7 +218,6 @@ class BinanceAnnouncements:
                         "hint": "wording likely changed; extend the closed taxonomy"},
             ))
 
-        # An asset-bearing event without assets cannot be measured (§11.3).
         bearing = batch.frame.filter(pl.col("event_class").is_in(list(ASSET_BEARING)))
         if bearing.height:
             missing = bearing.filter(pl.col("needs_body")).height

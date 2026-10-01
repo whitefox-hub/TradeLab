@@ -23,7 +23,7 @@ from tradelab.events.reaction import (
     scored_against,
 )
 
-BARS_PER_DAY = 24 * 60  # one-minute bars
+BARS_PER_DAY = 24 * 60
 NOW = datetime(2026, 9, 25, tzinfo=UTC)
 
 
@@ -90,7 +90,7 @@ def test_a_move_the_market_made_is_not_abnormal() -> None:
     rng = np.random.default_rng(11)
     n, event_at = 60 * 24 * 40, 60 * 24 * 35
     market = rng.normal(0, 0.0004, n)
-    market[event_at:event_at + 60] += 0.10 / 60      # the whole market moves
+    market[event_at:event_at + 60] += 0.10 / 60
     window = Window(np.arange(n), market.copy(), market, event_at)
 
     at_hour = next(r for r in measure(window, "X", BARS_PER_DAY)
@@ -114,7 +114,6 @@ def test_normalisation_makes_two_assets_comparable() -> None:
     z_loud = next(r.z for r in measure(loud, "L", BARS_PER_DAY)
                   if r.horizon_minutes == 60)
     assert z_quiet == pytest.approx(z_loud, rel=0.1)
-    # And the raw returns are not comparable, which is why the z exists.
     car_quiet = next(r.car for r in measure(quiet, "Q", BARS_PER_DAY)
                      if r.horizon_minutes == 60)
     car_loud = next(r.car for r in measure(loud, "L", BARS_PER_DAY)
@@ -165,8 +164,6 @@ def test_a_rating_is_scored_against_what_happened() -> None:
 
     assert scored_against(measured, reactions) == pytest.approx(0.0, abs=1e-9)
     assert scored_against(measured + 1.7, reactions) == pytest.approx(1.7, abs=1e-9)
-    # A horizon that was not measured returns nothing rather than zero, which
-    # would read as a perfect call.
     assert scored_against(2.0, reactions, horizon_minutes=99) is None
 
 
@@ -189,12 +186,9 @@ def test_an_asset_cannot_be_its_own_benchmark() -> None:
     series[event_at] += 0.10
     self_window = Window(np.arange(n), series, series, event_at)
 
-    # Daily bars here, so a 1440-minute horizon is one bar.
     cross = measure(self_window, "BTCUSDT", bars_per_day=1, horizons=(1440,))[0]
     assert cross.car == pytest.approx(0.0, abs=1e-12)
 
-    # Falling back to the time series recovers a real figure and says which
-    # counterfactual produced it.
     fallback = measure(self_window, "BTCUSDT", bars_per_day=1,
                        market_wide=True, horizons=(1440,))[0]
     assert abs(fallback.car) > 0.05

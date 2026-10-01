@@ -34,9 +34,8 @@ def main() -> int:
     universe = pl.read_parquet(args.new / "_universe.parquet")
     last_common = min(old["day"].max(), new["day"].max())
 
-    # -- 1. agreement ---------------------------------------------------------
     both = old.join(new, on=["asset", "day"], suffix="_new").filter(
-        pl.col("day") < last_common)      # the old panel's last day was partial
+        pl.col("day") < last_common)
     close_off = both.filter((pl.col("close") - pl.col("close_new")).abs()
                             > 1e-9 * pl.col("close_new").abs())
     fewer = both.filter(pl.col("n") < pl.col("n_new"))
@@ -56,7 +55,6 @@ def main() -> int:
                .filter(pl.col("asset").is_in(old["asset"].unique().implode())))
     print(f"   days the old panel lacks for its own assets: {missing.height}")
 
-    # -- 2. composition ---------------------------------------------------------
     per_day = (new.group_by("day").agg(pl.len().alias("new"))
                .join(old.group_by("day").agg(pl.len().alias("old")), on="day", how="left")
                .sort("day"))
@@ -71,7 +69,6 @@ def main() -> int:
           f"{old['asset'].n_unique()} old")
     print(f"   of which no longer trading      : {dead_in['asset'].n_unique()}")
 
-    # -- 3. the dead ------------------------------------------------------------
     exits = []
     for asset, rows in dead_in.sort("day").group_by("asset"):
         closes = rows["close"].to_numpy()

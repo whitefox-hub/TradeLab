@@ -41,7 +41,6 @@ class Store:
     def __init__(self, url: str) -> None:
         self.engine = sa.create_engine(url, pool_pre_ping=True)
 
-    # -- identity -------------------------------------------------------------
 
     def ensure_strategy(self, name: str, impl: Path, status: str = "validating") -> uuid.UUID:
         """One row per strategy name and code hash (§16.1)."""
@@ -86,8 +85,6 @@ class Store:
                 {"s": strategy_id, "l": label}).scalar()
             if found:
                 return uuid.UUID(str(found))
-            # A new version of the strategy supersedes the open run of an older one under the
-            # same label: one book, one open run, never the same position shown twice.
             db.execute(sa.text(
                 "UPDATE runs SET status = 'stopped', ended_at = now(), "
                 "halt_reason = 'superseded by a new version of the strategy' "
@@ -107,7 +104,6 @@ class Store:
                  "t": datetime.now(UTC)})
             return rid
 
-    # -- what the screen reads -------------------------------------------------
 
     def write(self, run_id: uuid.UUID, at: datetime, rows: list[Snapshot],
               equity: Decimal, used: Decimal) -> None:
@@ -126,7 +122,6 @@ class Store:
                 "VALUES (:run, :t, 'USDT', :e, :f, :u) ON CONFLICT DO NOTHING"),
                 {"run": run_id, "t": at, "e": equity, "f": equity - used, "u": used})
 
-    # -- operator settings -------------------------------------------------------
 
     def setting(self, key: str) -> dict | None:
         """The newest value of an operator setting (app_settings is append-only)."""
@@ -138,7 +133,6 @@ class Store:
             return None
         return value if isinstance(value, dict) else json.loads(value)
 
-    # -- manual exits ------------------------------------------------------------
 
     def pending_closes(self, run_id: uuid.UUID) -> list[tuple[int, str]]:
         """Operator requests to close a position of this run, not yet answered.

@@ -81,7 +81,6 @@ class Instrument:
         """
         if self.lot_size <= 0:
             return quantity
-        # Not -(-q // lot): Decimal's // truncates toward zero, so that idiom rounds down.
         lots = (quantity / self.lot_size).to_integral_value(rounding=ROUND_CEILING)
         return lots * self.lot_size
 
@@ -99,7 +98,6 @@ class Order:
     order_type: OrderType = OrderType.MARKET
     limit_price: Decimal | None = None
     reduce_only: bool = False
-    #: Deterministic from run and decision, never random (§14.3).
     client_order_id: str = ""
     strategy_id: uuid.UUID | None = None
 
@@ -124,7 +122,6 @@ class Fill:
     fee: Decimal
     at: datetime
     client_order_id: str
-    #: The venue's trade id; empty in the simulator.
     venue_trade_id: str = ""
 
     @property
@@ -139,7 +136,7 @@ class Fill:
 @dataclass
 class Position:
     asset: str
-    quantity: Decimal = Decimal(0)     # signed: negative is short
+    quantity: Decimal = Decimal(0)
     avg_price: Decimal = Decimal(0)
     realised_pnl: Decimal = Decimal(0)
     opened_at: datetime | None = None
@@ -161,7 +158,6 @@ class Position:
         new_quantity = self.quantity + signed
 
         if self.quantity == 0 or (self.quantity > 0) == (signed > 0):
-            # Opening or adding: the average price moves.
             total = abs(self.quantity) + abs(signed)
             self.avg_price = (
                 (self.avg_price * abs(self.quantity) + fill.price * abs(signed)) / total
@@ -170,8 +166,6 @@ class Position:
             if self.quantity == 0:
                 self.opened_at = fill.at
         else:
-            # Reducing, closing or reversing. Realise against the closed part
-            # only; a reversal keeps the remainder at the new price.
             closed = min(abs(signed), abs(self.quantity))
             direction = Decimal(1) if self.quantity > 0 else Decimal(-1)
             self.realised_pnl += closed * (fill.price - self.avg_price) * direction

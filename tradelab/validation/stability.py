@@ -36,11 +36,11 @@ import numpy as np
 
 @dataclass(frozen=True, slots=True)
 class StabilityResult:
-    peak_score: float            # raw maximum anywhere on the surface
-    peak_params: dict            # parameters of the robust optimum, not the raw one
-    robust_score: float          # neighbourhood median: what should be promoted
-    neighbour_ratio: float       # median(neighbours) / peak, bias caveat above
-    plateau_fraction: float      # share of the neighbourhood holding >= threshold
+    peak_score: float
+    peak_params: dict
+    robust_score: float
+    neighbour_ratio: float
+    plateau_fraction: float
     n_neighbours: int
     surface_median: float
     retention: float = 0.5
@@ -65,8 +65,8 @@ class StabilityResult:
 class Surface:
     """A parameter grid with a score per point."""
 
-    axes: dict[str, list]        # ordered values per dimension
-    scores: np.ndarray           # shaped by axis order
+    axes: dict[str, list]
+    scores: np.ndarray
 
     @classmethod
     def build(cls, points: Sequence[tuple[dict, float]], keys: Sequence[str]) -> Surface:
@@ -120,8 +120,6 @@ def analyse(surface: Surface, radius: int = 1, retention: float = 0.5) -> Stabil
     if not finite.any():
         raise ValueError("surface has no finite scores")
 
-    # Maximise the SMOOTHED surface: the chosen point is the centre of the best
-    # region rather than the luckiest single draw.
     smoothed = smooth(surface, radius)
     position = np.unravel_index(
         int(np.argmax(np.where(np.isfinite(smoothed), smoothed, -np.inf))), smoothed.shape
@@ -162,10 +160,6 @@ def plateau_width(surface: Surface, axis: str, retention: float = 0.5) -> int:
     """
     keys = surface.keys
     dim = keys.index(axis)
-    # Anchored on the smoothed optimum in the OTHER dimensions, so the slice
-    # taken is a representative one, but measured against the best score on that
-    # slice. Using the smoothed value as the reference would make a spike look
-    # infinitely wide, since every point clears half of a low number.
     smoothed = smooth(surface, radius=1)
     anchor = np.unravel_index(
         int(np.argmax(np.where(np.isfinite(smoothed), smoothed, -np.inf))), smoothed.shape

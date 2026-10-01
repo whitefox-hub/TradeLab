@@ -39,10 +39,8 @@ from tradelab.config import Settings
 from tradelab.scenario import run as scenario_run
 from tradelab.scenario.tilt import direction as trend_direction
 
-#: Static screens and shared chrome, mounted at /static.
 STATIC = Path(__file__).parent / "static"
 
-#: The only writes §20.1 allows this surface; everything else is a read.
 WRITABLE = frozenset({"approval", "transition_request"})
 
 
@@ -66,13 +64,8 @@ class ScenarioRequest(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    #: Operator's news reading, 1-10 with **5 neutral** (leaves positions unchanged). Direction is
-    #: derived from the side of 5, never stored; do not read magnitude as distance from zero.
     trend: int = Field(ge=1, le=10)
-    #: Assumed market sentiment, 1-100. Kept separate from measured `sentiment_readings`.
     sentiment: int = Field(ge=1, le=100)
-    #: 'manual' = person's reading, 'adopted' = computed value a person accepted, 'derived' = no
-    #: person. PREREG-005 filters on this to test only the operator's own reading.
     source: str = Field(default="manual", pattern="^(manual|derived|adopted)$")
 
 class RiskConfigRequest(BaseModel):
@@ -84,7 +77,6 @@ class RiskConfigRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     name: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9 _.-]+$")
-    #: Every limit (none may fall back to a default); bounds in tradelab.risk.bounds.
     limits: dict[str, Any] = Field(min_length=1)
     rationale: str = Field(min_length=10, max_length=1000)
 
@@ -106,11 +98,9 @@ class ApprovalRequest(BaseModel):
     notes: str | None = None
 
 
-#: Written by scripts/run_btc_ladder.py on every price check.
 LADDER_STATUS = Path(__file__).resolve().parents[2] / "data/forward/btc-ladder/status.json"
 
 
-#: Every list that can grow is served a page at a time; the total goes in X-Total-Count.
 PER_PAGE = 100
 
 
@@ -134,7 +124,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     secret = os.environ.get("TRADELAB_SESSION_SECRET", "")
     if len(secret) < 32:
-        # Random per process, never a constant default secret.
         from tradelab.api.security import new_secret
 
         secret = new_secret()
@@ -157,8 +146,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         with make_session() as session:
             yield session
 
-    # A default, not a local `Annotated` alias: with `from __future__ import annotations` FastAPI
-    # cannot resolve a local alias, treats `session` as a query param, and every route 422s.
     session_dep = Depends(db)
 
     def audit(session: Session, actor: str, action: str, kind: str,
@@ -187,7 +174,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "notes": outcome.notes, "seconds": seconds,
         }
 
-    # -- session ------------------------------------------------------------
 
     @app.post("/api/session")
     def sign_in(body: SignIn, response: Response, session: Session = session_dep) -> dict:
@@ -197,7 +183,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         expected = os.environ.get("TRADELAB_ADMIN_HASH", "")
         salt = os.environ.get("TRADELAB_ADMIN_SALT", "")
         if row is None or not expected or not verify_password(body.password, salt, expected):
-            # Same message for unknown user and bad password (no user enumeration).
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
         response.set_cookie(
             SESSION_COOKIE, sessions.issue(row.email), httponly=True, samesite="strict",
@@ -216,7 +201,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def me(who: Operator = operator) -> dict:
         return {"email": who.email, "role": who.role}
 
-    # -- reads --------------------------------------------------------------
 
     @app.get("/api/strategies")
     def strategies(who: Operator = operator, session: Session = session_dep) -> list[dict]:
@@ -275,7 +259,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "       min_detectable_sharpe, hold_days_min, hold_days_max, created_at "
             "FROM studies WHERE strategy_id = :i ORDER BY created_at DESC"
         ), {"i": strategy_id}).mappings().all()
-        # Via experiments: a verdict belongs to a configuration, not the strategy.
         reports = session.execute(sa.text(
             "SELECT v.experiment_id, v.verdict, v.deflated_sharpe, v.pbo, "
             "       v.trials_considered, v.min_trl_days, v.reasons, "
@@ -289,7 +272,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return {
             **dict(row),
             "studies": [dict(r) for r in studies],
-            # Each verdict carries the gate it was judged under (§20.3).
             "validation_reports": [dict(r) for r in reports],
         }
 
@@ -354,7 +336,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         )).mappings().all()
         return [dict(r) for r in rows]
 
-    # -- the one write ------------------------------------------------------
 
     @app.post("/api/approvals", status_code=status.HTTP_201_CREATED)
     def record_approval(body: ApprovalRequest, who: Operator = operator,
@@ -395,10 +376,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         session.commit()
         return {"id": str(approval_id), "recorded_at": datetime.now(UTC).isoformat()}
 
-    # -- parameters ----------------------------------------------------------
 
-    #: Operator-editable settings: the BTC ladder's four numbers, the one strategy that runs.
-    #: Each key must have a rule in settings_rules.RULES. Changing it starts a new run.
     EDITABLE = {
         "btc_ladder": "The BTC ladder's parts, step, correction and pullback. Saving a change "
                       "ends the current run and starts a new one under the new numbers.",
@@ -450,7 +428,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 f"{key!r} is not an operator setting (§12.4); only the BTC ladder's "
                 f"numbers are edited here.",
             )
-        # Validated server side: the endpoint is reachable without the form.
         try:
             validate_setting(key, body.value)
         except InvalidSetting as error:
@@ -473,8 +450,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return FileResponse(STATIC / "parameters.html")
 
 
-    # -- the scenario, and the market's own reading of itself ---------------
-
     @app.get("/api/scenario")
     def read_scenario(who: Operator = operator,
                       session: Session = session_dep) -> dict[str, Any]:
@@ -493,13 +468,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def set_scenario(body: ScenarioRequest, who: Operator = operator,
                      session: Session = session_dep) -> dict[str, Any]:
         """Update the single conditions row (idempotent PUT); a real change starts a run."""
-        # Locked read in the same transaction, so the audited "from" is what was replaced.
         before = session.execute(sa.text(
             "SELECT trend, sentiment FROM market_conditions WHERE id = 1 FOR UPDATE"
         )).mappings().first()
 
-        # No-op test lives in the WHERE (not a Python compare) to avoid a race; unchanged
-        # saves touch no row and write no log.
         row = session.execute(sa.text(
             "UPDATE market_conditions SET trend = :t, sentiment = :s, "
             "source = :src WHERE id = 1 AND ("
@@ -509,7 +481,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "src": body.source}).mappings().first()
 
         if row is None:
-            # Nothing moved, or the row is missing; the latter must surface as a 500.
             current = session.execute(sa.text(
                 "SELECT trend, sentiment, source FROM market_conditions WHERE id = 1"
             )).mappings().first()
@@ -522,14 +493,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                     "sentiment": current["sentiment"],
                     "source": current["source"], "changed": False}
 
-        # Runs synchronously (ms on the current archive); `seconds` is reported to show growth.
-        # The audit entry records from/to and the run id.
         started = time.perf_counter()
         try:
             outcome = scenario_run.execute(
                 body.trend, body.sentiment)
         except FileNotFoundError as missing:
-            # Keep the saved scenario even if the run cannot start.
             audit(session, who.email, "scenario.set", "scenario", "market",
                   {"trend": body.trend, "sentiment": body.sentiment,
                    "source": body.source,
@@ -649,7 +617,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             return {"available": False}
         other = latest(FNG_SOURCE if primary["source"] == CMC_SOURCE else CMC_SOURCE)
 
-        # History from the deepest series (CMC serves only its latest value); `source` names it.
         deep = session.execute(sa.text(
             "SELECT source, count(*) AS n, max(day) AS newest "
             "FROM sentiment_readings GROUP BY source ORDER BY n DESC LIMIT 1"
@@ -666,7 +633,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "day": row["day"].isoformat(), "value": row["value"],
                 "classification": row["classification"]}
 
-        # "On or before", so a missing day yields the prior value rather than a blank.
         history |= {"yesterday": at(1), "last_week": at(7), "last_month": at(30)}
 
         extremes = session.execute(sa.text(
@@ -686,7 +652,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return {"available": True, "primary": primary, "other": other,
                 "history": history}
 
-    # -- the screen ---------------------------------------------------------
 
     @app.get("/trade_lab", include_in_schema=False)
     def old_home() -> RedirectResponse:
@@ -694,7 +659,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return RedirectResponse("/home", status_code=308)
 
     @app.get("/favicon.ico", include_in_schema=False)
-    def favicon() -> Response:          # an icon, not a screen: the menu tests skip it
+    def favicon() -> Response:
         """Browsers ask the root for it even when a page links /static/favicon.png."""
         return FileResponse(STATIC / "favicon.png", media_type="image/png")
 
@@ -717,8 +682,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def audit_screen() -> FileResponse:
         return FileResponse(STATIC / "audit.html")
 
-    #: The decision sequence in run order, shown on /algorithm. Plan.md §8, §9, §12, §14.
-    #: Each step has its invariant ("rule") and, where one exists, the defect behind it ("cost").
     ALGORITHM = [
         {
             "phase": "Research · one study",
@@ -867,7 +830,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         )
 
         defaults = RiskLimits()
-        # The config in force; the single source for both values and the active badge.
         stored = session.execute(sa.text(
             "SELECT * FROM risk_limit_configs ORDER BY valid_from DESC LIMIT 1"
         )).mappings().first()
@@ -878,8 +840,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         limits = []
         for field in dataclasses.fields(RiskLimits):
             name = field.name
-            # Breach name = limit name, except `max_price_deviation_bps` -> `price_deviation`.
-            # Membership match, so a rename shows as "halts nothing" rather than a crash.
             breach = name if name in halting or name in human else (
                 "price_deviation" if name.startswith("max_price_deviation") else name)
             limits.append({
@@ -888,14 +848,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                          else _plain(getattr(defaults, name)),
                 "default": _plain(getattr(defaults, name)),
                 "stops": STOPS.get(name, ""),
-                # Halts the whole run, not just this order.
                 "halts": breach in halting,
-                # Requires a person to clear before resuming.
                 "needs_a_person": breach in human,
-                # Same bounds the POST checks, so the form matches the server.
                 "low": str(BOUNDS[name].low), "high": str(BOUNDS[name].high),
                 "whole": BOUNDS[name].whole, "bound": BOUNDS[name].describes,
-                # The form's grouping and plain name; an unplaced limit lands in "Other".
                 **dict(zip(("group", "label", "unit"),
                            PRESENTATION.get(name, ("Other", name, "")), strict=True)),
             })
@@ -924,9 +880,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "limits": limits,
             "halting": sorted(halting),
             "needs_a_person": sorted(human),
-            # All Breach kinds, including those not tied to a configured limit.
             "breach_kinds": sorted(b.value for b in Breach),
-            # Active = newest valid_from (unique constraint prevents ties); no stored flag.
             "history": [{
                 "id": str(h["id"]), "name": h["name"],
                 "valid_from": h["valid_from"].isoformat(),
@@ -938,7 +892,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "limit_value": str(e["limit_value"]), "action": e["action"],
                 "at": e["occurred_at"].isoformat(), "run_id": str(e["run_id"]),
             } for e in events],
-            # Totals for the pagers; event_count is every breach, not this page's.
             "event_count": int(session.execute(
                 sa.text("SELECT count(*) FROM risk_events")).scalar() or 0),
             "history_total": int(session.execute(
@@ -967,7 +920,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         ), {"id": config_id, "name": body.name,
             **{k: str(v) for k, v in parsed.items()}})
 
-        # Rationale is stored in the audit entry, not a column.
         audit(session, who.email, "risk_config.create", "risk_limit_config",
               str(config_id), {"name": body.name, "rationale": body.rationale,
                                "limits": {k: str(v) for k, v in parsed.items()}})
@@ -1034,10 +986,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "unrealised_pnl": number(r["unrealised_pnl"]),
             "realised_pnl": number(r["realised_pnl"]),
             "funding_paid": number(r["funding_paid"]),
-            # Mode must always be displayed, never editable (§20.2).
             "mode": r["mode"], "venue": r["venue"], "status": r["status"],
             "currency": r["base_currency"],
-            # PREREG-009: operator guided if trend != 5, else the algorithm; null if no guide.
             "guide": r["guide"], "trend": r["trend"], "trend_source": r["trend_source"],
             "book": r["book"],
             "close_pending": f"{r['run_id']}:{r['asset']}" in pending,
@@ -1057,7 +1007,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return {
             "positions": open_rows,
             "open_count": len(open_rows),
-            # Totals over the latest snapshot of every position, closed ones included.
             "unrealised_pnl": float(totals["unrealised"]),
             "realised_pnl": float(totals["realised"]),
             "funding_paid": float(totals["funding"]),
@@ -1069,7 +1018,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 sa.text("SELECT count(*) FROM risk_events")).scalar() or 0),
             "fills": int(session.execute(
                 sa.text("SELECT count(*) FROM fills")).scalar() or 0),
-            # Forward books log fills outside `fills`, so fills == 0 does not mean nothing ran.
             "snapshots": int(session.execute(
                 sa.text("SELECT count(*) FROM positions")).scalar() or 0),
         }
@@ -1111,11 +1059,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "passed": scalar(
                     "SELECT count(*) FROM validation_reports WHERE verdict='pass'"),
                 "scenario_runs": scalar("SELECT count(*) FROM scenario_runs"),
-                # Execution runs (steps 8-13), distinct from scenario runs.
                 "runs": scalar("SELECT count(*) FROM runs"),
                 "risk_events": scalar("SELECT count(*) FROM risk_events"),
             },
-            # Declared by the scenario runner, not assumed by the screen.
             "scenario_steps": {
                 "executed": list(scenario_run.EXECUTED_STEPS),
                 "substituted": list(scenario_run.SUBSTITUTED_STEPS),

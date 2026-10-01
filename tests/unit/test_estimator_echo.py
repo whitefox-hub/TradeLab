@@ -33,9 +33,6 @@ from tradelab.regimes.classifier import RegimeSpec, classify
 
 SHOCK_AT = 150
 N = 600
-# A single bar's departure may not erase more than this share of the peak
-# influence. A rolling window scores near 1.0 by construction; smooth decay
-# spreads the same total forgetting over many bars and scores far below it.
 MAX_CLIFF = 0.25
 
 
@@ -49,8 +46,6 @@ def _bars(shock: float) -> pl.DataFrame:
     stamps = np.arange(N).astype("datetime64[s]").astype("datetime64[us]")
     return pl.DataFrame({
         "event_time": stamps,
-        # Synthetic bars are knowable when they close (§5); the point-in-time
-        # columns are carried so this exercises the same path as real data.
         "ingest_time": stamps, "available_at": stamps,
         "open": close, "high": close * 1.001, "low": close * 0.999,
         "close": close, "volume": np.full(N, 1_000.0),

@@ -73,7 +73,7 @@ def test_duplicates_are_blocking(real_batch: Batch) -> None:
 def test_incoherent_ohlc_is_blocking(real_batch: Batch) -> None:
     broken = Batch(
         real_batch.kind, real_batch.venue, real_batch.asset,
-        real_batch.frame.with_columns(pl.col("low") * 10),  # low above high
+        real_batch.frame.with_columns(pl.col("low") * 10),
         real_batch.schema,
     )
     assert check_ohlc_coherence(broken)

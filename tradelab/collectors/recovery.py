@@ -16,12 +16,11 @@ log = structlog.get_logger(__name__)
 
 
 class Recoverability(StrEnum):
-    FULL = "full"       # bulk archive or unlimited REST history
-    WINDOW = "window"   # REST history, bounded lookback
-    NONE = "none"       # no historical endpoint: downtime is permanent data loss
+    FULL = "full"
+    WINDOW = "window"
+    NONE = "none"
 
 
-#: How far back each kind can be recovered. `None` means unbounded.
 RECOVERY: dict[str, tuple[Recoverability, timedelta | None]] = {
     "ohlcv": (Recoverability.FULL, None),
     "trades": (Recoverability.FULL, None),
@@ -42,7 +41,7 @@ class GapPlan:
     gap_start: datetime
     gap_end: datetime
     recoverability: Recoverability
-    recoverable_from: datetime | None   # backfill this range before resuming
+    recoverable_from: datetime | None
     permanent_loss: tuple[datetime, datetime] | None
     issue: Issue | None
 
@@ -77,7 +76,6 @@ def plan_recovery(
     elif recoverability is Recoverability.WINDOW:
         horizon = now - (lookback or timedelta(0))
         recoverable_from = max(watermark, horizon)
-        # Older than the REST window is gone.
         permanent = (watermark, horizon) if watermark < horizon else None
     else:
         recoverable_from, permanent = None, (watermark, now)
@@ -87,7 +85,6 @@ def plan_recovery(
         start, end = permanent
         issue = Issue(
             kind=IssueKind.GAP,
-            # Blocking, not warn: bars promotion of anything validated on the window (§4.6).
             severity=Severity.BLOCKING,
             period_start=start,
             period_end=end,

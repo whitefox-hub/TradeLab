@@ -35,7 +35,6 @@
   .observed b { font-size:21px; }
   .observed span { color:var(--muted); font-size:14px; display:block; }
 
-  /* -- what the last run did with each step -- */
   .run-head { margin-top:22px; padding:16px 20px; background:var(--panel);
     border:1px solid var(--line); border-radius:12px; }
   .run-head h2 { margin:0 0 6px; font-size:17px; font-weight:640; }
@@ -93,14 +92,12 @@ const escape = (t) => (t || "").replace(/[<>&"]/g,
 
 const pct = (v) => `${(Number(v) * 100).toFixed(2)}%`;
 
-// Step status derived from the reported run and counts, never hard-coded here.
 function verdictFor(n, data) {
   const run = data.last_run;
   const steps = data.scenario_steps;
   const execution = n > steps.gate;
 
   if (execution) {
-    // runs == 0 means execution steps never ran (distinct from "unreached").
     return data.observed.runs === 0
       ? { cls: "never", label: "never run",
           note: "No execution run exists. These steps need a strategy promoted "

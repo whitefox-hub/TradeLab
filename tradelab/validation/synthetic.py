@@ -34,8 +34,6 @@ def make_noise(
         returns[i] = shocks[i] * np.sqrt(variance[i])
 
     close = start * np.exp(np.cumsum(returns))
-    # Intrabar extremes from a bridge, so highs and lows are consistent with the
-    # path rather than bolted on.
     spread = np.abs(rng.standard_normal(n)) * np.sqrt(variance)
     open_ = np.concatenate([[start], close[:-1]])
     high = np.maximum(open_, close) * (1 + spread)
@@ -108,7 +106,6 @@ def make_edge(
     rng = np.random.default_rng(seed + 1)
     frame = make_noise(n, seed, sigma, **kwargs)
     signal = np.sin(np.arange(n) * 2 * np.pi / signal_period) + 0.3 * rng.standard_normal(n)
-    # Per-bar drift that yields the requested annualised Sharpe at this bar count.
     per_bar = edge_sharpe * sigma / np.sqrt(np.mean(signal**2))
     close = frame["close"].to_numpy() * np.exp(np.cumsum(per_bar * signal))
     scale = close / frame["close"].to_numpy()

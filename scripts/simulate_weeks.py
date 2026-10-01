@@ -22,11 +22,8 @@ from tradelab.risk.limits import RiskLimits
 EXCHANGE_INFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 WEEK = 7
 
-#: Out of reach at small capital, and they would make the basket a factor bet
-#: (FEASIBILITY-008: 38% of variance).
 EXCLUDED = ("BTC", "ETH")
 
-#: Random baskets per week. Not "cheapest openable": floors tie, so that sorts alphabetically.
 BASKETS = 60
 
 SEED = 20260926
@@ -85,7 +82,6 @@ def main() -> int:
     for start in range(0, prices.shape[1] - WEEK, WEEK):
         entry, exit_ = prices[:, start], prices[:, start + WEEK]
 
-        # min_viable = max(notional floor, one lot) per §14.1; min_notional alone is wrong.
         openable = []
         for index, asset in enumerate(assets):
             rule = rules.get(asset)
@@ -101,7 +97,6 @@ def main() -> int:
             spreads.append(0.0)
             continue
 
-        # Random draws: choosing which five would be an unregistered selection rule.
         week = []
         for draw in range(BASKETS):
             rng = np.random.default_rng(SEED + start * 1000 + draw)

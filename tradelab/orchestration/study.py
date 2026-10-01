@@ -39,15 +39,10 @@ class StudySpec:
     costs: CostModel = BINANCE_RETAIL
     min_detectable_sharpe: float | None = None
     oos_fraction: float = 0.3
-    years: float | None = None      # None uses the whole archive
-    # Below this, excluded from selection, not merely rejected afterwards (§8.7):
-    # otherwise the noisiest low-trade Sharpe wins.
+    years: float | None = None
     min_trades: int = 100
-    # Target annualised Sharpe; power is checked before the grid runs (§8.8), since
-    # trials spent are never refunded.
     target_sharpe_annual: float = 1.0
     require_power: bool = True
-    # 1: long above the threshold; -1: short.
     direction: int = 1
 
     @property
@@ -76,13 +71,10 @@ class StudyResult:
     best: BacktestResult | None
     best_params: dict
     gate: GateEvaluation
-    # Held-out evaluation. Read OOS figures from here, not `gate.metrics`, which lacks
-    # them when the gate short-circuits below the trade minimum.
     oos: BacktestResult | None = None
     stability: dict = field(default_factory=dict)
     robustness: dict = field(default_factory=dict)
     pbo: float | None = None
-    # Every screened configuration; to Parquet, never Postgres (§5.7).
     tier_a_rows: list[dict] = field(default_factory=list)
 
     @property
@@ -102,7 +94,6 @@ def load_bars(
     from tradelab.storage.materialise_bars import load_materialised
     from tradelab.storage.query import aggregate_bars
 
-    # Prefer a fresh materialised view: deriving from 1m costs minutes per asset (§9.6).
     cached = load_materialised(root, asset, timeframe)
     if cached is not None:
         bars = cached.sort("event_time")
@@ -112,8 +103,6 @@ def load_bars(
             bars = bars.tail(limit_days * _bars_per_day(timeframe))
         return bars
 
-    # `aggregate_bars` carries the last source `event_time` alongside the bucket;
-    # the bucket is the bar's own timestamp, so the source column is dropped.
     bars = (
         aggregate_bars(root, asset, timeframe)
         .drop("event_time", "available_at")
@@ -208,8 +197,6 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
         signal = features[spec.column(value)].to_numpy().astype(np.float64)
         for entry in spec.entries:
             position = threshold_position(signal, float(entry)) * spec.direction
-            # Scored on the TRAINING window only; the full series leaks the test set
-            # into selection.
             result = run(close[:split], position[:split], spec.costs, spec.timeframe,
                          funding=funding[:split] if funding is not None else None)
             results.append(result)
@@ -218,14 +205,11 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
             lagged = np.concatenate([[0.0], position[:-1]])
             traded = np.abs(np.diff(np.concatenate([[0.0], lagged])))
             gross_matrix.append(lagged * returns)
-            # PBO takes gross (§8.3); the verdict takes net.
             net_row = lagged * returns - traded * spec.costs.per_side
             if funding is not None:
                 net_row = net_row - lagged * funding
             net_matrix.append(net_row)
             turnover.append(float(traded.sum()))
-            # Selection scores NET (gross picks what costs destroy); PBO stays on gross.
-            # Below min_trades: -inf, not omitted, so the surface keeps its shape (§8.5).
             eligible = result.n_trades >= spec.min_trades
             surface_points.append((
                 {spec.param_name: value, "entry": float(entry)},
@@ -236,7 +220,6 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     if not executed:
         raise ValueError("study evaluated nothing")
 
-    # Select the centre of the best smoothed region, not the luckiest point (§8.5).
     surface = Surface.build(surface_points, [spec.param_name, "entry"])
     if not np.isfinite(surface.scores).any():
         raise ValueError(
@@ -247,7 +230,6 @@ def run_study(bars: pl.DataFrame, spec: StudySpec) -> StudyResult:
     chosen = params.index(stability.peak_params)
     best = results[chosen]
 
-    # NET, not gross: the verdict must pay fees and funding.
     oos = net_matrix[chosen][split:]
     chosen_signal = features[spec.column(stability.peak_params[spec.param_name])]
     oos_result = run(

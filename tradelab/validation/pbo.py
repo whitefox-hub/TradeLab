@@ -85,7 +85,6 @@ def probability_of_backtest_overfitting(
 
         best = int(np.argmax(_sharpe(in_sample)))
         oos = _sharpe(out_sample)
-        # Relative rank of the in-sample winner among all configurations, OOS.
         rank = float((oos <= oos[best]).sum()) / n_config
         rank = min(max(rank, 1.0 / (n_config + 1)), 1.0 - 1.0 / (n_config + 1))
         logits.append(np.log(rank / (1.0 - rank)))

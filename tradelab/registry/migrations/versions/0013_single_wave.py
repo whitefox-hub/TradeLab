@@ -19,7 +19,6 @@ def upgrade() -> None:
     op.drop_table('waves')
     op.create_table(
         'market_wave',
-        # Singleton: id fixed at 1, so a second row collides.
         sa.Column('id', sa.SmallInteger(), primary_key=True,
                   server_default=sa.text('1')),
         sa.Column('direction', sa.Text(), nullable=False),
@@ -32,7 +31,6 @@ def upgrade() -> None:
         sa.CheckConstraint("(direction = 'NORMAL') = (magnitude = 0)",
                            name='ck_market_wave_normal_is_zero'),
     )
-    # Seeded so readers always find the row.
     op.execute("INSERT INTO market_wave (id, direction, magnitude) "
                "VALUES (1, 'NORMAL', 0)")
 

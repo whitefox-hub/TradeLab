@@ -17,7 +17,6 @@ from scipy.spatial.distance import squareform
 class Clustering:
     labels: dict[str, int]
     n_obs: int
-    #: Correlations rise under stress; risk uses the crisis-regime figure (§13.1).
     regime: str = "all"
 
     @property
@@ -49,7 +48,6 @@ def cluster_strategies(
     np.fill_diagonal(corr, 1.0)
     distance = np.sqrt(np.clip(0.5 * (1 - corr), 0, None))
     np.fill_diagonal(distance, 0.0)
-    # squareform rejects float-noise asymmetry from corrcoef.
     distance = (distance + distance.T) / 2
 
     labels = fcluster(linkage(squareform(distance, checks=False), method="average"),
@@ -78,7 +76,6 @@ def allocate(
     if not clusters:
         return {}
 
-    # Between clusters: inverse variance of each cluster's equal-weight return.
     cluster_returns = {
         label: np.mean([returns[n] for n in members], axis=0)
         for label, members in clusters.items()
@@ -118,11 +115,10 @@ def _apply_caps(
         movable = {n: w for n, w in capped.items() if n not in fixed}
         headroom = sum(movable.values())
         if not movable or headroom <= 0:
-            break  # nothing left to receive it; the remainder stays unallocated
+            break
         for name, weight in movable.items():
             capped[name] = weight + freed * weight / headroom
 
-    # Cluster caps last, scaling down without redistributing the excess.
     for members in clusters.values():
         cluster_total = sum(capped[n] for n in members)
         if cluster_total > max_per_cluster:

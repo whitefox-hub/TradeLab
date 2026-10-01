@@ -150,11 +150,6 @@ def test_the_api_computes_no_figure() -> None:
 
     source = Path(module.__file__).read_text()
 
-    # Checked on the imports rather than on the text. The first version searched
-    # for names like `deflated_sharpe` anywhere in the file and started failing
-    # the moment a query selected the stored column of that name — which is
-    # precisely the behaviour §20.1 asks for: a figure computed by a worker and
-    # read back. Reading one is the rule; calculating one is the violation.
     tree = ast.parse(source)
     imported = {
         node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
@@ -224,9 +219,6 @@ def test_the_cooling_off_is_enforced_by_the_database(monkeypatch) -> None:
             return False
 
     try:
-        # Each in its own transaction: a shared one would leave the second
-        # insert failing because the first aborted it, and the test would pass
-        # for the wrong reason.
         assert not approve(fresh_gate), "a gate changed minutes ago was citable"
         assert approve(aged_gate), "a gate older than 24 hours was refused"
     finally:
@@ -288,8 +280,6 @@ def test_the_screens_send_an_unauthenticated_visitor_to_login(client: TestClient
     table with no explanation of why it is empty."""
     shared = client.get("/static/app.js").text
     assert "/login?next=" in shared, "the shared mount does not point at sign-in"
-    # The shared mount() sends anyone without a session to sign in, with the
-    # path they wanted, rather than rendering a page whose every call will 401.
     assert 'location.replace("/login?next=" + encodeURIComponent(active))' in (
         client.get("/static/app.js").text
     )
@@ -352,7 +342,6 @@ def test_a_locked_parameter_is_refused_by_name() -> None:
 
         allowed = client.get("/api/settings").json()
         keys = {entry["key"] for entry in allowed["editable"]}
-        # The one strategy that runs is the only thing configured here.
         assert keys == {"btc_ladder"}
 
 
@@ -422,7 +411,6 @@ def test_the_steps_that_were_defects_say_what_they_cost() -> None:
     reorders it. These four were real defects in this codebase."""
     block = _algorithm_source()
     assert block.count('"cost":') >= 4
-    # And the numbers in those stories are the measured ones, not round.
     assert "2.68" in block and "0.03" in block
     assert "1.000 to 0.024" in block
 
@@ -442,19 +430,7 @@ def test_the_chrome_is_revalidated_rather_than_cached(client: TestClient) -> Non
     been built rather than as a stale asset."""
     response = client.get("/static/app.js")
     assert "no-cache" in response.headers.get("cache-control", "")
-    # HTML too: the pages carry the script tag that would otherwise be stale.
     assert client.get("/algorithm").status_code == 200
-
-
-# -- trends -------------------------------------------------------------------
-#
-# A market trend is three fields: asset, direction, magnitude. The tests below are
-# mostly about what it is *not* allowed to become, because the pressure on a
-# screen like this is always to add one more field, and the fourth field is the
-# one nothing downstream reads.
-
-
-# -- what this surface is allowed to do --------------------------------------
 
 
 @pytest.mark.fast
@@ -469,19 +445,9 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
         for method in getattr(route, "methods", set())
         if method in {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    # The complete set of writes this surface allows, asserted only here: approvals
-    # and lifecycle transitions (§20.1), operator settings (§12.4), the scenario (§20).
-    # Written as equality so a new route fails here.
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
-        # The operator's manual exit. It records a request in the audit log and executes
-        # nothing: the run's own process closes the position, in the run's mode.
         ("/api/positions/close", "POST"),
-        # §12.4 puts sizing and risk limits in the operator's hands, and §20
-        # gives this screen "limit changes (admin)". It creates a configuration
-        # and never edits one: §14.1 versions them and has runs reference one,
-        # so a limit cannot change beneath a position opened under it. There is
-        # no PUT or PATCH here for that reason.
         ("/api/risk-limits", "POST"),
         ("/api/scenario", "PUT"),
         ("/api/session", "DELETE"),
@@ -500,8 +466,6 @@ def _screens(client: TestClient) -> set[str]:
     served = set()
     for route in client.app.routes:
         annotation = getattr(getattr(route, "endpoint", None), "__annotations__", {})
-        # The string, not the class: app.py uses `from __future__ import
-        # annotations`, so every annotation there is already a string.
         if annotation.get("return") in (FileResponse, "FileResponse"):
             served.add(route.path)
     assert served, "no screens found; the check is not looking at anything"
@@ -543,9 +507,6 @@ def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
         assert f'mount("{path}"' in page, f"{path} does not mark itself active"
 
 
-# -- the market trend ----------------------------------------------------------------
-
-
 @pytest.mark.fast
 def test_reading_or_setting_the_scenario_requires_a_session(client: TestClient) -> None:
     assert client.get("/api/scenario").status_code == 401
@@ -584,17 +545,12 @@ def test_the_assumed_sentiment_is_not_the_measured_one(client: TestClient) -> No
     from tradelab.registry.models import MarketConditions, SentimentReading
 
     assert MarketConditions.__tablename__ != SentimentReading.__tablename__
-    # The assumption carries no date. Every column on it, checked rather than
-    # asserted in prose, because the way a date arrives is one migration at a
-    # time.
     dated = [c.name for c in MarketConditions.__table__.columns
              if str(c.type).upper().startswith(("DATE", "TIMESTAMP"))]
     assert not dated, f"the scenario grew a date column: {dated}"
 
     paths = {route.path for route in client.app.routes}
     assert "/api/fear-greed" in paths
-    # Named for the index, not for "sentiment", so the two cannot be confused at
-    # the call site either.
     assert "/api/sentiment" not in paths
 
 
@@ -653,9 +609,6 @@ def test_the_scenario_carries_no_field_beyond_what_it_needs() -> None:
             ScenarioRequest(trend=6, sentiment=50, **{smuggled: 1})
 
 
-# -- the index ---------------------------------------------------------------
-
-
 @pytest.mark.fast
 def test_sentiment_is_kept_out_of_the_point_in_time_corpus() -> None:
     """§11.4 argues against a bought index and is right about why: the method is
@@ -666,8 +619,6 @@ def test_sentiment_is_kept_out_of_the_point_in_time_corpus() -> None:
 
     assert SentimentReading.__tablename__ == "sentiment_readings"
     assert SentimentReading.__tablename__ != MacroSeries.__tablename__
-    # Every foreign key on the sentiment table, of which there are none: a join
-    # into the corpus is how a vendor number ends up inside a backtest.
     assert not list(SentimentReading.__table__.foreign_keys)
 
 
@@ -715,9 +666,6 @@ def test_an_unknown_classification_or_value_is_refused_at_the_boundary() -> None
         fetch(client=http)
 
 
-# -- what was removed --------------------------------------------------------
-
-
 @pytest.mark.fast
 def test_the_news_screen_and_its_logic_are_gone(client: TestClient) -> None:
     """Removed rather than hidden. A page left served but unlinked is a page
@@ -735,10 +683,6 @@ def test_the_news_screen_and_its_logic_are_gone(client: TestClient) -> None:
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("tradelab.news")
 
-    # The measurement and the corpus did not go with the screen. §11.3's
-    # abnormal-return estimator is read by studies, not by a page, and deleting
-    # it with the markup would have taken a result-bearing module out with a
-    # view.
     assert importlib.import_module("tradelab.events.reaction")
 
 
@@ -750,8 +694,6 @@ def test_every_built_screen_appears_in_the_menu(client: TestClient) -> None:
     menu = client.get("/static/app.js").text
     linked = set(re.findall(r'href: "(/[a-z_-]+)"', menu))
 
-    # /login is deliberately absent from the menu: it is where an unauthenticated
-    # visitor is sent, not somewhere to navigate to.
     assert _screens(client) - linked == {"/login"}, (
         f"served but not in the menu: {_screens(client) - linked - {'/login'}}"
     )
@@ -782,12 +724,7 @@ def test_the_scenario_screen_flags_unsaved_changes(client: TestClient) -> None:
     markup = client.get("/static/market_sentiment.html").text
     assert "Unsaved changes" in markup
     assert "function paintDirty" in markup
-    # The baseline is what the server confirmed, never what the form holds. Read
-    # back off the controls it would call a failed save clean.
     assert "stored = {trend: saved.trend" in markup
-
-
-# -- nothing is written twice ------------------------------------------------
 
 
 @pytest.mark.fast
@@ -799,8 +736,6 @@ def test_each_pane_shows_the_history_of_its_own_dial(client: TestClient) -> None
     assert 'id="t-history"' in markup
     assert 'id="s-history"' in markup
     assert "/api/scenario/history" in markup
-    # The previous value is derived from the adjacent entry only where it was
-    # not recorded, so a real one is never overwritten by a guess.
     assert "e.from ?? (raw[i + 1]" in markup
 
 
@@ -848,10 +783,7 @@ def test_saving_the_same_scenario_twice_records_it_once(monkeypatch) -> None:
     for _ in range(3):
         repeat = client.put("/api/scenario", json=body)
         assert repeat.status_code == 200, repeat.text
-        # Idempotent and honest about it, rather than returning 200 and writing.
         assert repeat.json()["changed"] is False
-        # The state is still reported, so a client that missed the first reply
-        # does not have to guess what the value is now.
         assert repeat.json()["magnitude"] == 4
     assert entries() == before + 1, "a repeated save added a log entry"
 
@@ -859,8 +791,6 @@ def test_saving_the_same_scenario_twice_records_it_once(monkeypatch) -> None:
     assert moved.json()["changed"] is True
     assert entries() == before + 2
 
-    # The entry says what it replaced, so a reader can tell which dial moved
-    # without holding the whole log in their head.
     with engine.connect() as conn:
         payload = conn.execute(sa_.text(
             "SELECT payload FROM audit_log WHERE action = 'scenario.set' "
@@ -905,10 +835,6 @@ def test_an_unchanged_reading_is_not_rewritten(monkeypatch) -> None:
             "SELECT ingest_time FROM sentiment_readings WHERE day = :d"),
             {"d": day.date()}).scalar_one() == first_ingest
 
-    # A value that genuinely differs is a revision, and is written rather than
-    # swallowed: §4.3 says a revised series with no vintages cannot be read as
-    # it was known at the time, and hiding the revision would make that
-    # undetectable.
     assert store(engine, [Reading(day=day, value=43, classification="Fear")]) == 1
 
     with engine.begin() as conn:
@@ -931,12 +857,9 @@ def test_the_bars_show_what_is_applied_and_save_is_what_moves_them(
     markup = client.get("/static/market_sentiment.html").text
 
     assert "function paintApplied" in markup
-    # The pins are placed from `stored` — what the server confirmed — and from
-    # nothing else.
     assert '$("s-pin").style.left = `${stored.sentiment}%`' in markup
     assert '$("t-pin").style.left = `${trackPct(stored.trend)}%`' in markup
 
-    # And painted again right after a save, which is what makes the bar catch up.
     body = markup[markup.index('$("save").onclick'):]
     assert "paintApplied();" in body, "a save does not move the bars"
 
@@ -955,15 +878,12 @@ def test_the_index_and_the_assumption_share_one_bar_but_not_one_mark(
     """
     markup = client.get("/static/market_sentiment.html").text
 
-    # One gradient in the Fear and Greed pane, carrying both marks.
     pane = markup[markup.index("<h2>Fear and Greed</h2>"):markup.index('id="s-history"')]
     assert pane.count('class="scale"') == 1, "the pane has more than one gradient"
     assert 'class="mark" id="fg-pin"' in pane, "the measured mark is missing"
     assert 'class="pin" id="s-pin"' in pane, "the applied pin is missing"
-    # Named on screen, not left to be inferred from two similar lines.
     assert ">index<" in pane and ">applied<" in pane
 
-    # The slider sits above the bar it reads against, not below it.
     assert pane.index('id="s-range"') < pane.index('class="scale"')
 
 
@@ -981,13 +901,10 @@ def test_saving_the_scenario_is_what_starts_a_run(client: TestClient) -> None:
     put = source[source.index('@app.put("/api/scenario")'):]
     put = put[:put.index('@app.get("/api/scenario/runs")')]
     assert "scenario_run.execute" in put, "saving does not start a run"
-    # And only on a change, for the same reason the log records only one:
-    # re-running an identical scenario produces an identical answer.
     assert put.index('"changed": False') < put.index("scenario_run.execute")
 
     paths = {route.path for route in client.app.routes}
     assert "/api/scenario/runs" in paths
-    # Reading runs is a read. Nothing about a scenario run is a second write.
     methods = {
         method
         for route in client.app.routes
@@ -1004,8 +921,6 @@ def test_the_algorithm_screen_no_longer_credits_news_for_the_sizing(
     """Step 10 named a screen that has been deleted. A sequence describing a
     step by a mechanism that no longer exists is worse than one that omits it,
     because it reads as current."""
-    # Read from the constant rather than through the endpoint: the endpoint
-    # needs a session, and what is being checked is the text itself.
     import inspect
 
     from tradelab.api.app import create_app as factory
@@ -1013,8 +928,6 @@ def test_the_algorithm_screen_no_longer_credits_news_for_the_sizing(
     source = inspect.getsource(factory)
     assert "News conditions the size" not in source
     assert "The scenario conditions the size" in source
-    # And it says what the tilt cannot do, since that is the part an operator
-    # has to be able to read without opening the code.
     assert "it does not signal" in source
 
 
@@ -1032,17 +945,12 @@ def test_the_algorithm_screen_reports_a_run_rather_than_describing_a_path(
     markup = client.get("/static/algorithm.html").text
 
     assert "function verdictFor" in markup
-    # Which steps a scenario run executes comes from the runner, so the two
-    # cannot disagree about what ran.
     assert "data.scenario_steps" in markup
     assert "steps.substituted.includes(n)" in markup
 
-    # Execution steps are "never run", not "not reached": the runs table is
-    # empty and that is measured, not inferred from the last scenario run.
     assert "data.observed.runs === 0" in markup
     assert "never run" in markup
 
-    # And no step's status is hardcoded by number.
     import re
 
     assert not re.search(r'step\.n\s*(===|==)\s*\d', markup), (
@@ -1060,7 +968,6 @@ def test_the_runner_declares_which_steps_it_skips(client: TestClient) -> None:
     assert GATE_STEP in EXECUTED_STEPS
     assert not set(EXECUTED_STEPS) & set(SUBSTITUTED_STEPS), (
         "a step is both executed and substituted")
-    # Every research step is accounted for, so none is silently unclassified.
     assert set(EXECUTED_STEPS) | set(SUBSTITUTED_STEPS) == set(range(1, GATE_STEP + 1))
 
 
@@ -1129,17 +1036,13 @@ def test_the_book_shows_the_latest_snapshot_of_each_open_position(monkeypatch) -
         mine = {p["asset"]: p for p in book["positions"]
                 if p["asset"].startswith("ZZ")}
 
-        # One row per open position, not one per snapshot.
         assert set(mine) == {"ZZLONG", "ZZSHORT"}, (
             "a flat position is open, or a snapshot was counted twice")
         assert mine["ZZLONG"]["side"] == "LONG"
         assert mine["ZZSHORT"]["side"] == "SHORT"
-        # Mode travels with the position. §20.2: shown, never editable.
         assert mine["ZZLONG"]["mode"] == "simulator"
 
-        # The closed one still contributes its realised P&L: 0 + 10 + 40.
         assert book["realised_pnl"] - before["realised_pnl"] == pytest.approx(50)
-        # And the two live ones contribute unrealised once each, not twice.
         assert book["unrealised_pnl"] - before["unrealised_pnl"] == pytest.approx(15)
     finally:
         with engine.begin() as conn:
@@ -1171,8 +1074,6 @@ def test_the_home_screen_computes_no_figure(client: TestClient) -> None:
     markup = client.get("/static/index.html").text
     for derived in ("* price", "mark_price", "qty *", "- avg_entry", "avg_entry -"):
         assert derived not in markup, f"the home screen computes: {derived}"
-    # Negated for display only, which is presentation and not derivation:
-    # funding paid is a cost, and showing it as a positive gain would invert it.
     assert "money(-book.funding_paid" in markup
 
 
@@ -1190,19 +1091,15 @@ def test_the_risk_screen_lists_every_limit_the_engine_has(client: TestClient) ->
 
     fields = {f.name for f in dataclasses.fields(RiskLimits)}
 
-    # Every limit is explained, beside the limit rather than on the page. A new
-    # one without a line here fails instead of shipping undocumented.
     assert set(STOPS) == fields, (
         f"undescribed: {sorted(fields - set(STOPS))}; "
         f"described but gone: {sorted(set(STOPS) - fields)}")
-    # And placed in the form under a plain name, or it lands in "Other" unlabelled.
     from tradelab.risk.limits import PRESENTATION
     assert set(PRESENTATION) == fields, (
         f"unplaced: {sorted(fields - set(PRESENTATION))}; "
         f"placed but gone: {sorted(set(PRESENTATION) - fields)}")
 
     markup = client.get("/static/risk_limits.html").text
-    # None of the sixteen names is hardcoded in the page.
     for name in fields:
         assert name not in markup, f"{name} is written into the screen"
     assert "data.limits.map" in markup
@@ -1281,7 +1178,6 @@ def test_every_limit_is_bounded_before_it_can_be_set() -> None:
     good = {name: getattr(defaults, name) for name in fields}
     assert validate(good), "the engine's own defaults are refused"
 
-    # Values that disable the control rather than merely loosening it.
     for field, value in (
         ("max_daily_loss", 1.0),
         ("max_drawdown_from_peak", 0.99),
@@ -1292,15 +1188,11 @@ def test_every_limit_is_bounded_before_it_can_be_set() -> None:
         with pytest.raises(Invalid):
             validate({**good, field: value})
 
-    # Individually fine, jointly meaningless: a minimum above its maximum
-    # refuses every order, which is a halt reporting itself as a sizing rule.
     with pytest.raises(Invalid, match="refuse every order"):
         validate({**good, "min_position_notional": 50_000})
     with pytest.raises(Invalid, match="bounded by gross"):
         validate({**good, "max_net_exposure": 5})
 
-    # A configuration is the whole set; a partial one takes defaults nobody
-    # chose, and an unknown field is a limit the operator believes exists.
     with pytest.raises(Invalid, match="missing"):
         validate({k: v for k, v in good.items() if k != "max_leverage"})
     with pytest.raises(Invalid, match="unknown"):
@@ -1317,8 +1209,6 @@ def test_the_form_cannot_offer_what_the_server_refuses(client: TestClient) -> No
     markup = client.get("/static/risk_limits.html").text
     assert 'min="${escape(l.low)}" max="${escape(l.high)}"' in markup
     assert "l.bound" in markup, "the form does not show the reason a value is refused"
-    # And a rationale is required, because a limit change nobody can review is
-    # one nobody did.
     assert 'id="c-why"' in markup
 
 
@@ -1363,11 +1253,9 @@ def test_exactly_one_risk_configuration_is_active(monkeypatch) -> None:
         body = client.get("/api/risk-limits").json()
         active = [h for h in body["history"] if h["active"]]
         assert len(active) == 1, f"{len(active)} configurations claim to be active"
-        # The newest wins, and the values on the page come from that same row.
         assert active[0]["name"] == "ZZPROBE-A"
         assert body["config_name"] == "ZZPROBE-A"
 
-        # A tie is refused rather than ordered by something nobody would look at.
         with pytest.raises(sa_.exc.IntegrityError), engine.begin() as conn:
             conn.execute(sa_.text(
                 "INSERT INTO risk_limit_configs VALUES (:i,'ZZPROBE-B',5,2,10,10,"
@@ -1389,8 +1277,6 @@ def test_the_screen_marks_one_active_and_the_rest_inactive(
     markup = client.get("/static/risk_limits.html").text
     assert "h.active" in markup
     assert '"active" : "inactive"' in markup or "active\" : \"inactive" in markup
-    # Decided by the server from the row the values also come from, so the badge
-    # and the numbers on the page cannot disagree.
     assert "h.active ?" in markup
 
 
@@ -1412,8 +1298,6 @@ def test_the_screen_offers_one_scale_with_five_in_the_middle(
         assert absent not in markup, f"the screen still offers {absent}"
 
     assert 'id="t-mag" min="1" max="10"' in markup
-    # The neutral point is marked on the bar, not left to be inferred from a
-    # number being halfway along a track that does not start at zero.
     assert 'id="t-neutral"' in markup
     assert "nothing new" in markup
 
@@ -1439,7 +1323,6 @@ def test_the_menu_is_the_working_loop_and_nothing_else(client: TestClient) -> No
         "/audit", "/risk-limits",
     ], f"the menu is now {linked}"
 
-    # Nothing is advertised that cannot be opened.
     assert "soon: true" not in menu
     for href in linked:
         assert client.get(href).status_code == 200, f"{href} is offered but 404s"
@@ -1455,7 +1338,6 @@ def test_a_removed_screen_leaves_its_data_behind(client: TestClient) -> None:
     for endpoint in ("/api/strategies", "/api/experiments", "/api/data-quality"):
         assert endpoint in paths, f"{endpoint} went with its screen"
 
-    # And the counts survive where they were already displayed.
     assert "data-quality" in client.get("/static/index.html").text
     assert "experiments" in client.get("/static/algorithm.html").text
 

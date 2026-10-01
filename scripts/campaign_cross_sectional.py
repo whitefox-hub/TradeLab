@@ -25,7 +25,7 @@ ROOT = Path("/data/parquet")
 ANNUAL = float(np.sqrt(2_190))
 PERIODS = (21, 45, 90)
 KS = (5, 10, 20)
-REBALANCES = (1, 6)            # every bar, and once a day on 4h bars
+REBALANCES = (1, 6)
 
 
 def build_panel(assets: list[str], period: int):

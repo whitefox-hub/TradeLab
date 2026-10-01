@@ -35,7 +35,7 @@ def _uuid_pk() -> Mapped[uuid.UUID]:
     return mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
 
-TS = DateTime(timezone=True)  # every timestamp is timestamptz in UTC (§5)
+TS = DateTime(timezone=True)
 
 
 class Venue(Base):
@@ -43,7 +43,7 @@ class Venue(Base):
 
     code: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # cex | dex
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
     supports_testnet: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     clock_offset_ms: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -58,9 +58,8 @@ class Source(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     venue: Mapped[str | None] = mapped_column(ForeignKey("venues.code"))
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    tier: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # §4.1
+    tier: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sla_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Point-in-time: a 2021 article cannot be scored with today's reputation (§11.2)
     credibility: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
     valid_from: Mapped[datetime] = mapped_column(TS, nullable=False)
     valid_to: Mapped[datetime | None] = mapped_column(TS)
@@ -90,7 +89,7 @@ class IngestionRun(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sources.id"), nullable=False)
-    mode: Mapped[str] = mapped_column(String(16), nullable=False)  # backfill|stream|recapture
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
     period_start: Mapped[datetime] = mapped_column(TS, nullable=False)
     period_end: Mapped[datetime | None] = mapped_column(TS)
     watermark: Mapped[datetime | None] = mapped_column(TS)
@@ -128,7 +127,6 @@ class DataQualityIssue(Base):
             name="ck_dqi_kind",
         ),
         CheckConstraint("period_end >= period_start", name="ck_dqi_period"),
-        # Blocking issues gate promotion (§4.6), so they are queried constantly.
         Index(
             "ix_dqi_open_blocking", "source_id", "period_start",
             postgresql_where=text("resolved_at IS NULL AND severity = 'blocking'"),
@@ -153,10 +151,6 @@ class DatasetVersion(Base):
 
     __table_args__ = (UniqueConstraint("content_hash", name="uq_dataset_content_hash"),)
 
-
-# --------------------------------------------------------------------------- #
-# Research registry. Plan.md §5.1, migration 0002.
-# --------------------------------------------------------------------------- #
 
 class User(Base):
     """Single row: a real actor for approvals and the audit log, not access control (§20.3)."""
@@ -197,7 +191,6 @@ class FeatureDefinition(Base):
     impl_ref: Mapped[str] = mapped_column(Text, nullable=False)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     param_schema: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    # Drives warmup and, more importantly, the purge size in §8.2.
     lookback_bars: Mapped[int] = mapped_column(Integer, nullable=False)
     is_point_in_time: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
@@ -327,7 +320,6 @@ class ValidationReport(Base):
 
     experiment_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("experiments.id"), primary_key=True)
-    # From studies.executed_trials, including tier A discards.
     trials_considered: Mapped[int] = mapped_column(Integer, nullable=False)
     deflated_sharpe: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     dsr_pvalue: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
@@ -359,17 +351,11 @@ class LifecycleTransition(Base):
     from_state: Mapped[str] = mapped_column(String(16), nullable=False)
     to_state: Mapped[str] = mapped_column(String(16), nullable=False)
     gate_config_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gate_configs.id"))
-    # Snapshot of the criteria as evaluated then, not as they are now (§20.3).
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
 
     __table_args__ = (Index("ix_transitions_strategy", "strategy_id", "occurred_at"),)
-
-
-# --------------------------------------------------------------------------
-# Execution. Plan.md §12, §14.
-# --------------------------------------------------------------------------
 
 
 class RiskLimitConfig(Base):
@@ -399,7 +385,6 @@ class RiskLimitConfig(Base):
 
 
     __table_args__ = (
-        # The config in force is the newest by valid_from; a tie would make "newest" ambiguous.
         UniqueConstraint("valid_from", name="uq_risk_limit_configs_valid_from"),
     )
 
@@ -414,7 +399,6 @@ class Run(Base):
     promoted_from: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("experiments.id"))
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     venue: Mapped[str] = mapped_column(ForeignKey("venues.code"), nullable=False)
-    #: Immutable. Changing a parameter creates a new run, never an edit (§12.4).
     params: Mapped[dict] = mapped_column(JSONB, nullable=False)
     initial_capital: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     base_currency: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -452,9 +436,7 @@ class Intent(Base):
     asset: Mapped[str] = mapped_column(String(32), nullable=False)
     target_position: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     reason: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    #: Which rule blocked it, if any. A veto is a decision and belongs here.
     vetoed_by: Mapped[str | None] = mapped_column(Text)
-    #: Survives venue-level netting, keeping per-strategy attribution (§13.4).
     attributed_to: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("strategies.id"))
 
     __table_args__ = (Index("ix_intents_run_time", "run_id", "decided_at"),)
@@ -466,7 +448,6 @@ class OrderRow(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
     intent_id: Mapped[int | None] = mapped_column(ForeignKey("intents.id"))
-    #: Deterministic, so a retry after a timeout is idempotent.
     client_order_id: Mapped[str] = mapped_column(Text, nullable=False)
     venue_order_id: Mapped[str | None] = mapped_column(Text)
     asset: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -474,7 +455,6 @@ class OrderRow(Base):
     order_type: Mapped[str] = mapped_column(String(16), nullable=False)
     qty: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
-    #: Decision and send times kept apart so divergence is attributable to timing vs fills.
     intent_ts: Mapped[datetime] = mapped_column(TS, nullable=False)
     sent_ts: Mapped[datetime | None] = mapped_column(TS)
     ack_ts: Mapped[datetime | None] = mapped_column(TS)
@@ -494,7 +474,6 @@ class FillRow(Base):
     fill_ts: Mapped[datetime] = mapped_column(TS, nullable=False)
     qty: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    #: Stored so per-trade slippage is a fact, not a reconstruction.
     expected_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     fee: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     liquidity: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -515,8 +494,6 @@ class PositionRow(Base):
     unrealised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     realised_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     funding_paid: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
-    #: Who sized it: `operator` (trend != 5) or `algorithm` (trend 5), plus the setting
-    #: then in force. PREREG-009 is decided by guide (migration 0022).
     guide: Mapped[str | None] = mapped_column(String(16))
     trend: Mapped[int | None] = mapped_column(SmallInteger)
     trend_source: Mapped[str | None] = mapped_column(Text)
@@ -583,7 +560,6 @@ class Reconciliation(Base):
     return_reference: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     divergence_ci_low: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     divergence_ci_high: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
-    #: {costs, timing, fills, data}: the decomposition says what to fix (§12.5).
     attribution: Mapped[dict] = mapped_column(JSONB, nullable=False)
     verdict: Mapped[str] = mapped_column(String(8), nullable=False)
 
@@ -603,15 +579,9 @@ class CapitalRampEvent(Base):
     from_tier: Mapped[str | None] = mapped_column(String(4))
     to_tier: Mapped[str] = mapped_column(String(4), nullable=False)
     capital: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    #: True when §14.1's minimum-viable floor raised the tier above its nominal fraction.
     floored: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False)
-
-
-# --------------------------------------------------------------------------
-# Operator interface. Plan.md §20.
-# --------------------------------------------------------------------------
 
 
 class Approval(Base):
@@ -628,7 +598,6 @@ class Approval(Base):
     subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     approved_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     decision: Mapped[str] = mapped_column(String(8), nullable=False)
-    #: The bar relied on. Nullable only for `gate_change`, which approves the bar itself.
     gate_config_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gate_configs.id"))
     notes: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -662,11 +631,6 @@ class AuditLog(Base):
     __table_args__ = (Index("ix_audit_time", "occurred_at"),)
 
 
-# --------------------------------------------------------------------------
-# Event intelligence. Plan.md §11, §20.5.
-# --------------------------------------------------------------------------
-
-
 class Event(Base):
     """One occurrence, whatever produced it (§11.7). `shape` selects the machinery applied.
 
@@ -680,8 +644,6 @@ class Event(Base):
     event_type: Mapped[str] = mapped_column(String(48), nullable=False)
     shape: Mapped[str] = mapped_column(String(16), nullable=False, server_default="shock")
     first_seen_at: Mapped[datetime] = mapped_column(TS, nullable=False)
-    #: The event's own text. Not an annotation: annotations are human assertions, and the
-    #: screen uses "has annotation" to find unread events.
     headline: Mapped[str | None] = mapped_column(Text)
     latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     resolved_at: Mapped[datetime | None] = mapped_column(TS)
@@ -706,13 +668,8 @@ class MarketConditions(Base):
     __tablename__ = "market_conditions"
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
-    #: Operator's reading of the news, 1-10 with 5 neutral; direction is the side of 5.
     trend: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=5)
-    #: 1 extreme fear, 50 neutral, 100 extreme greed. Defaults to 50, never seeded from a
-    #: measurement, so "unset" stays distinguishable from a choice.
     sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=50)
-    #: 'manual' by a person, 'derived' computed, 'adopted' computed then accepted.
-    #: PREREG-005 measures the operator and filters on this.
     source: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
     __table_args__ = (
@@ -740,7 +697,6 @@ class MarketIndexReading(Base):
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     source: Mapped[str] = mapped_column(Text, primary_key=True)
     value: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
-    #: The snapshot's own timestamp, which is when it was knowable.
     available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     ingest_time: Mapped[datetime] = mapped_column(
         TS, nullable=False, server_default=func.now())
@@ -767,18 +723,14 @@ class ScenarioRun(Base):
     trend: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sentiment_bucket: Mapped[str] = mapped_column(Text, nullable=False)
-    #: Stored so results read without re-deriving a transform that may have changed.
     long_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
     short_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
     reference: Mapped[str] = mapped_column(Text, nullable=False)
     bars: Mapped[int] = mapped_column(Integer, nullable=False)
-    #: Both arms; the difference is the effect of the operator's conditions.
     baseline: Mapped[dict] = mapped_column(JSONB, nullable=False)
     conditioned: Mapped[dict] = mapped_column(JSONB, nullable=False)
     reached_step: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     stopped_because: Mapped[str] = mapped_column(Text, nullable=False)
-    #: 'manual' by a person, 'derived' computed, 'adopted' computed then accepted.
-    #: PREREG-005 measures the operator and filters on this.
     source: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
     __table_args__ = (
@@ -805,7 +757,6 @@ class SentimentReading(Base):
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     value: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     classification: Mapped[str] = mapped_column(Text, nullable=False)
-    #: Part of the key: each vendor is a different index, not an opinion about one.
     source: Mapped[str] = mapped_column(Text, primary_key=True)
     available_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     ingest_time: Mapped[datetime] = mapped_column(
@@ -925,13 +876,11 @@ class MacroSeries(Base):
     has_vintages: Mapped[bool] = mapped_column(Boolean, nullable=False)
     is_revised: Mapped[bool] = mapped_column(Boolean, nullable=False)
     session_close: Mapped[str | None] = mapped_column(Text)
-    #: Measured, not assumed: seconds from release to actionable.
     publish_lag_s: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     __table_args__ = (
         CheckConstraint(
             "kind IN ('rate','yield','price','index','activity')", name="ck_macro_kind"),
-        # 'yahoo' added beyond the plan: FRED has no usable gold series, stooq CSV is gone.
         CheckConstraint(
             "source IN ('fred','alfred','stooq','yahoo','manual')",
             name="ck_macro_source"),
@@ -952,7 +901,6 @@ class MacroRelease(Base):
     consensus: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
     consensus_at: Mapped[datetime | None] = mapped_column(TS)
     actual: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
-    #: The publication instant, not the date; reactions are measured from it.
     actual_at: Mapped[datetime | None] = mapped_column(TS)
     available_at: Mapped[datetime | None] = mapped_column(TS)
     surprise_sigma: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
@@ -977,7 +925,6 @@ class AppSetting(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     key: Mapped[str] = mapped_column(String(48), nullable=False)
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    #: Mandatory, as for gate thresholds (§20.3).
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     changed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     valid_from: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -1002,11 +949,9 @@ class EventReaction(Base):
     beta_pre: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
     sigma_pre: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
     n_bars: Mapped[int] = mapped_column(Integer, nullable=False)
-    #: Pre-event window already carried the move. Flagged, never corrected.
     leaked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     measured_at: Mapped[datetime] = mapped_column(
         TS, nullable=False, server_default=func.now())
-    #: Version of the estimator that produced this row.
     code_hash: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (

@@ -16,10 +16,8 @@ from tradelab.collectors.cmc import client as cmc_client
 
 SOURCE = "cmc100"
 
-#: Endpoint ceiling: `count` above ten is refused, not clamped.
 PAGE = 10
 
-#: The index is based at 100 here; earlier `time_start` values clamp to it.
 INCEPTION = date(2024, 1, 1)
 
 
@@ -27,7 +25,6 @@ INCEPTION = date(2024, 1, 1)
 class Point:
     day: date
     value: float
-    #: The snapshot's own timestamp. Never `now()`, or backfill looks as if it arrived today.
     available_at: datetime
 
 
@@ -40,9 +37,6 @@ def _point(update_time: str, value: Any) -> Point:
     return Point(day=stamp.date(), value=number, available_at=stamp)
 
 
-#: `latest` is deliberately unused: it is intraday (5-min) while `historical` is 00:00Z
-#: daily, and the SDK types `latest.last_update` as a date, dropping the time (look-ahead).
-#: `historical` already includes the current day.
 LATEST_IS_INTRADAY = True
 
 
@@ -75,7 +69,6 @@ def resume_from(engine: sa.Engine) -> date:
 
     A gap query, not "day after newest": the daily run writes today before backfill does."""
     with engine.connect() as conn:
-        # CAST, not `::`: text() misreads `::` after a named parameter.
         missing = conn.execute(sa.text(
             "SELECT CAST(min(d) AS date) FROM generate_series("
             "  CAST(:since AS date), CAST(now() AS date), interval '1 day') AS d "

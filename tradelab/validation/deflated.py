@@ -23,9 +23,9 @@ EULER_MASCHERONI = 0.5772156649015329
 
 @dataclass(frozen=True, slots=True)
 class SharpeStats:
-    sharpe: float          # per-observation, not annualised
+    sharpe: float
     skew: float
-    kurtosis: float        # non-excess
+    kurtosis: float
     n_obs: int
 
 

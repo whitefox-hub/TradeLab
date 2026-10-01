@@ -32,7 +32,6 @@ def hash_password(password: str, salt: str) -> str:
 
 
 def verify_password(password: str, salt: str, expected: str) -> bool:
-    # Constant-time compare: avoids a timing oracle.
     return hmac.compare_digest(hash_password(password, salt), expected)
 
 

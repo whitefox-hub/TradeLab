@@ -48,7 +48,6 @@ def test_canary_full_sample_quantiles_are_caught() -> None:
     vol = pl.Series(returns).rolling_std(50).to_numpy()
 
     def cheating_labels(values: np.ndarray) -> np.ndarray:
-        # The tempting one-liner: "high volatility means above the median".
         threshold = np.nanquantile(values, 0.66)
         return values >= threshold
 
@@ -72,7 +71,6 @@ def test_volatility_regimes_track_the_planted_switches() -> None:
     is_high = (labels["volatility"] == "high_vol").to_numpy()
     classified = labels["volatility"].to_numpy() != "unknown"
 
-    # Regimes 0 and 2 are quiet; 1 and 3 are violent (sigmas alternate).
     quiet = classified & np.isin(truth, [0, 2])
     violent = classified & np.isin(truth, [1, 3])
     assert is_high[violent].mean() > is_high[quiet].mean() + 0.3, (
@@ -98,10 +96,6 @@ def test_coverage_excludes_regimes_too_small_to_support_a_conclusion() -> None:
     bars = make_noise(n=6_000, seed=11)
     labels = classify(bars, RegimeSpec(warmup=500))
     covered = coverage(labels, min_bars=200)
-    # Checked before the `all()`, which is vacuously true on an empty dict. If
-    # classification ever stopped producing usable regimes this test would go
-    # green on nothing, and §15's two-regime requirement is exactly what it is
-    # here to police.
     assert len(covered) >= 2, (
         f"§15 needs two regimes with enough observations; got {covered}"
     )

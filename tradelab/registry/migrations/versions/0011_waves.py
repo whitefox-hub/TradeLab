@@ -24,7 +24,6 @@ def upgrade() -> None:
         sa.Column('magnitude', sa.SmallInteger(), nullable=False),
         sa.CheckConstraint("direction IN ('UP','DOWN')", name='ck_waves_direction'),
         sa.CheckConstraint('magnitude BETWEEN 1 AND 10', name='ck_waves_magnitude'),
-        # Upper-case only, so BTC and btc cannot slip past the unique constraint.
         sa.CheckConstraint(
             "asset = upper(asset) AND asset ~ '^[A-Z0-9]{1,20}$'",
             name='ck_waves_asset'),

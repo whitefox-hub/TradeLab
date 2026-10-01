@@ -35,8 +35,6 @@ def log_return(period: int) -> pl.Expr:
 
 @feature(
     family="trend",
-    # EWM never fully forgets: lookback is where retained weight < MEMORY_EPSILON.
-    # 4x span leaves ~3e-4 weight outside the purge (fails §16.3).
     lookback=lambda p: ewm_lookback(p["span"]),
     params={"span": IntRange(2, 200)},
 )

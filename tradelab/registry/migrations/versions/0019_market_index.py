@@ -21,7 +21,6 @@ def upgrade() -> None:
         sa.Column('day', sa.Date(), primary_key=True),
         sa.Column('source', sa.Text(), primary_key=True),
         sa.Column('value', sa.Numeric(18, 6), nullable=False),
-        # The snapshot's own midnight timestamp, when it became knowable.
         sa.Column('available_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('ingest_time', sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.text('now()')),

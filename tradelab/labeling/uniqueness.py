@@ -14,9 +14,9 @@ import polars as pl
 
 @dataclass(frozen=True, slots=True)
 class UniquenessResult:
-    weights: np.ndarray            # per-label average uniqueness, in [0, 1]
-    concurrency: np.ndarray        # per-bar count of active labels
-    effective_n: float             # sum of weights: the honest observation count
+    weights: np.ndarray
+    concurrency: np.ndarray
+    effective_n: float
     raw_n: int
 
     @property

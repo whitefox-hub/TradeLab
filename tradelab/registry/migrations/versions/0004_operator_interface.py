@@ -54,8 +54,6 @@ def upgrade() -> None:
     )
     op.create_index('ix_approvals_subject', 'approvals',
                     ['subject_kind', 'subject_id'], unique=False)
-    # §20.3 cooling-off: an approval may not cite a gate config younger than 24h.
-    # In the DB, not the API, so it cannot be bypassed.
     op.execute("""
         CREATE FUNCTION approvals_respect_cooling_off() RETURNS trigger AS $$
         DECLARE gate_age interval;

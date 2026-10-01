@@ -141,7 +141,7 @@ class Book:
         print(f"{now:%Y-%m-%d %H:%M:%S} SELL part bought at {part.price:,.2f} after {days:.1f} d "
               f"at {fill.price}: {got - part.spent:+.2f} ({got / part.spent - 1:+.2%}) [{why}]",
               flush=True)
-        if not self.parts:                     # a full exit: wait for a correction to re-enter
+        if not self.parts:
             self.armed, self.high = False, float(fill.price)
         return True
 
@@ -171,7 +171,6 @@ class Book:
                 spent = float(fill.quantity * fill.price + fill.fee)
                 self.cash -= spent
                 self.parts.append(lad.Part(float(fill.price), float(fill.quantity), spent, now))
-                # The next part up needs a fresh correction from here.
                 self.armed, self.high = False, float(fill.price)
                 lowest = min(p.price for p in self.parts)
                 print(f"{now:%Y-%m-%d %H:%M:%S} BUY part {len(self.parts)}/{self.cfg.parts} at "
@@ -293,7 +292,7 @@ def main() -> int:
     last_snapshot = last_config = 0.0
     while True:
         try:
-            if time.time() - last_config >= CONFIG_S:      # a change on the Parameters screen
+            if time.time() - last_config >= CONFIG_S:
                 last_config = time.time()
                 if lad.Config.from_setting(store.setting(SETTING)) != book.cfg:
                     book.persist(datetime.now(UTC), ticker(client))
@@ -301,7 +300,7 @@ def main() -> int:
             book.close_requested(client)
             now, price = datetime.now(UTC), ticker(client)
             today = now.strftime("%Y-%m-%d")
-            if book.day != today:               # max_daily_loss is from the day's opening equity
+            if book.day != today:
                 book.engine.account.day_start_equity = book.equity(price)
                 book.day = today
             traded = book.step(price, now)

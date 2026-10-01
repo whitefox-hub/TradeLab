@@ -16,12 +16,9 @@ from coinmarketcap import CoinMarketCap, RateLimitError
 MAX_RETRIES = 5
 BACKOFF_SECONDS = 2.0
 
-#: Free plan: 50 requests/minute. Paced proactively; 1.3s leaves headroom.
 MIN_INTERVAL_SECONDS = 1.3
 _last_call = 0.0
 
-#: Per-run request ceiling against runaway loops. One credit per request, not per row
-#: (measured); a full CMC100 backfill is ~100 requests.
 MAX_REQUESTS_PER_RUN = 200
 _spent = 0
 
@@ -82,7 +79,6 @@ class QuotaReached(RuntimeError):
         self.collected = collected or []
 
 
-#: Environment only, never a repo file (§14.4); loaded from git-ignored secrets/api.env.
 KEY_VAR = "CMC_API_KEY"
 
 
@@ -122,7 +118,6 @@ def call(fn: Any, collected: list[Any] | None = None, **kwargs: Any) -> Any:
             _pace()
             return fn(**kwargs)
         except RateLimitError:
-            # Both throttles raise this; exhausting retries is treated as the quota.
             if attempt == MAX_RETRIES - 1:
                 raise QuotaReached(collected) from None
             time.sleep(delay)

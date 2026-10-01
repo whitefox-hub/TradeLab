@@ -42,7 +42,6 @@ def snapshot(client: httpx.Client | None = None) -> list[dict]:
                 "asset": symbol["symbol"],
                 "venue": VENUE,
                 "valid_from": observed_at,
-                # onboardDate is the venue's listing timestamp.
                 "listed_at": datetime.fromtimestamp(symbol["onboardDate"] / 1000, UTC)
                 if symbol.get("onboardDate")
                 else observed_at,

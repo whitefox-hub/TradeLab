@@ -14,7 +14,6 @@ import numpy as np
 import polars as pl
 
 VENUE = "binance"
-#: An asset needs enough days for a covariance to mean anything.
 MIN_DAYS = 200
 
 
@@ -77,7 +76,6 @@ def main() -> int:
     args = parser.parse_args()
 
     matrix, assets, _days = returns_matrix(args.root)
-    # Complete days only, so the covariance is of one sample.
     complete = ~np.any(np.isnan(matrix), axis=0)
     matrix = matrix[:, complete]
     print(f"assets {len(assets)}, days {matrix.shape[1]} "
@@ -88,7 +86,6 @@ def main() -> int:
     print(f"  raw, equal-weight long-only        {raw:>16.1f} "
           f"{dimensions(matrix):>18.1f}")
 
-    # Market factor = equal-weighted mean; the residual is what a neutral book holds.
     market = matrix.mean(axis=0)
     variance = float(np.var(market, ddof=1))
     betas = np.array([float(np.cov(row, market, ddof=1)[0, 1] / variance)
@@ -113,14 +110,11 @@ def main() -> int:
     print(f"first factor explains {frac[0]:.0%} of the raw variance, "
           f"first five {frac[:5].sum():.0%}")
 
-    # Portfolio Sharpe = per-bet Sharpe * sqrt(N_eff), to compare with the §0.4a threshold.
     print(f"\n{'per-bet Sharpe':>15} {'long-only book':>16} {'neutral book':>16}")
     for per_bet in (0.05, 0.1, 0.2, 0.3):
         print(f"{per_bet:>15.2f} {per_bet * np.sqrt(raw):>16.2f} "
               f"{per_bet * np.sqrt(neutral):>16.2f}")
 
-    # Needs T > N: a rank-deficient covariance fakes near-zero residual correlation
-    # (see FINDING-004).
     print(f"\n{'assets':>8} {'days':>7} {'T/N':>6} {'raw':>8} {'neutral':>9}"
           f" {'resid rho':>10}")
     full, _names, _ = returns_matrix(args.root)

@@ -19,18 +19,6 @@ from tradelab.features import momentum  # noqa: F401
 from tradelab.features.materialise import materialise
 from tradelab.validation.synthetic import make_noise
 
-#: Measured at ~650/s on an idle machine. The floor sits well below that so
-#: ordinary noise does not fail the build, while a structural regression —
-#: reintroducing a per-bar Python loop, say — is caught. The original scanned
-#: implementation ran at 35/s, which would have put §9.1's million
-#: configurations at eight hours.
-#:
-#: This file carries the `benchmark` marker and is excluded from the parallel
-#: tiers, because a throughput floor measured beside eleven other workers
-#: measures the machine and not the code. Under `-n auto` on two performance
-#: cores it reported 111/s against the same engine that does 650 alone —
-#: switching the clock to CPU time did not fix it either, since memory
-#: bandwidth contention slows vectorised work while the cycles still tick.
 MIN_EVALUATIONS_PER_SECOND = 150
 
 

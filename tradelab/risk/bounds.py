@@ -30,7 +30,6 @@ def _d(value: Any, field: str) -> Decimal:
         raise Invalid(f"{field}: {value!r} is not a number") from None
 
 
-#: One entry per `RiskLimits` field (a test asserts they match); unbounded fields cannot be set.
 BOUNDS: dict[str, Bound] = {
     "max_open_positions": Bound(
         Decimal(1), Decimal(200), True,
@@ -103,7 +102,6 @@ def validate(values: dict[str, Any]) -> dict[str, Decimal]:
         raise Invalid(f"missing {missing}: a configuration sets every limit, "
                       "because one left out would silently take a default "
                       "nobody chose")
-    # An unknown field is a typo; accepting it fakes a limit.
     unknown = sorted(set(values) - expected)
     if unknown:
         raise Invalid(f"unknown {unknown}: no such limit")
@@ -119,7 +117,6 @@ def validate(values: dict[str, Any]) -> dict[str, Decimal]:
                           f"{bound.high}. {bound.describes}")
         parsed[name] = number
 
-    # Pairs individually fine but jointly meaningless (min >= max refuses every order).
     for low_name, high_name in (
         ("min_position_notional", "max_position_notional"),
         ("min_position_pct_equity", "max_position_pct_equity"),

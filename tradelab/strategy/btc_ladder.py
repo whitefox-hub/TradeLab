@@ -25,11 +25,11 @@ from datetime import datetime
 class Config:
     """The operator's numbers, set on the Parameters screen (setting `btc_ladder`)."""
 
-    budget: float = 1_000.0      # the starting budget, USDT; realised profit adds to it
+    budget: float = 1_000.0
     parts: int = 10
-    step: float = 0.015          # a new part this far below the cheapest part held
-    reentry: float = 0.05        # a new part after this correction from the high
-    trail: float = 0.02          # a part sells this far back from its peak
+    step: float = 0.015
+    reentry: float = 0.05
+    trail: float = 0.02
 
     @classmethod
     def from_setting(cls, value: dict | None) -> Config:
@@ -41,19 +41,17 @@ class Config:
 
 
 DEFAULT = Config()
-#: (days held, minimum net gain), longest first.
 TIERS = ((90, 0.20), (60, 0.12), (45, 0.08), (30, 0.05), (15, 0.03), (0, 0.01))
-#: A part this close above its minimum sells rather than risk slipping under it.
 FLOOR_MARGIN = 0.001
 
 
 @dataclass
 class Part:
-    price: float          # fill price
-    quantity: float       # BTC
-    spent: float          # USDT paid, fee included
+    price: float
+    quantity: float
+    spent: float
     opened: datetime
-    peak: float | None = None   # highest price since the part reached its minimum
+    peak: float | None = None
 
 
 def minimum(days: float) -> float:
@@ -75,12 +73,11 @@ def exit_now(part: Part, price: float, now: datetime, fee: float, slip: float,
     days = (now - part.opened).total_seconds() / 86_400
     gain, floor = net(part, price, fee, slip), minimum(days)
     if gain < floor:
-        return False                                 # below the minimum: never sell
+        return False
     if gain >= cap(days):
         return True
     part.peak = price if part.peak is None else max(part.peak, price)
     falling = price < part.peak
-    # Back TRAIL from the peak, or falling onto the minimum: sell before it slips under.
     return price <= part.peak * (1 - cfg.trail) or (falling and gain <= floor + FLOOR_MARGIN)
 
 
@@ -92,9 +89,9 @@ def buy_now(parts: list[Part], price: float, armed: bool, cfg: Config = DEFAULT)
     if len(parts) >= cfg.parts:
         return False
     if price <= min(p.price for p in parts) * (1 - cfg.step):
-        return True                                       # down the ladder
+        return True
     clear = min(abs(price / p.price - 1) for p in parts) >= cfg.step
-    return armed and clear                                # up the ladder, on a correction
+    return armed and clear
 
 
 def part_size(cash: float, parts: list[Part], cfg: Config = DEFAULT) -> float:

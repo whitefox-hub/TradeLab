@@ -38,9 +38,6 @@ AT = datetime(2026, 1, 1, tzinfo=UTC)
 PRICE = Decimal(1000)
 INSTRUMENT = Instrument("AAAUSDT", Decimal("0.01"), Decimal("0.001"), Decimal(1))
 
-#: Loose enough that nothing binds by accident, so each drill tightens exactly
-#: the one limit it is about. A drill that fires on a neighbour's threshold has
-#: tested the neighbour.
 OPEN = RiskLimits(
     max_open_positions=100, max_open_orders=100, max_positions_per_cluster=100,
     min_position_notional=Decimal("0.01"), max_position_notional=Decimal(10**9),
@@ -77,13 +74,11 @@ def fire(limits: RiskLimits, state: AccountState, **kwargs: object):
     for _ in range(int(kwargs.pop("recent_orders", 0))):
         engine.record_order(AT)
     prices = {"AAAUSDT": PRICE, **kwargs.pop("prices", {})}
-    # The corrupt-data drills need a price that is not the honest one.
     at_price = kwargs.pop("price_override", PRICE)
     return engine.check(kwargs.pop("order", order()), at_price, INSTRUMENT,
                         prices, AT, **kwargs)
 
 
-# Each entry: the limit, the state that breaches it, the breach expected.
 DRILLS = {
     "max_open_orders": (
         dataclasses.replace(OPEN, max_open_orders=3),
@@ -191,9 +186,6 @@ def test_the_same_state_passes_with_the_limit_relaxed(name: str) -> None:
         f"{decision.breach}: the drill proves nothing about {name}")
 
 
-# -- §16.7 corrupt data: zero price, a fifty percent jump, a broken feed ------
-
-
 @pytest.mark.fast
 @pytest.mark.parametrize(
     ("label", "price", "mid"),
@@ -221,10 +213,6 @@ def test_corrupt_data_is_refused_by_the_guard_meant_for_it(
     probe the broken-feed order happened to be caught by a position-size
     minimum, which is luck and not a control — a different size walks past it.
     """
-    # The shipped defaults, not the loosened ones the other drills use: a
-    # corrupt-data guard has to be tested at the deviation limit that actually
-    # runs. At the loosened 10,000bps a fifty percent jump is inside the band,
-    # which is true and is not what this drill is about.
     decision = fire(RiskLimits(), state=account(), order=order("1"),
                     mid_price=mid, price_override=price)
     assert not decision.allowed, f"{label} was allowed"

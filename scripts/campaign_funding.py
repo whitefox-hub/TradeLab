@@ -22,7 +22,7 @@ ROOT = Path("/data/parquet")
 OUT = ROOT / "_campaign"
 PERIODS = (21, 45, 90)
 ENTRIES = (1.0, 1.5, 2.0)
-ANNUAL = float(np.sqrt(2_190))       # 4h bars
+ANNUAL = float(np.sqrt(2_190))
 
 
 def rows_for(result) -> list[dict]:
@@ -40,7 +40,6 @@ def rows_for(result) -> list[dict]:
             "trades": config.total_trades,
             "effective_n": stats.n_obs,
         })
-    # Ordered by what selection may use, never by the reported figure.
     return sorted(out, key=lambda r: -r["is_sharpe"])
 
 

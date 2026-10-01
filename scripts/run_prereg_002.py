@@ -16,7 +16,7 @@ from tradelab.validation.deflated import sharpe_stats
 from tradelab.validation.gates import evaluate
 from tradelab.validation.power import assess
 
-TRIALS = 1  # Replication on new events, not a search. See PREREG-002.
+TRIALS = 1
 COLUMNS = ["asset", "listing_day_ms", "entry_close", "exit_close", "funding_received"]
 
 
@@ -49,7 +49,6 @@ def main() -> int:
     bybit = pl.read_parquet(args.bybit).select(COLUMNS)
     pooled = pl.concat([binance, bybit]).sort("listing_day_ms")
 
-    # Per venue first: a pooled number can hide a sign flip between venues.
     report("binance", binance)
     report("bybit", bybit)
     print()

@@ -39,7 +39,6 @@ def reconcile_on_start(kind: str, source_name: str, venue: str,
         )
 
         if plan.issue is not None:
-            # Recorded, never silently corrected (§4.2).
             session.add(DataQualityIssue(
                 source_id=source,
                 asset=plan.issue.asset,
@@ -85,7 +84,6 @@ async def _supervise_one(collector, kind: str, source_name: str, venue: str,
     try:
         await collector.run(stop)
     finally:
-        # collector.run flushed on exit; only now may the watermark move.
         with db_session() as session:
             run = session.get(IngestionRun, run_id)
             watermark.finish(session, run, "stopped" if stop.is_set() else "completed")
@@ -120,7 +118,6 @@ async def run_capture(collectors: list[tuple[object, str, str]], venue: str,
     install_shutdown_handler(stop)
     log.info("capture_starting", venue=venue, collectors=[k for _, k, _ in collectors])
 
-    # return_exceptions: one failure must not cancel the others; re-raised afterwards.
     results = await asyncio.gather(
         *(_supervise_one(c, kind, name, venue, stop) for c, kind, name in collectors),
         return_exceptions=True,

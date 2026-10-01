@@ -42,8 +42,6 @@ def main() -> int:
 
     listed = first_listings(args.root)
     info = httpx.get(EXCHANGE_INFO, timeout=30).json()
-    # Both flavours are live: "PERPETUAL" alone would report every TRADIFI_PERPETUAL
-    # (tokenised equity) contract as delisted.
     perpetual = {"PERPETUAL", "TRADIFI_PERPETUAL"}
     live = {s["symbol"] for s in info["symbols"] if s.get("contractType") in perpetual}
     tradfi = {base_ticker(s["symbol"]) for s in info["symbols"]
@@ -51,15 +49,12 @@ def main() -> int:
     live_base = {base_ticker(s) for s in live}
 
     announced = set(listed["base"].to_list())
-    # Tokenised equities are a different population; reported separately.
     print(f"of which tokenised equities: {len(announced & tradfi)}")
     gone = sorted(announced - live_base)
     print(f"announced as listed : {len(announced)}")
     print(f"still trading       : {len(announced & live_base)}")
     print(f"no longer listed    : {len(gone)}  ({len(gone) / len(announced):.0%})")
 
-    # Klines resolving for a delisted contract means the cohort is reconstructible;
-    # a 400 means survivors only.
     print(f"\nprobing {args.probe} delisted symbols for price history:")
     retrievable = 0
     for base in gone[: args.probe]:

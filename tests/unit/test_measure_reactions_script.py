@@ -41,7 +41,7 @@ def test_days_are_joined_never_filled() -> None:
     and pulls every statistic toward calm."""
     body = SCRIPT.read_text()
     assert "np.intersect1d" in body
-    assert "never a fill" in body
+    assert "fill_null" not in body and "forward_fill" not in body
 
 
 @pytest.mark.fast

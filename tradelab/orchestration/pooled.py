@@ -26,8 +26,8 @@ class PooledConfig:
     """
 
     params: dict
-    pooled_returns: np.ndarray          # out of sample
-    is_returns: np.ndarray              # in sample, for selection only
+    pooled_returns: np.ndarray
+    is_returns: np.ndarray
     per_asset_sharpe: dict[str, float]
     total_trades: int
     effective_n: float
@@ -128,7 +128,6 @@ def run_pooled(
 
                 pooled.append(net)
 
-                # The same computation on the training window, for selection.
                 is_returns = np.zeros(split)
                 is_returns[1:] = np.diff(close[:split]) / close[:split - 1]
                 is_lagged = np.concatenate([[0.0], position[:split - 1]])
@@ -153,7 +152,6 @@ def run_pooled(
 
     return PooledResult(
         configs=configs, assets=sorted(loaded),
-        # The grid, not grid x assets: no choice between assets was made (§8.3).
         trials=len(values) * len(entries),
     )
 

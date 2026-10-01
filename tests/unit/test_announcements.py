@@ -25,8 +25,6 @@ from tradelab.collectors.binance.announcements import (
         ("Binance Will List Hyperliquid (HYPE) with Seed Tag Applied", "seed_tag"),
         ("Binance Futures Will List USDⓈ-M & COIN-M Quarterly 0326 Delivery Contracts",
          "futures_delivery"),
-        # Positively irrelevant, not merely unrecognised: tokenised equities and
-        # Earn/Convert additions are half this feed and are not events here.
         ("Binance Will Add 3 bStocks Tokenized Securities as Collateral Asset", "not_applicable"),
         ("Binance Will Add Hyperliquid (HYPE) on Earn, Buy Crypto, Convert, VIP Loan & Margin",
          "not_applicable"),
@@ -43,7 +41,6 @@ def test_classification(title: str, expected: str) -> None:
     ("title", "expected"),
     [
         ("Binance Futures Will Launch USDⓈ-Margined GRVTUSDT Perpetual Contract", ["GRVTUSDT"]),
-        # Non-ASCII tickers: Binance lists tokens with CJK names.
         ("Binance Futures Will Launch USDⓈ-Margined 牛来USDT Perpetual Contract", ["牛来USDT"]),
         ("Binance Futures Will Launch USDⓈ-Margined PONSUSDT and 哈基米USDT Perpetual Contracts",
          ["PONSUSDT", "哈基米USDT"]),
@@ -65,7 +62,7 @@ def test_trailing_release_date_is_not_an_asset() -> None:
     title = "Binance Futures Will Launch Multiple USDⓈ-Margined Perpetual Contracts (2026-09-18)"
     assert classify(title) == "futures_listing"
     assert extract_assets(title) == []
-    assert classify(title) in ASSET_BEARING  # so `needs_body` will be set
+    assert classify(title) in ASSET_BEARING
 
 
 @pytest.mark.fast
@@ -83,11 +80,9 @@ def test_subscriber_delay_is_explicit_and_positive() -> None:
 @pytest.mark.parametrize(
     ("title", "expected"),
     [
-        # Pre-2020 phrasing: "Binance Lists X" rather than "Binance Will List X".
         ("Binance Lists Origin Protocol (OGN)", "spot_listing"),
         ("Temporary Trading Halt for ETHBULL and ETHBEAR Trading Pairs", "trading_halt"),
         ("Binance Will Resume Trading for ETHBULL/USDT", "trading_resume"),
-        # Early-feed housekeeping about instruments this system does not trade.
         ("Binance Adds BUSD Margin Pairs for BNB and ETH", "not_applicable"),
         ("Binance Adds ICX, BTS, LSK and BNT Stablecoin Trading Pairs", "not_applicable"),
     ],
@@ -105,24 +100,16 @@ def test_historical_phrasing(title: str, expected: str) -> None:
 @pytest.mark.parametrize(
     ("title", "expected"),
     [
-        # 2019-2020, present tense. The original pattern required "Will Launch"
-        # and so recorded zero futures listings for the whole of 2019.
         ("Binance Futures Launches ETH/USDT Perpetual Contract - Up to 50x Leverage",
          "futures_listing"),
-        # Coin-margined, where "Futures" does not precede the verb.
         ("Binance Will Launch a FIL/USD Coin-Margined Perpetual Contract With Up to 50x Leverage",
          "futures_listing"),
-        # 2024 wording.
         ("Binance Will Launch Sleepless AI (AI) on Margin & Futures", "futures_listing"),
         ("Binance Adds Dymension (DYM) on Margin & Futures", "futures_listing"),
-        # 2025, now the dominant form and previously missed entirely: 59 of that
-        # year's listings were unclassified.
         ("Obol (OBOL) Will Be Available on Binance Alpha and Binance Futures (2025-04-17)",
          "futures_listing"),
         ("Doodles (DOOD) Will Open for Trading on Binance Alpha and Binance Futures",
          "futures_listing"),
-        # Batch announcements name no asset in the title, so they must classify
-        # as listings and then be caught by `needs_body`.
         ("Binance Futures: New Listings This Week (2021-03-22)", "futures_listing"),
     ],
 )
@@ -140,15 +127,10 @@ def test_listing_wordings_across_seven_years(title: str, expected: str) -> None:
 @pytest.mark.parametrize(
     "title",
     [
-        # Negations. A pattern matching "Perpetual Contract" without excluding
-        # these reads every one of them as a listing on a date when nothing was
-        # listed.
         "BTT USDT-Margined Perpetual Contract Listing is Cancelled",
         "FIL Coin-Margined Perpetual Contract Listing Postponed",
         "DOT USDT-Margined Perpetual Contract Listing Delayed to 2020/08/22",
         "Binance Futures Will Cancel USDⓈ-M FTTBUSD Delisting and Launch Multiple Contracts",
-        # Availability of an existing contract inside a product, not a listing.
-        # The largest single source of false positives: 20 titles in 2024-2025.
         "Binance Futures Copy Trading Adds New USDⓈ-M Perpetual Contracts (2025-01-14)",
     ],
 )
@@ -174,20 +156,13 @@ def test_dated_contracts_are_not_perpetual_listings() -> None:
 @pytest.mark.parametrize(
     ("title", "expected"),
     [
-        # `_PAIR` wanted `BTCUSDT` with no separator while the feed writes
-        # `RLC/USDT`. This single gap accounted for most of the 338 listings out
-        # of 594 that were recorded as naming no asset at all.
         ("Binance Futures Will Launch RLC/USDT Perpetual Contract With Up to 50x Leverage",
          ["RLC"]),
-        # Ticker after the margin type.
         ("Binance Futures Will Launch USDⓈ-M BLUR Perpetual Contract with Up to 20X Leverage",
          ["BLUR"]),
-        # Ticker before it.
         ("Binance Futures Will Launch YFI USDT-Margined Perpetual Contract", ["YFI"]),
-        # Two assets in one phrase.
         ("Binance Futures Will Launch BUSD-Margined SAND and LTC Perpetual Contracts",
          ["SAND", "LTC"]),
-        # Numeric prefixes are part of the ticker.
         ("Binance Futures Will Launch USDC-Margined 1000SHIB Perpetual Contract", ["1000SHIB"]),
     ],
 )
@@ -219,5 +194,4 @@ def test_base_ticker_gives_one_key_per_asset() -> None:
 
     spellings = ["BLUR", "BLURUSDT", "BLURUSDC", "BLURBUSD"]
     assert {base_ticker(s) for s in spellings} == {"BLUR"}
-    # Stripping must never empty the symbol: USDC is itself listed.
     assert base_ticker("USDC") == "USDC"

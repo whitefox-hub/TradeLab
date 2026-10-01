@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-# Pin the environment for the test process itself, so the suite is reproducible
-# regardless of how it was invoked. Mirrors x-determinism in docker-compose.yml.
 for _key, _value in {
     "PYTHONHASHSEED": "0",
     "OMP_NUM_THREADS": "1",

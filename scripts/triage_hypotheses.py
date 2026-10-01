@@ -18,7 +18,6 @@ class Hypothesis:
     basis: str
 
 
-#: Counts marked MEASURED are measured; the rest are estimates (2x error ~ 40% Sharpe).
 HYPOTHESES = (
     Hypothesis(
         "1. Capacity-constrained assets", 120, 17,

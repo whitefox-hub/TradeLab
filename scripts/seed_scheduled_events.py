@@ -33,7 +33,6 @@ def _utc(year: int, month: int, day: int) -> datetime:
     return datetime(year, month, day, tzinfo=UTC)
 
 
-#: confidence: `fixed` = committed date; `estimated` = projection (halvings move with hash rate).
 CALENDAR: tuple[Scheduled, ...] = (
     Scheduled("btc-halving-2028", "halving",
               "Bitcoin fourth halving, block 1,050,000",
@@ -93,7 +92,6 @@ def main() -> int:
             else:
                 event_id = existing
 
-            # Changed date -> new revision, never overwrite, so the old belief survives.
             latest = connection.execute(sa.text(
                 "SELECT revision, scheduled_for FROM schedule_revisions "
                 "WHERE event_id = :e ORDER BY revision DESC LIMIT 1"), {"e": event_id}

@@ -14,7 +14,6 @@ import numpy as np
 from run_prereg_003 import LOOKBACK_DAYS, pair_spreads, panel, simulate
 from scipy import stats
 
-#: Declared before running; do not tune (choosing the window would be a search).
 WINDOW = 30
 SENSITIVITY = (15, 60)
 
@@ -52,7 +51,6 @@ def report(values: list[float], size: int) -> None:
     pearson = float(np.corrcoef(current, following)[0, 1])
     spearman = float(stats.spearmanr(current, following).statistic)
 
-    # Hit rate above-median -> above-median: a positive correlation can still be a coin toss.
     median = float(np.median(clean))
     high_now = current > median
     hits = int(np.sum(following[high_now] > median))

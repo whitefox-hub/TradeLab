@@ -35,7 +35,6 @@ def main() -> int:
     changed = 0
     for dockerfile in sorted((root / "docker").glob("*.Dockerfile")):
         text = dockerfile.read_text()
-        # Names defined by earlier stages are local, not registry references.
         stages = {name.lower() for name in STAGE.findall(text)}
 
         def substitute(match: re.Match[str], stages: set[str] = stages) -> str:

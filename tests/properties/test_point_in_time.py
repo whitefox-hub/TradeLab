@@ -29,7 +29,6 @@ def archive(tmp_path: Path) -> Path:
 
 @pytest.mark.medium
 @given(minute=st.integers(min_value=0, max_value=239))
-# The archive fixture is read-only here, so reusing it across examples is safe.
 @settings(max_examples=25, deadline=None,
           suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_scan_never_returns_rows_that_were_not_yet_available(minute: int, archive: Path) -> None:

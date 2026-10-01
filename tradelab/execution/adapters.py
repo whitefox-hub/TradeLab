@@ -46,7 +46,6 @@ class VenueAdapter(ABC):
     def positions(self) -> dict[str, Decimal]:
         """What the *venue* says is held, for reconciliation against our view."""
 
-    # -- restart (§14.3) -----------------------------------------------------
 
     @abstractmethod
     def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
@@ -97,7 +96,6 @@ class SimulatedAdapter(VenueAdapter):
         if quantity * price < instrument.min_viable(price):
             return self._reject(order, "below min_viable")
 
-        # Always cross the spread adversely; filling at mid reports a fake edge.
         slip = price * self.half_spread_bps / Decimal(10_000)
         fill_price = instrument.round_price(price + slip * order.side.sign)
         fee = quantity * fill_price * self.taker_fee
@@ -115,7 +113,7 @@ class SimulatedAdapter(VenueAdapter):
         return ack
 
     def cancel_all(self, at: datetime) -> int:
-        return 0  # market orders fill immediately; nothing rests
+        return 0
 
     def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
         for fill in self._fills:
@@ -155,7 +153,6 @@ class HaltedAdapter(VenueAdapter):
     def positions(self) -> dict[str, Decimal]:
         return self.inner.positions()
 
-    # Reads are never refused: a halted run must know what it holds while flattening.
 
     def already_executed(self, asset: str, client_order_id: str) -> Ack | None:
         return self.inner.already_executed(asset, client_order_id)

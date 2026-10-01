@@ -16,8 +16,6 @@ depends_on = None
 
 TABLES = ("market_conditions", "scenario_runs")
 
-#: NORMAL -> 5. UP m -> 5 + ceil(m/2), so 10 reaches 10. DOWN m -> 5 - ceil(2m/5),
-#: so 10 reaches 1. Both clamped to the scale.
 MAP = """
     CASE trend_direction
       WHEN 'UP'   THEN least(10, 5 + CAST(ceil(trend_magnitude / 2.0) AS smallint))

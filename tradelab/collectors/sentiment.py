@@ -16,13 +16,10 @@ from tradelab.collectors.cmc import client as cmc_client
 ENDPOINT = "https://api.alternative.me/fng/"
 SOURCE = "alternative.me/fng"
 
-#: The five bands both indices report (mirrors a DB CHECK, so a new band fails on ingest).
 CLASSIFICATIONS = (
     "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed",
 )
 
-#: CMC `latest` says "Extreme Greed", `historical` "Extreme greed": match caselessly,
-#: store one spelling.
 _CANONICAL = {name.casefold(): name for name in CLASSIFICATIONS}
 
 
@@ -36,11 +33,7 @@ def normalise(classification: str) -> str:
 
 CMC_SOURCE = "coinmarketcap"
 
-#: CMC history pages with `start`; limits above ~500 return empty (not clamped).
 CMC_PAGE = 500
-
-# CMC revises intraday (alternative.me publishes once at midnight UTC): a `latest` row is
-# available at its update_time; a `historical` row is the close, available next midnight.
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +42,6 @@ class Reading:
     value: int
     classification: str
     source: str = SOURCE
-    #: When the value became knowable; defaults to the day's midnight (alternative.me).
-    #: Never `now()`, or backfilled history looks as if it arrived today.
     published_at: datetime | None = None
 
     @property

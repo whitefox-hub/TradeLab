@@ -22,7 +22,6 @@ def upgrade() -> None:
         sa.Column('value', sa.SmallInteger(), nullable=False),
         sa.Column('classification', sa.Text(), nullable=False),
         sa.Column('source', sa.Text(), nullable=False),
-        # The only column a study may filter on; distinct from ingest_time (§4.3).
         sa.Column('available_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('ingest_time', sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.text('now()')),

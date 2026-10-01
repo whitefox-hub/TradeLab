@@ -39,7 +39,7 @@ def test_concurrency_counts_active_labels_per_bar() -> None:
     end = np.array([5, 6, 8])
     active = concurrency(start, end, n_bars=10)
     assert active[0] == 1
-    assert active[4] == 3          # all three open
+    assert active[4] == 3
     assert active[7] == 1
     assert active[9] == 0
 
@@ -100,8 +100,8 @@ def test_engine_reports_effective_observations() -> None:
 
     close = np.linspace(100.0, 120.0, 2_000)
     position = np.zeros(2_000)
-    position[100:500] = 1.0        # one long hold
-    position[900:1500] = 1.0       # and another
+    position[100:500] = 1.0
+    position[900:1500] = 1.0
     result = run(close, position, BINANCE_RETAIL, "1h", already_lagged=True)
 
     assert result.effective_n < 10, (

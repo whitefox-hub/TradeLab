@@ -13,12 +13,9 @@ from enum import StrEnum
 
 import numpy as np
 
-#: Horizons in minutes (§11 `event_reactions` grid); negatives detect pre-event leakage.
 HORIZONS: tuple[int, ...] = (-60, -15, 5, 15, 60, 240, 1440, 4320, 10080)
 
-#: Days of history used to estimate beta and the pre-event volatility.
 ESTIMATION_DAYS = 30
-#: Bars between the estimation window and the event, so beta excludes the run-up.
 EMBARGO_BARS = 1
 
 
@@ -47,10 +44,10 @@ class Reaction:
 class Window:
     """Returns around an event, already aligned to the event instant."""
 
-    times: np.ndarray          # bar close times
+    times: np.ndarray
     asset_returns: np.ndarray
     market_returns: np.ndarray
-    event_index: int           # first bar at or after the event
+    event_index: int
 
 
 def estimate_beta(
@@ -90,7 +87,6 @@ def measure(
 
     kind = BenchmarkKind.TIME_SERIES if market_wide else BenchmarkKind.CROSS_SECTIONAL
     if beta is None and not market_wide:
-        # No usable beta: downgrade to time series, recorded.
         kind = BenchmarkKind.TIME_SERIES
 
     bars_per_minute = bars_per_day / (24 * 60)
@@ -109,12 +105,10 @@ def measure(
         if kind is BenchmarkKind.CROSS_SECTIONAL:
             abnormal = asset_leg - beta * window.market_returns[start:stop]
         else:
-            # Counterfactual: the asset's own pre-event mean.
             abnormal = asset_leg - float(
                 window.asset_returns[:max(1, window.event_index - EMBARGO_BARS)].mean())
 
         car = float(abnormal.sum())
-        # sqrt(h) in bars, not minutes: sigma is per bar.
         denominator = sigma * np.sqrt(span)
         out.append(Reaction(
             asset=asset, horizon_minutes=horizon, car=car,

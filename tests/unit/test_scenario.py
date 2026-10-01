@@ -31,7 +31,6 @@ def test_the_bands_are_the_ones_the_index_actually_uses() -> None:
     assert sentiment_bucket(54) == "Neutral"
     assert sentiment_bucket(55) == "Greed"
     assert sentiment_bucket(76) == "Extreme Greed"
-    # Every value on the scale gets one, including the ends.
     assert {sentiment_bucket(v) for v in range(1, 101)} == {
         name for _, name in SENTIMENT_BUCKETS}
 
@@ -122,8 +121,6 @@ def test_the_gate_reads_the_arm_and_not_the_asset() -> None:
     close = 100.0 * np_.cumprod(
         1.0 + np_.random.default_rng(11).normal(0.0, 0.002, 4000))
 
-    # `run` and `net_returns` are two views of one computation, so a Sharpe
-    # taken from the series has to equal the one the summary reports.
     for position in (
         np_.ones(close.size),
         (np_.arange(close.size) // 60 % 2).astype(float),
@@ -134,8 +131,6 @@ def test_the_gate_reads_the_arm_and_not_the_asset() -> None:
         from_series = series.mean() / series.std(ddof=1) * np_.sqrt(525_600)
         assert from_series == pytest.approx(summary.sharpe, abs=1e-9)
 
-    # And the asset's own returns are a different number, so gating on them
-    # would not have been caught by the equality above.
     asset = np_.zeros_like(close)
     asset[1:] = np_.diff(close) / close[:-1]
     flipping = np_.where((np_.arange(close.size) // 60) % 2 == 0, 1.0, -1.0)
@@ -171,11 +166,6 @@ def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "tradelab"
-    # The execution path, which is what step 10 sits on. Narrowed from "any
-    # module outside tradelab/scenario" once the API began importing the tilt's
-    # `direction` to *label* a number: putting a word beside a reading is not
-    # applying it to a position, and a check that cannot tell those apart has
-    # to be loosened for the wrong reason eventually.
     reached = [
         f.relative_to(root).as_posix()
         for part in ("risk", "execution", "engines")
@@ -186,7 +176,6 @@ def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
         f"the tilt now reaches {reached}; step 10 says it does not, and one "
         "of the two has to change")
 
-    # And nothing outside the scenario package applies it to a position.
     appliers = [
         f.relative_to(root).as_posix()
         for f in root.rglob("*.py")
@@ -197,8 +186,6 @@ def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
 
     from tradelab.api.app import create_app
 
-    # A contiguous fragment: the sentence is split across two string literals
-    # in the source, so the whole phrase never appears in it.
     source = inspect.getsource(create_app)
     assert "Not yet on the execution " in source
     assert "is constructed only in a test" in source
@@ -226,7 +213,6 @@ def test_the_study_terms_match_the_registration() -> None:
     assert study.MARKET_ROBUSTNESS in text, (
         "the robustness market in code is not named in the registration")
     assert study.NEUTRAL == 5
-    # The sensitivity horizons are declared, and declared as not deciding.
     for horizon in study.SENSITIVITY_HORIZONS:
         assert f"{horizon}-day" in text
 
@@ -244,14 +230,10 @@ def test_the_study_counts_only_what_a_person_set() -> None:
     from tradelab.scenario import study
 
     assert study.SOURCE == "manual"
-    # Recorded in every place a setting lands, so none of them can be the one
-    # that forgets.
     assert "source" in ScenarioRequest.model_fields
     assert "source" in MarketConditions.__table__.columns
     assert "source" in ScenarioRun.__table__.columns
 
-    # And defaulted to manual, which is true of every row that existed before
-    # anything else could write one.
     assert ScenarioRequest(trend=6, sentiment=50).source == "manual"
 
     text = (Path(__file__).resolve().parents[2]
@@ -325,12 +307,6 @@ def test_the_api_key_is_read_from_the_environment_and_never_stored() -> None:
     assert 'os.environ.get(KEY_VAR' in source
     assert "environment=\"public\"" in source, "the keyless fallback is gone"
 
-    # Nothing prints it. A collector that logs a key puts it in every log that
-    # collector ever writes, and those outlive the key.
-    #
-    # Asked of the syntax tree rather than of the text: matching lines that
-    # mention "log" and "key" hits the sentence above this one, which is the
-    # over-blunt filter this codebase keeps having to narrow.
     import ast
 
     for node in ast.walk(ast.parse(source)):
@@ -343,7 +319,6 @@ def test_the_api_key_is_read_from_the_environment_and_never_stored() -> None:
             assert not (isinstance(argument, ast.Name) and argument.id == "key"), (
                 f"{name}() is handed the key itself")
 
-    # And no tracked file carries a bare 32-hex credential.
     root = Path(__file__).resolve().parents[2]
     tracked = subprocess.run(
         ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
@@ -358,8 +333,6 @@ def test_the_api_key_is_read_from_the_environment_and_never_stored() -> None:
         except OSError:
             continue
         for hit in pattern.findall(body):
-            # Migration ids and digests are hex too; a credential is one that
-            # sits next to something naming it.
             window = body[max(0, body.index(hit) - 60):body.index(hit)]
             assert "api_key" not in window.lower() and "cmc_key" not in window.lower(), (
                 f"{name} looks like it carries a credential")
@@ -376,10 +349,6 @@ def test_a_run_cannot_spend_more_than_its_ceiling(monkeypatch) -> None:
     """
     from tradelab.collectors import cmc
 
-    # The pacing was added to `call` after this test was written, and 200 calls
-    # at 1.3s each is four minutes of sleeping to prove an arithmetic bound.
-    # Zeroed here rather than special-cased in the collector: the interval is a
-    # courtesy to the vendor, and there is no vendor in this test.
     monkeypatch.setattr(cmc, "MIN_INTERVAL_SECONDS", 0.0)
 
     cmc.reset_budget()
@@ -398,8 +367,6 @@ def test_a_run_cannot_spend_more_than_its_ceiling(monkeypatch) -> None:
         with pytest.raises(cmc.BudgetExceeded):
             for _ in range(cmc.MAX_REQUESTS_PER_RUN + 5):
                 cmc.call(counted)
-        # Stopped at the ceiling, not after it: the request that would have
-        # breached it is never made, because the vendor charges for attempts.
         assert calls == cmc.MAX_REQUESTS_PER_RUN
         assert cmc.spent() == cmc.MAX_REQUESTS_PER_RUN
     finally:
@@ -420,17 +387,12 @@ def test_reading_the_budget_costs_nothing_and_works_keyless() -> None:
     source = inspect.getsource(cmc.budget)
     assert "key/info" in source
 
-    # Without a key there is no credit budget to read, and saying so beats
-    # returning a zero that would read as an exhausted one.
     previous = os.environ.pop(cmc.KEY_VAR, None)
     try:
         assert cmc.budget() is None
     finally:
         if previous is not None:
             os.environ[cmc.KEY_VAR] = previous
-
-
-# -- the scale ---------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -470,8 +432,6 @@ def test_the_ends_of_the_scale_are_equally_extreme() -> None:
     assert (LOWEST, HIGHEST) == (1, 10)
     assert strength(HIGHEST) == pytest.approx(TILT_CEILING)
     assert strength(LOWEST) == pytest.approx(-TILT_CEILING)
-    # And monotonic across the whole scale, so a higher reading is never a
-    # smaller tilt.
     values = [strength(n) for n in range(LOWEST, HIGHEST + 1)]
     assert values == sorted(values)
 
@@ -490,7 +450,6 @@ def test_the_trend_never_changes_a_sign_and_cannot_open_a_position() -> None:
     for n in range(LOWEST, HIGHEST + 1):
         out = apply(position, n)
         assert np_.array_equal(np_.sign(out), np_.sign(position)), f"{n} flipped a sign"
-        # A reading alone cannot open a trade, however strongly it is held.
         assert not apply(flat, n).any()
 
 
@@ -505,9 +464,6 @@ def test_the_tilt_is_bounded_at_half() -> None:
         for multiplier in exposure_multipliers(n):
             assert 0.5 <= multiplier <= 1.5, f"{n} gives {multiplier}"
 
-    # Longs and shorts move opposite ways, scaled separately. A single factor
-    # would push a short further into the trend it disagrees with, which is the
-    # opposite of what was asked for and invisible in any aggregate.
     for n in (HIGHEST, HIGHEST - 1):
         long_up, short_up = exposure_multipliers(n)
         assert long_up > 1.0 > short_up

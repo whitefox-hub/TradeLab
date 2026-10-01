@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Start or stop everything the operator runs: docker (database, capture), the app on
-# http://127.0.0.1:8010 and the BTC ladder book.
-#   ./tradelab.sh start
-#   ./tradelab.sh stop
-#   ./tradelab.sh status
 set -euo pipefail
 cd "$(dirname "$0")"
 

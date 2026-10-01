@@ -22,7 +22,6 @@ from tradelab.collectors.binance import announcements as taxonomy
 from tradelab.config import Settings
 from tradelab.events.retention import retention_days
 
-#: §11.7 shape per announcement class; delistings carry a date, hence `schedule`.
 SHAPES: dict[str, str] = {
     "futures_listing": "shock",
     "spot_listing": "shock",
@@ -62,7 +61,6 @@ def main() -> int:
             taxonomy.extract_assets, return_dtype=pl.List(pl.Utf8)).alias("assets"),
     ).filter(pl.col("cls").is_in(list(INGESTED)))
 
-    # Same window `prune_events.py` deletes by; otherwise the next run undoes the prune.
     engine = sa.create_engine(Settings().database_url)
     with engine.connect() as connection:
         days = args.retention_days or retention_days(connection)
@@ -86,7 +84,6 @@ def main() -> int:
         for record in rows.iter_rows(named=True):
             key = f"article:{record['article_id']}"
             if key in existing:
-                # Backfill headline on rows written before the column existed.
                 connection.execute(sa.text(
                     "UPDATE events SET headline = :hl "
                     "WHERE cluster_method = :c AND headline IS NULL"
@@ -100,7 +97,6 @@ def main() -> int:
                 "VALUES (:i, :t, :s, :f, :hl, 1, :c, :h)"
             ), {"i": event_id, "t": record["cls"], "s": SHAPES[record["cls"]],
                 "hl": record["title"],
-                # `available_at`, not `event_time`: first actionable moment (§11.2).
                 "f": record["available_at"], "c": key, "h": code_hash})
 
             for asset in record["assets"] or []:

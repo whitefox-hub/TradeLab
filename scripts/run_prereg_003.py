@@ -19,9 +19,9 @@ from tradelab.validation.gates import evaluate
 from tradelab.validation.power import assess
 
 TRIALS = 1
-LOOKBACK_DAYS = 90        # one quarter, per the registration
-REBALANCE_DAYS = 30       # monthly
-LEGS = 4                  # two legs, opened and closed
+LOOKBACK_DAYS = 90
+REBALANCE_DAYS = 30
+LEGS = 4
 REFERENCE = "binance"
 
 
@@ -48,8 +48,6 @@ def pair_spreads(rows: pl.DataFrame) -> dict[tuple[str, str], pl.DataFrame]:
             joined = joined.drop_nulls(["close", "close_b"])
             if joined.height < LOOKBACK_DAYS + REBALANCE_DAYS:
                 continue
-            # `spread` = funding earned; change in `basis` = hedge P&L. Both required:
-            # basis volatility is 42x the funding spread.
             out[(asset, venue)] = joined.with_columns(
                 (pl.col("rate") - pl.col("rate_b")).alias("spread"),
                 (pl.col("close") / pl.col("close_b") - 1.0).alias("basis"),
@@ -75,7 +73,6 @@ def simulate(spread: np.ndarray, basis: np.ndarray) -> tuple[np.ndarray, int]:
         target = int(np.sign(window.mean()))
         stop = min(start + REBALANCE_DAYS, n)
         daily[start:stop] = target * total[start:stop]
-        # Compare before reassigning `position`, or no flip cost is ever charged.
         if target != position:
             flips += 1
             daily[start] -= LEGS * float(BINANCE_RETAIL.per_side)
@@ -97,7 +94,6 @@ def main() -> int:
         print("no usable pairs")
         return 1
 
-    # Union calendar, not intersection: one short pair would truncate all of them.
     all_days = sorted({d for f in pairs.values() for d in f["day"].to_list()})
     index = {day: i for i, day in enumerate(all_days)}
     print(f"union of days          : {len(all_days)}")
@@ -110,7 +106,6 @@ def main() -> int:
         aligned = frame.sort("day")
         daily, flips = simulate(aligned["spread"].to_numpy(),
                                 aligned["basis"].to_numpy())
-        # Capital on both venues: return per committed unit is half one leg's (registered).
         daily = daily / 2.0
         positions = np.array([index[d] for d in aligned["day"].to_list()])
         live_mask = np.arange(daily.size) >= LOOKBACK_DAYS

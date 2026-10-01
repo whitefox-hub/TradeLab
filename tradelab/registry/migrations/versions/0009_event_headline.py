@@ -17,7 +17,6 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column('events', sa.Column('headline', sa.Text(), nullable=True))
-    # Backfill from titles recorded as hand-entry corrections.
     op.execute("""
         UPDATE events e SET headline = a.payload->>'title'
           FROM event_annotations a

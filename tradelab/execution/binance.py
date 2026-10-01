@@ -46,7 +46,6 @@ from tradelab.execution.types import (
 LIVE_BASE = "https://fapi.binance.com"
 TESTNET_BASE = "https://testnet.binancefuture.com"
 
-#: Unknown key and bad signature are kept distinct so debugging checks the right one.
 UNKNOWN_KEY = -2015
 BAD_SIGNATURE = -1022
 TIMESTAMP_DRIFT = -1021
@@ -59,16 +58,13 @@ BAD_PRECISION = -1111
 UNKNOWN_SYMBOL = -1121
 BELOW_MIN_NOTIONAL = -4164
 
-#: "Will never work as sent": retrying burns rate limit and the error counter.
 PERMANENT: frozenset[int] = frozenset({
     BAD_SIGNATURE, INSUFFICIENT_MARGIN, POSITION_OVER_BRACKET, BAD_PRECISION,
     UNKNOWN_SYMBOL, BELOW_MIN_NOTIONAL, -2010, -4003, -4131,
 })
 
-#: Environment faults rather than bad orders; the fix is operational.
 ENVIRONMENTAL: frozenset[int] = frozenset({TIMESTAMP_DRIFT, RATE_LIMITED})
 
-#: Short: a long window widens the gap in which a replayed request is accepted.
 RECV_WINDOW_MS = 5_000
 
 Params = Mapping[str, str | int]
@@ -129,10 +125,8 @@ class BinanceFuturesAdapter(VenueAdapter):
     rejections: list[Ack] = field(default_factory=list)
     _fills: list[Fill] = field(default_factory=list)
     _seen_trades: set[int] = field(default_factory=set)
-    #: Venue order id -> our client order id; trade records lack ours (§14.3 attribution).
     _our_orders: dict[str, str] = field(default_factory=dict)
     _weight_used: int = 0
-    #: Venue clock minus ours, ms; drift is the usual cause of -1021.
     _clock_offset_ms: int = 0
 
     @classmethod
@@ -171,7 +165,6 @@ class BinanceFuturesAdapter(VenueAdapter):
     def weight_used(self) -> int:
         return self._weight_used
 
-    # -- the wire ------------------------------------------------------------
 
     def _http(self) -> httpx.Client:
         if self.client is None:
@@ -185,7 +178,6 @@ class BinanceFuturesAdapter(VenueAdapter):
         return int(time.time() * 1000) + self._clock_offset_ms
 
     def _read(self, response: httpx.Response) -> object:
-        # Venue-reported weight; counting our own calls undercounts (per-endpoint weights).
         for header in ("x-mbx-used-weight-1m", "X-MBX-USED-WEIGHT-1M"):
             if header in response.headers:
                 self._weight_used = int(response.headers[header])
@@ -258,7 +250,6 @@ class BinanceFuturesAdapter(VenueAdapter):
                 raise VenueError(None, f"not trading at this venue: {sorted(missing)}")
         return self.instruments
 
-    # -- the safety check that only matters in LIVE --------------------------
 
     def check_credentials(self) -> None:
         """Refuse a withdrawal-capable key on a path that trades real money (§14.4).
@@ -275,7 +266,6 @@ class BinanceFuturesAdapter(VenueAdapter):
                 "and a key that has one makes the worst available mistake "
                 "irreversible. Create one without it.")
 
-    # -- VenueAdapter --------------------------------------------------------
 
     def submit(self, order: Order, at: datetime) -> Ack:
         """Send one order, and report what came back.
@@ -327,7 +317,6 @@ class BinanceFuturesAdapter(VenueAdapter):
         if venue_order_id:
             self._our_orders[venue_order_id] = order.client_order_id
 
-        # Always collect: a MARKET order returns NEW with executedQty 0 and fills just after.
         self.collect_fills(order.asset)
         return Ack(client_order_id=order.client_order_id,
                    status=_status(response.get("status")),
@@ -372,7 +361,6 @@ class BinanceFuturesAdapter(VenueAdapter):
                 price=Decimal(str(trade["price"])),
                 fee=Decimal(str(trade["commission"])),
                 at=datetime.fromtimestamp(int(trade["time"]) / 1000, UTC),
-                # Empty when not ours (manual trade, liquidation, another process).
                 client_order_id=self._our_orders.get(str(trade.get("orderId", "")), ""),
                 venue_trade_id=str(trade_id),
             ))
@@ -402,15 +390,12 @@ class BinanceFuturesAdapter(VenueAdapter):
         The idempotency the venue does not provide (§14.3).
         """
         if not client_order_id:
-            # The venue would answer -1102, which reads as a venue fault.
             raise ValueError("cannot resolve an empty client order id")
         try:
             found = self._signed(
                 "GET", "/fapi/v1/order",
                 {"symbol": asset, "origClientOrderId": client_order_id})
         except VenueError as missing:
-            # Only -2013 means "never sent"; any other error must raise, or the caller
-            # would resend and open a second position.
             if missing.code == UNKNOWN_ORDER:
                 return None
             raise
@@ -425,7 +410,6 @@ class BinanceFuturesAdapter(VenueAdapter):
         try:
             resting = self._signed("GET", "/fapi/v1/openOrders")
         except VenueError:
-            # Cannot list open orders; try every known symbol.
             resting = [{"symbol": s} for s in sorted(self.instruments)]
         assert isinstance(resting, list)
         cancelled = 0
@@ -464,7 +448,6 @@ class BinanceFuturesAdapter(VenueAdapter):
         assert isinstance(account, dict)
         return Decimal(str(account["totalMarginBalance"]))
 
-    # -- dead man's switch ---------------------------------------------------
 
     def arm_dead_mans_switch(self, symbol: str, timeout_ms: int = 30_000) -> int:
         """Ask the venue to cancel our orders if we stop talking to it (§14.1).

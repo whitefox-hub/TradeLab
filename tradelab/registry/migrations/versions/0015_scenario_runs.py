@@ -22,17 +22,14 @@ def upgrade() -> None:
         sa.Column('ran_at', sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.text('now()')),
         sa.Column('actor', sa.Text(), nullable=False),
-        # Conditions copied, not joined: market_conditions is one mutable row.
         sa.Column('wave_direction', sa.Text(), nullable=False),
         sa.Column('wave_magnitude', sa.SmallInteger(), nullable=False),
         sa.Column('sentiment', sa.SmallInteger(), nullable=False),
         sa.Column('sentiment_bucket', sa.Text(), nullable=False),
-        # Stored so results read without re-deriving the transform.
         sa.Column('long_multiplier', sa.Numeric(6, 4), nullable=False),
         sa.Column('short_multiplier', sa.Numeric(6, 4), nullable=False),
         sa.Column('reference', sa.Text(), nullable=False),
         sa.Column('bars', sa.Integer(), nullable=False),
-        # Both arms; the difference is the operator's effect.
         sa.Column('baseline', sa.dialects.postgresql.JSONB, nullable=False),
         sa.Column('conditioned', sa.dialects.postgresql.JSONB, nullable=False),
         sa.Column('reached_step', sa.SmallInteger(), nullable=False),
@@ -43,7 +40,6 @@ def upgrade() -> None:
                            name='ck_scenario_runs_magnitude'),
         sa.CheckConstraint('sentiment BETWEEN 1 AND 100',
                            name='ck_scenario_runs_sentiment'),
-        # No mode column by design: a scenario can never be 'live'.
         sa.CheckConstraint('bars > 0', name='ck_scenario_runs_bars'),
     )
     op.create_index('ix_scenario_runs_ran_at', 'scenario_runs', ['ran_at'])

@@ -81,10 +81,6 @@ class Collector(Protocol):
     def schema(self) -> pa.Schema: ...
 
 
-# --------------------------------------------------------------------------- #
-# Checks shared by every collector. Plan.md §4.2.
-# --------------------------------------------------------------------------- #
-
 def check_schema(batch: Batch) -> list[Issue]:
     """Column presence and order. A silently reordered column is a silent bug."""
     expected = [f.name for f in batch.schema]

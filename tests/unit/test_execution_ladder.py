@@ -49,8 +49,6 @@ def _adapter() -> SimulatedAdapter:
     )
 
 
-# -- adapters ---------------------------------------------------------------
-
 @pytest.mark.fast
 def test_the_simulator_always_crosses_the_spread_against_you() -> None:
     """A simulator that fills at mid reports an edge the venue will not pay."""
@@ -102,8 +100,6 @@ def test_only_testnet_and_live_reach_a_matching_engine() -> None:
     assert not ExecutionMode.TESTNET.touches_real_money
 
 
-# -- reconciliation ---------------------------------------------------------
-
 @pytest.mark.fast
 def test_identical_series_do_not_diverge() -> None:
     rng = np.random.default_rng(3)
@@ -118,7 +114,7 @@ def test_identical_series_do_not_diverge() -> None:
 def test_a_real_divergence_is_detected_and_named() -> None:
     rng = np.random.default_rng(4)
     backtest = rng.normal(0.0005, 0.01, 500)
-    simulator = backtest - 0.0008          # the simulator does worse, every day
+    simulator = backtest - 0.0008
     attribution = Attribution(costs=-0.0007, timing=-0.00005, fills=-0.00004, data=-0.00001)
     result = reconcile(backtest, simulator, attribution, n_samples=500)
     assert result.significant
@@ -154,8 +150,6 @@ def test_attribution_signs_point_the_right_way() -> None:
     assert worse_fills.fills < 0
 
 
-# -- capital ramp -----------------------------------------------------------
-
 @pytest.mark.fast
 def test_l0_is_floored_to_something_you_can_actually_stand_on() -> None:
     """§14.5 set L0 at 1% of target; for a 5,000 target that is 50, and BTC
@@ -189,8 +183,6 @@ def test_sizing_stops_being_a_control_at_small_capital() -> None:
     assert not sizing_is_a_control(Decimal(1_000), Decimal("84.53"))
     assert sizing_is_a_control(Decimal(5_000), Decimal("84.53"))
 
-
-# -- portfolio --------------------------------------------------------------
 
 @pytest.mark.fast
 def test_correlated_strategies_land_in_one_cluster() -> None:
@@ -238,12 +230,7 @@ def test_caps_bind_regardless_of_what_the_allocator_wants() -> None:
     rng = np.random.default_rng(11)
     returns = {"calm": rng.normal(0, 0.0001, 300), "wild": rng.normal(0, 0.05, 300)}
     weights = allocate(returns, cluster_strategies(returns), max_per_strategy=0.6)
-    # Inverse variance alone would give "calm" essentially everything: its
-    # variance is 250,000x smaller.
     assert weights["calm"] == pytest.approx(0.6)
-    # And the total may fall short of one. Caps that force under-allocation mean
-    # the remainder is cash, not a number to be normalised away — normalising
-    # after capping is what made the cap decorative in the first version.
     assert sum(weights.values()) <= 1.0 + 1e-9
 
 

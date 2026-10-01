@@ -11,7 +11,6 @@ import os
 
 import polars as pl
 
-# Pinned in docker-compose.yml under x-determinism.
 REQUIRED_ENV: dict[str, str] = {
     "PYTHONHASHSEED": "0",
     "OMP_NUM_THREADS": "1",
@@ -45,7 +44,6 @@ def check_environment(strict: bool = True) -> list[str]:
 def golden_run(n_rows: int = 500_000, n_groups: int = 997, seed: int = 20260101) -> str:
     """Parallel float group-by whose digest must be identical on every machine."""
     idx = pl.int_range(0, n_rows, eager=True)
-    # Deterministic pseudo-random floats without depending on a RNG implementation.
     x = ((idx * 6364136223846793005 + seed) % 2147483647).cast(pl.Float64) / 2147483647.0
     frame = pl.DataFrame({"g": (idx % n_groups), "x": x, "y": (x * 1.0000001 - 0.5)})
 
@@ -64,6 +62,5 @@ def golden_run(n_rows: int = 500_000, n_groups: int = 997, seed: int = 20260101)
 
     digest = hashlib.sha256()
     for col in ("sx", "my", "sy", "sxy"):
-        # repr of float64 is exact round-trip in CPython, so this hashes the bits.
         digest.update("".join(repr(v) for v in out[col].to_list()).encode())
     return digest.hexdigest()

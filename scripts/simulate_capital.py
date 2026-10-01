@@ -33,10 +33,8 @@ from tradelab.strategy.reference import BuyAndHold
 
 ASSET = "BTCUSDT"
 
-#: Asks two thirds of the position cap so the maximal trend tilt lands on the cap, not past it.
 STRATEGY = BuyAndHold()
 
-#: Binance USD-M BTCUSDT. At small capital the lot size binds, not min notional (§14.1).
 INSTRUMENT = Instrument(
     asset=ASSET, tick_size=Decimal("0.1"), lot_size=Decimal("0.001"),
     min_notional=Decimal(100),
@@ -132,12 +130,10 @@ def main() -> int:
         adapter.prices[ASSET] = price
         prices = {ASSET: price}
 
-        # Step 9: `history` ends before bar i, so the strategy cannot see its trade price.
         target = STRATEGY.decide(Context(
             at=at, asset=ASSET, history=close[:i], last_close=price,
             held=held, equity=account.equity))
 
-        # Step 10: trend scales longs and shorts oppositely.
         multiplier = long_multiplier if target.exposure >= 0 else short_multiplier
         target_notional = (abs(target.exposure) * account.equity
                            * Decimal(str(multiplier)))

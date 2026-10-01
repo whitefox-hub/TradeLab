@@ -18,7 +18,7 @@ from tradelab.validation.deflated import sharpe_stats
 from tradelab.validation.gates import evaluate
 from tradelab.validation.power import assess
 
-TRIALS = 1  # The registration. Changing it is a new study, not a new run.
+TRIALS = 1
 
 
 def main() -> int:
@@ -34,7 +34,6 @@ def main() -> int:
     exit_ = events["exit_close"].to_numpy()
     funding = events["funding_received"].to_numpy()
 
-    # Short: gains when price falls and receives positive funding (registered mechanism).
     gross = -(exit_ / entry - 1.0)
     cost = np.full(n, BINANCE_RETAIL.round_trip)
     net = gross + funding - cost

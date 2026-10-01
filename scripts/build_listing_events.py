@@ -21,8 +21,6 @@ EXCHANGE_INFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 KLINES = "https://fapi.binance.com/fapi/v1/klines"
 FUNDING = "https://fapi.binance.com/fapi/v1/fundingRate"
 
-#: Bars fetched per listing: the listing day, the entry day, seven held days,
-#: and slack so a missing bar is visible rather than silently shifting the exit.
 WINDOW_DAYS = 14
 
 
@@ -63,7 +61,6 @@ def main() -> int:
     def one(record: dict) -> dict:
         """Fetch one listing's window, or record why it cannot be used."""
         symbol = f"{record['base']}USDT"
-        # Start a week before the announcement so the first bar is the contract's first.
         start_ms = int(record["event_time"].timestamp() * 1000) - 7 * 86_400_000
         with httpx.Client(timeout=20.0) as client:
             response = client.get(
@@ -78,8 +75,6 @@ def main() -> int:
                 return {"_drop": "short_history"}
 
             closes = [float(bar[4]) for bar in bars]
-            # Close time (index 6), not open: the registered entry is the close, and
-            # funding settled during the entry day predates the position.
             entry_ms, exit_ms = int(bars[1][6]), int(bars[8][6])
             settlements_response = client.get(
                 FUNDING,
@@ -95,7 +90,6 @@ def main() -> int:
             "listing_day_ms": int(bars[0][0]),
             "entry_close": closes[1],
             "exit_close": closes[8],
-            # Signed as the short earns it: positive funding is paid by longs.
             "funding_received": sum(float(f["fundingRate"]) for f in settlements),
             "n_funding_settlements": len(settlements),
             "first_day_return": closes[1] / closes[0] - 1.0,

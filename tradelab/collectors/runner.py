@@ -47,7 +47,6 @@ def run_backfill(
         day = batch.frame["event_time"].min().date()  # type: ignore[union-attr]
 
         if not report.ok:
-            # Refused, not repaired; the hole is documented in data_quality_issues.
             result.refused_days.append(day)
             log.warning("batch_refused", asset=asset, day=str(day),
                         issues=[i.kind for i in report.blocking])

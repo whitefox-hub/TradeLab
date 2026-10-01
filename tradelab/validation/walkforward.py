@@ -39,9 +39,9 @@ import numpy as np
 @dataclass(frozen=True, slots=True)
 class Window:
     train_start: int
-    train_end: int      # exclusive; the purge gap sits between this and test_start
+    train_end: int
     test_start: int
-    test_end: int       # exclusive
+    test_end: int
 
     @property
     def train_size(self) -> int:

@@ -72,7 +72,6 @@ def test_divergence_halts_and_is_never_silently_corrected() -> None:
     assert divergences[0].ours == Decimal("0.5")
     assert divergences[0].theirs == Decimal(0)
     assert engine.account.halted
-    # Our view is left exactly as it was.
     assert engine.account.positions["BTCUSDT"].quantity == Decimal("0.5")
 
 
@@ -99,7 +98,6 @@ def test_a_vetoed_order_is_logged_as_a_decision() -> None:
     vetoed = [i for i in engine.intents.records if i.state is IntentState.VETOED]
     assert len(vetoed) == 1
     assert "max_open_positions" in vetoed[0].reason
-    # And nothing reached the venue.
     assert engine.adapter.fills == []
 
 
@@ -171,7 +169,6 @@ def test_positions_move_only_from_fills() -> None:
 
     assert engine.apply_fills(NOW) == 1
     assert engine.account.positions["BTCUSDT"].quantity == Decimal("0.01")
-    # Idempotent: applying again must not double the position.
     assert engine.apply_fills(NOW) == 0
     assert engine.account.positions["BTCUSDT"].quantity == Decimal("0.01")
 
@@ -221,7 +218,6 @@ def test_the_kill_switch_flattens_from_the_venue_view() -> None:
     assert engine.account.halted
     assert len(orders) == 1
     assert orders[0].side is Side.SELL and orders[0].reduce_only
-    # The flattening order actually reached the venue.
     assert engine.adapter.positions().get("BTCUSDT", Decimal(0)) == Decimal(0)
 
 
@@ -233,11 +229,7 @@ def test_a_halted_engine_still_lets_an_exit_through() -> None:
     engine.apply_fills(NOW)
     engine.halt("manual", NOW)
 
-    # An entry is refused...
     assert engine.submit(_order("0.01"), PRICE, {}, NOW).breach is Breach.HALTED
-    # ...and an exit is not. Written as two assertions on the same engine,
-    # because the first version of this test was `x is False or True`, which is
-    # true for every x and tested nothing.
     exit_order = _order("0.01", side=Side.SELL, reduce_only=True)
     assert engine.submit(exit_order, PRICE, {"BTCUSDT": PRICE}, NOW).allowed
 
@@ -259,13 +251,6 @@ def test_the_log_survives_a_restart(tmp_path) -> None:
     written = path.read_text().strip().splitlines()
     assert len(written) >= 3
     assert '"state": "sent"' in path.read_text()
-
-
-# -- restart -------------------------------------------------------------------
-#
-# A restart is a new engine over the same venue and the same log file. The
-# simulator's adapter stands in for the venue, so it is the one object carried
-# across; everything the engine knew is rebuilt from the file or not at all.
 
 
 def _restarted(path, adapter) -> ExecutionEngine:
@@ -419,13 +404,6 @@ def test_recovery_is_a_startup_step_not_a_mid_run_one(tmp_path) -> None:
         engine.recover(NOW)
 
 
-# -- held positions ------------------------------------------------------------
-#
-# RESULT-007: a short opened at 0.87% of equity grew to a third of the book in a
-# week, because the size cap was checked when the order was sent and never
-# again. These are the checks for the position that grows by itself.
-
-
 def _holding(quantity: str, side: Side = Side.BUY, **limits) -> ExecutionEngine:
     engine = _engine(RiskLimits(min_seconds_between_entries=0, **limits))
     engine.reconcile(NOW)
@@ -442,15 +420,14 @@ def _reprice(engine: ExecutionEngine, price: Decimal) -> dict[str, Decimal]:
 
 @pytest.mark.fast
 def test_a_position_within_its_cap_is_left_alone() -> None:
-    engine = _holding("0.1")                      # $8k of $100k, cap 25%
+    engine = _holding("0.1")
     assert engine.trim_held(_reprice(engine, PRICE), NOW) == []
 
 
 @pytest.mark.fast
 def test_a_position_that_grew_past_its_cap_is_trimmed_back_to_it() -> None:
-    # The absolute ceiling lifted, so the fraction is the cap under test.
     engine = _holding("0.1", max_position_notional=Decimal(10_000_000))
-    prices = _reprice(engine, PRICE * 4)          # $32k of $100k: over 25%
+    prices = _reprice(engine, PRICE * 4)
     orders = engine.trim_held(prices, NOW)
     engine.apply_fills(NOW)
 
@@ -473,7 +450,7 @@ def test_a_short_that_grew_is_bought_back() -> None:
 @pytest.mark.fast
 def test_the_absolute_ceiling_binds_where_the_fraction_does_not() -> None:
     engine = _holding("0.1", max_position_notional=Decimal(10_000))
-    orders = engine.trim_held(_reprice(engine, PRICE * 2), NOW)   # $16k, 16%
+    orders = engine.trim_held(_reprice(engine, PRICE * 2), NOW)
     engine.apply_fills(NOW)
     assert orders
     assert engine.account.positions["BTCUSDT"].notional(PRICE * 2) <= Decimal(10_000)
@@ -508,6 +485,6 @@ def test_no_trim_from_a_view_reconciliation_has_found_wrong() -> None:
     known to be wrong. With a divergence open, sizing from our view is
     guessing; the kill switch, which reads the venue's, is the tool."""
     engine = _holding("0.1")
-    engine.account.positions["BTCUSDT"].quantity = Decimal("0.3")   # the bug
+    engine.account.positions["BTCUSDT"].quantity = Decimal("0.3")
     assert engine.reconcile(NOW), "the drill needs a divergence"
     assert engine.trim_held(_reprice(engine, PRICE * 4), NOW) == []
