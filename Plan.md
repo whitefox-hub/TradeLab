@@ -7,26 +7,33 @@
 
 ## Current state — 2026-10-01
 
-**One strategy runs: BTC +1%**, chosen by the operator. It buys BTC spot with its budget,
-sells as soon as the sale nets +1% after the fee (0.10%) and slippage (1.5 bp), and buys
-again. It never sells at a loss: a position that falls waits as long as it takes. The budget
-starts at $1,000 and grows only by realised profit, inside a $10,000 fake account, so the
-position stays within the active risk limits (§14.1). It runs in the **simulator** (§12.1) on
-Binance spot prices, checked every 10 seconds.
+**One strategy runs: the BTC ladder**, designed by the operator. It splits its budget into
+ten parts, each bought at its own price and sold on its own, and never sells at a loss.
 
-| | |
+| Rule | |
 |---|---|
-| Rule | `tradelab/strategy/btc_plus_one.py` |
-| Runner | `scripts/run_btc_plus_one.py`, state in `data/forward/btc-plus-one/` |
-| Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
-| Screen | `http://127.0.0.1:8010/home`: the open position, its P&L, a **Close** button |
-| Manual exit | Close sells at market, even at a loss, and pauses buying for 24 hours; both the request and the fill are audit rows |
+| Entry | the first part at once on the first start; a new part each time the price is 10% below the cheapest part held; after every part is sold, the next first part only after a 2% correction from the high since that sale |
+| Exit | a part's minimum net gain grows with the days held: under 15 days +1%, 15–29 +3%, 30–44 +5%, 45–59 +8%, 60–89 +12%, 90 and over +20%. Once there it follows its high and sells on a 2% pullback, never below the minimum, and always at its cap (twice the minimum, at least +10%) |
+| Never at a loss | a part below its minimum waits, however long it takes |
+| Size | one part is a tenth of the budget: $1,000 to start, grown by every realised profit, inside a $10,000 fake account so the ten parts stay within the active risk limits (§14.1) |
+| Costs | Binance spot: 0.10% fee and 1.5 bp slippage on each side, checked every 10 seconds |
 
-**What the history says about it** (BTC spot hourly closes, 2018-01 → 2026-09, all capital in
-each cycle): $10,000 became $36,352, against $61,242 for holding BTC. It trailed holding BTC
-in every calendar year, because each cycle gives up the rest of a rise and none avoids a fall;
-the account's drawdowns equal BTC's (−22% to −81%), and the longest wait for +1% was 1,042
-days. These are descriptive figures on data already read; the forward run is the test.
+| Where | |
+|---|---|
+| Rule | `tradelab/strategy/btc_ladder.py` (tests in `tests/unit/test_btc_ladder.py`) |
+| Runner | `scripts/run_btc_ladder.py`, state in `data/forward/btc-ladder/` |
+| Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
+| Screen | `http://127.0.0.1:8010/home`: the position, its P&L, a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours |
+
+**What the history says about it** (BTC spot hourly closes, $10,000, the rule as above):
+2018-01 → 2026-09, $46,228 against $61,242 for holding BTC, with a worst drawdown of −53%
+against −77%; 2022-01 → 2026-09, $18,493 against $18,176, with −31% against −67%. 230 sales
+in 8.7 years, +7.3% each on average. The parameters were tuned with the operator on these
+same years, so these figures flatter it; a walk-forward of the tuning (choosing each year
+from the years before it) earned less than any fixed choice. The forward run is the test.
+
+The ladder replaced the **BTC +1%** book (one position, sold at +1%, bought again at once),
+whose run is ended in the database.
 
 **Removed, at the operator's instruction:**
 

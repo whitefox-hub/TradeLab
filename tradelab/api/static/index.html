@@ -142,7 +142,8 @@ function renderBook(book) {
       <td class="num money ${sign(p.realised_pnl)}">${money(p.realised_pnl)}</td>
       <td class="num money ${sign(-p.funding_paid)}">${money(-p.funding_paid)}</td>
       <td title="${escape(p.book || "")}">${p.guide
-        ? `${p.guide === "operator" ? "operator" : "algorithm"} · trend ${p.trend}`
+        ? `${p.guide === "operator" ? "operator" : "algorithm"}${
+            p.trend === null || p.trend === undefined ? "" : ` · trend ${p.trend}`}`
           + (p.trend_source && p.trend_source !== "manual" ? ` (${escape(p.trend_source)})` : "")
         : "—"}</td>
       <td><span class="mode ${escape(p.mode)}">${escape(p.mode)}</span>

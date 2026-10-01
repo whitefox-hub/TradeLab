@@ -1,17 +1,14 @@
 #!/usr/bin/env python
-"""The BTC +1% book, in the simulator, on Binance spot prices. Fake capital.
+"""The BTC ladder book, in the simulator, on Binance spot prices. Fake capital.
 
     set -a && . secrets/api.env && set +a
-    .venv/bin/python scripts/run_btc_plus_one.py          # runs until stopped
-    .venv/bin/python scripts/run_btc_plus_one.py --once   # one check, for a test
+    .venv/bin/python scripts/run_btc_ladder.py          # runs until stopped
+    .venv/bin/python scripts/run_btc_ladder.py --once   # one check, for a test
 
-The rule (`tradelab.strategy.btc_plus_one`): buy BTC with the book's whole budget, sell as
-soon as the sale nets +1% after the fee and slippage, buy again. Never sell at a loss.
-The budget starts at $1,000 and grows with every realised profit. The account is $10,000 of
-fake capital, so the position stays inside the active risk limits.
-
-The price is checked every 10 seconds; the screen is written every 5 minutes and on every
-trade. The Close button sells at market, even at a loss, and pauses buying for 24 hours.
+The rule is `tradelab.strategy.btc_ladder`. The budget starts at $1,000 and grows with every
+realised profit; it sits inside a $10,000 fake account so ten parts stay within the active
+risk limits. The price is checked every 10 seconds; the screen is written every 5 minutes
+and on every trade. Close sells every part at market, even at a loss, and pauses buying 24 h.
 """
 
 from __future__ import annotations
@@ -33,21 +30,20 @@ from tradelab.execution.intent import IntentLog
 from tradelab.execution.types import AccountState, ExecutionMode, Fill, Instrument, Order, Side
 from tradelab.orchestration.forward import Snapshot, Store
 from tradelab.risk.limits import RiskEngine
-from tradelab.strategy import btc_plus_one as rule
+from tradelab.strategy import btc_ladder as lad
 
 REST = "https://api.binance.com"
 SYMBOL = "BTCUSDT"
 CAPITAL = Decimal(10_000)
-BUDGET = Decimal(1_000)
-LABEL = "BTC +1%"
-STATE_DIR = Path("data/forward/btc-plus-one")
-IMPL = Path("tradelab/strategy/btc_plus_one.py")
+BUDGET = 1_000.0
+LABEL = "BTC ladder"
+STATE_DIR = Path("data/forward/btc-ladder")
+IMPL = Path("tradelab/strategy/btc_ladder.py")
 POLL_S = 10
 SNAPSHOT_S = 300
 FEE = Decimal("0.001")
 HALF_SPREAD_BPS = Decimal("1.5")
-#: Below the position cap, so the slipped fill cannot carry the notional over it.
-CAP_MARGIN = Decimal("0.995")
+SLIP = float(HALF_SPREAD_BPS) / 10_000
 
 
 def instrument(client: httpx.Client) -> Instrument:
@@ -67,14 +63,25 @@ class Book:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         self.store = store
         limits_id, self.limits = store.active_limits()
-        strategy = store.ensure_strategy("btc-plus-one", IMPL)
+        strategy = store.ensure_strategy("btc-ladder", IMPL)
         self.run_id = store.ensure_run(strategy, LABEL, {
-            "rule": "buy BTC, sell at +1% net, buy again; never sell at a loss",
-            "budget": str(BUDGET), "capital_is_fake": True, "prices": "binance spot"},
+            "rule": "ten parts, a new one every 10% lower; each sells on a 2% pullback once at "
+                    "its time-scaled minimum, at its cap at the latest; re-entry on a 2% "
+                    "correction; never at a loss",
+            "budget": BUDGET, "capital_is_fake": True, "prices": "binance spot"},
             CAPITAL, limits_id)
         path = STATE_DIR / "state.json"
         raw = json.loads(path.read_text()) if path.exists() else {}
-        self.state = raw.get("state", {"budget": str(BUDGET), "spent": "0", "trades": 0})
+        s = raw.get("state", {})
+        self.cash = float(s.get("cash", BUDGET))
+        self.parts = [lad.Part(p["price"], p["quantity"], p["spent"],
+                               datetime.fromisoformat(p["opened"]), p.get("peak"))
+                      for p in s.get("parts", [])]
+        self.armed = bool(s.get("armed", True))
+        self.high = s.get("high")
+        self.paused_until = s.get("paused_until")
+        self.day = s.get("day")
+        self.trades = int(s.get("trades", 0))
         self.adapter = SimulatedAdapter(instruments={SYMBOL: inst}, prices={},
                                         half_spread_bps=HALF_SPREAD_BPS, taker_fee=FEE)
         self.adapter._fills.extend(
@@ -90,25 +97,21 @@ class Book:
                                       instruments={SYMBOL: inst},
                                       intents=IntentLog.load(STATE_DIR / "intents.jsonl"))
         divergences = self.engine.recover(datetime.now(UTC))
+        held = sum(p.quantity for p in self.parts)
         print(f"run {self.run_id} resumed, divergences {divergences or 'none'}, "
-              f"budget {self.state['budget']}, held {self.held}", flush=True)
+              f"{len(self.parts)} parts ({held:.8f} BTC), cash {self.cash:,.2f}", flush=True)
         if divergences:
             store.halt(self.run_id, f"reconciliation at restart: {divergences}")
             raise SystemExit(1)
-
-    @property
-    def held(self) -> Decimal:
-        p = self.engine.account.positions.get(SYMBOL)
-        return p.quantity if p else Decimal(0)
 
     def equity(self, price: Decimal) -> Decimal:
         p = self.engine.account.positions.get(SYMBOL)
         return CAPITAL + ((p.realised_pnl + p.unrealised(price)) if p else Decimal(0))
 
-    def order(self, side: Side, quantity: Decimal, price: Decimal, now: datetime) -> Fill | None:
+    def order(self, side: Side, quantity: float, price: Decimal, now: datetime) -> Fill | None:
         self.adapter.prices[SYMBOL] = price
         before = len(self.adapter.fills)
-        decision = self.engine.submit(Order(SYMBOL, side, quantity,
+        decision = self.engine.submit(Order(SYMBOL, side, Decimal(str(quantity)),
                                             reduce_only=side is Side.SELL),
                                       price, {SYMBOL: price}, now, mid_price=price)
         self.engine.apply_fills(now)
@@ -117,37 +120,51 @@ class Book:
             return None
         return self.adapter.fills[-1]
 
-    def step(self, price: Decimal, now: datetime) -> bool:
-        """One check of the rule. True if it traded."""
-        fee, slip = float(FEE), float(HALF_SPREAD_BPS) / 10_000
-        if self.held > 0:
-            spent = float(self.state["spent"])
-            if not rule.should_sell(spent, float(self.held), float(price), fee, slip):
-                return False
-            fill = self.order(Side.SELL, self.held, price, now)
-            if fill is None:
-                return False
-            got = fill.quantity * fill.price - fill.fee
-            profit = got - Decimal(self.state["spent"])
-            assert profit >= 0, "the rule sold at a loss"
-            self.state.update(budget=str(Decimal(self.state["budget"]) + profit), spent="0",
-                              trades=self.state["trades"] + 1)
-            print(f"{now:%Y-%m-%d %H:%M:%S} SELL {fill.quantity} at {fill.price}: "
-                  f"+{profit:.2f}, budget {self.state['budget']}", flush=True)
-            return True
-        if self.state.get("paused_until") and now.isoformat() < self.state["paused_until"]:
-            return False
-        budget = min(Decimal(self.state["budget"]),
-                     self.limits.max_position_pct_equity * self.equity(price) * CAP_MARGIN)
-        quantity = budget / (price * (1 + HALF_SPREAD_BPS / 10_000)) / (1 + FEE)
-        fill = self.order(Side.BUY, quantity, price, now)
+    def sell(self, part: lad.Part, price: Decimal, now: datetime, why: str) -> bool:
+        fill = self.order(Side.SELL, part.quantity, price, now)
         if fill is None:
             return False
-        self.state["spent"] = str(fill.quantity * fill.price + fill.fee)
-        target = rule.target_price(float(self.state["spent"]), float(fill.quantity), fee, slip)
-        print(f"{now:%Y-%m-%d %H:%M:%S} BUY {fill.quantity} at {fill.price} "
-              f"(${float(self.state['spent']):,.2f}); sells at {target:,.2f} or above", flush=True)
+        got = float(fill.quantity * fill.price - fill.fee)
+        self.cash += got
+        self.parts.remove(part)
+        self.trades += 1
+        days = (now - part.opened).total_seconds() / 86_400
+        print(f"{now:%Y-%m-%d %H:%M:%S} SELL part bought at {part.price:,.2f} after {days:.1f} d "
+              f"at {fill.price}: {got - part.spent:+.2f} ({got / part.spent - 1:+.2%}) [{why}]",
+              flush=True)
+        if not self.parts:                     # a full exit: wait for a correction to re-enter
+            self.armed, self.high = False, float(fill.price)
         return True
+
+    def step(self, price: Decimal, now: datetime) -> bool:
+        """One check of every part and of the entry. True if it traded."""
+        traded = False
+        px = float(price)
+        for part in list(self.parts):
+            if lad.exit_now(part, px, now, float(FEE), SLIP):
+                gain = lad.net(part, px, float(FEE), SLIP)
+                assert gain >= 0, "the ladder would sell at a loss"
+                traded |= self.sell(part, price, now, "cap" if gain >= lad.cap(
+                    (now - part.opened).total_seconds() / 86_400) else "pullback")
+        if not self.parts and not self.armed:
+            self.high = max(self.high or px, px)
+            if px <= self.high * (1 - lad.REENTRY):
+                self.armed = True
+        paused = self.paused_until and now.isoformat() < self.paused_until
+        if not paused and lad.buy_now(self.parts, px, self.armed):
+            size = lad.part_size(self.cash, self.parts)
+            quantity = size / (px * (1 + SLIP)) / (1 + float(FEE))
+            fill = self.order(Side.BUY, quantity, price, now) if size >= 10 else None
+            if fill is not None:
+                spent = float(fill.quantity * fill.price + fill.fee)
+                self.cash -= spent
+                self.parts.append(lad.Part(float(fill.price), float(fill.quantity), spent, now))
+                lowest = min(p.price for p in self.parts)
+                print(f"{now:%Y-%m-%d %H:%M:%S} BUY part {len(self.parts)}/{lad.PARTS} at "
+                      f"{fill.price} (${spent:,.2f}); next part at or below "
+                      f"{lowest * (1 - lad.STEP):,.2f}", flush=True)
+                traded = True
+        return traded
 
     def close_requested(self, client: httpx.Client) -> bool:
         requests = self.store.pending_closes(self.run_id)
@@ -155,29 +172,23 @@ class Book:
             return False
         now, price = datetime.now(UTC), ticker(client)
         for request, asset in requests:
-            before = self.held
-            if asset != SYMBOL or before == 0:
+            if asset != SYMBOL or not self.parts:
                 self.store.answer_close(request, self.run_id, asset, {"result": "nothing open"})
                 continue
-            fill = self.order(Side.SELL, before, price, now)
-            if fill is None:
-                self.store.answer_close(request, self.run_id, asset, {"result": "refused"})
-                continue
-            got = fill.quantity * fill.price - fill.fee
-            profit = got - Decimal(self.state["spent"])
-            self.state.update(budget=str(Decimal(self.state["budget"]) + profit), spent="0",
-                              paused_until=(now + timedelta(hours=24)).isoformat())
+            spent, before = sum(p.spent for p in self.parts), self.cash
+            sold = [self.sell(p, price, now, "manual") for p in list(self.parts)]
+            self.paused_until = (now + timedelta(hours=24)).isoformat()
             self.store.answer_close(request, self.run_id, asset, {
-                "result": "closed", "qty": str(before), "price": str(fill.price),
-                "fee": str(fill.fee), "profit": str(profit)})
-            print(f"{now:%Y-%m-%d %H:%M:%S} manual exit {before} at {fill.price}: {profit:+.2f}; "
-                  "buying paused 24 h", flush=True)
+                "result": "closed" if all(sold) else "partly closed", "parts": len(sold),
+                "price": str(price), "profit": f"{self.cash - before - spent:.2f}"})
+            print(f"{now:%Y-%m-%d %H:%M:%S} manual exit of {len(sold)} parts; buying paused 24 h",
+                  flush=True)
         self.persist(now, price)
         return True
 
     def persist(self, now: datetime, price: Decimal) -> None:
         p = self.engine.account.positions.get(SYMBOL)
-        qty = self.held
+        qty = p.quantity if p else Decimal(0)
         row = Snapshot(SYMBOL, qty, p.avg_price if p else Decimal(0),
                        p.unrealised(price) if p else Decimal(0),
                        p.realised_pnl if p else Decimal(0), Decimal(0),
@@ -187,7 +198,10 @@ class Book:
 
         def encode(value):
             return value.isoformat() if isinstance(value, datetime) else str(value)
-        payload = {"state": self.state, "fills": [asdict(f) for f in self.adapter.fills],
+        state = {"cash": self.cash, "armed": self.armed, "high": self.high,
+                 "paused_until": self.paused_until, "day": self.day, "trades": self.trades,
+                 "parts": [{**asdict(x), "opened": x.opened.isoformat()} for x in self.parts]}
+        payload = {"state": state, "fills": [asdict(f) for f in self.adapter.fills],
                    "held": {k: str(v) for k, v in self.adapter._held.items()},
                    "peak": str(self.engine.account.peak_equity),
                    "day_start": str(self.engine.account.day_start_equity)}
@@ -207,19 +221,17 @@ def main() -> int:
         try:
             book.close_requested(client)
             now, price = datetime.now(UTC), ticker(client)
-            # max_daily_loss is measured from the day's opening equity: reset it each UTC day.
             today = now.strftime("%Y-%m-%d")
-            if book.state.get("day") != today:
+            if book.day != today:               # max_daily_loss is from the day's opening equity
                 book.engine.account.day_start_equity = book.equity(price)
-                book.state["day"] = today
+                book.day = today
             traded = book.step(price, now)
             if traded or time.time() - last_snapshot >= SNAPSHOT_S:
                 book.engine.risk.enforce(now)
                 book.persist(now, price)
                 last_snapshot = time.time()
-                print(f"{now:%Y-%m-%d %H:%M} price {price:,.2f}, held {book.held} BTC, "
-                      f"budget {book.state['budget']}, equity {book.equity(price):,.2f}",
-                      flush=True)
+                print(f"{now:%Y-%m-%d %H:%M} price {price:,.2f}, {len(book.parts)} parts, "
+                      f"cash {book.cash:,.2f}, equity {book.equity(price):,.2f}", flush=True)
         except httpx.HTTPError as failed:
             print(f"  price unavailable, retrying: {failed}", flush=True)
         if args.once:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the database and capture (docker), then the operator interface and the forward
-# BTC +1% book, detached, each with a pidfile.
+# BTC ladder book, detached, each with a pidfile.
 # Stop by pidfile, not process-name match: a name match also hits this shell.
 #   ./scripts/start_services.sh          # (re)start both
 #   ./scripts/start_services.sh stop     # stop both
@@ -28,7 +28,7 @@ start() {
 }
 
 stop uvicorn
-stop btc_plus_one
+stop btc_ladder
 [[ "${1:-}" == "stop" ]] && exit 0
 
 # Only capture and its dependencies: a bare `up` also starts the api container on port 8000.
@@ -40,4 +40,4 @@ if ss -ltn | grep -q "127.0.0.1:8010 "; then
 fi
 start uvicorn .venv/bin/uvicorn "tradelab.api.app:create_app" --factory \
   --host 127.0.0.1 --port 8010
-start btc_plus_one .venv/bin/python scripts/run_btc_plus_one.py
+start btc_ladder .venv/bin/python scripts/run_btc_ladder.py
