@@ -118,6 +118,28 @@ STOPS: dict[str, str] = {
         "neither should reach a venue.",
 }
 
+#: How the risk screen's form groups and names each limit: (group, plain name, unit).
+#: Unit "pct" is a fraction shown as a percentage, "x" a multiple of equity, "usd" a USDT
+#: amount. Kept beside STOPS so a new limit is described and placed in one edit.
+PRESENTATION: dict[str, tuple[str, str, str]] = {
+    "max_position_pct_equity": ("Position size", "Largest position", "pct"),
+    "min_position_pct_equity": ("Position size", "Smallest position", "pct"),
+    "max_position_notional": ("Position size", "Largest position, USDT", "usd"),
+    "min_position_notional": ("Position size", "Smallest position, USDT", "usd"),
+    "max_gross_exposure": ("Exposure", "Gross exposure", "x"),
+    "max_net_exposure": ("Exposure", "Net exposure", "x"),
+    "max_leverage": ("Exposure", "Leverage", "x"),
+    "max_open_positions": ("Exposure", "Open positions", ""),
+    "max_positions_per_cluster": ("Exposure", "Positions per correlated cluster", ""),
+    "max_daily_loss": ("Losses", "Daily loss, from the day's opening equity", "pct"),
+    "max_drawdown_from_peak": ("Losses", "Drawdown from the peak", "pct"),
+    "min_seconds_between_entries": ("Orders", "Seconds between entries", "s"),
+    "max_open_orders": ("Orders", "Open orders", ""),
+    "max_orders_per_minute": ("Orders", "Orders per minute", ""),
+    "max_consecutive_errors": ("Orders", "Consecutive errors", ""),
+    "max_price_deviation_bps": ("Orders", "Price deviation from mid, bp", "bp"),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class Decision:

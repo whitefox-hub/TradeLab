@@ -832,6 +832,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         from tradelab.risk.bounds import BOUNDS
         from tradelab.risk.limits import (
             HALTING,
+            PRESENTATION,
             REQUIRES_HUMAN,
             STOPS,
             Breach,
@@ -867,6 +868,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 # Same bounds the POST checks, so the form matches the server.
                 "low": str(BOUNDS[name].low), "high": str(BOUNDS[name].high),
                 "whole": BOUNDS[name].whole, "bound": BOUNDS[name].describes,
+                # The form's grouping and plain name; an unplaced limit lands in "Other".
+                **dict(zip(("group", "label", "unit"),
+                           PRESENTATION.get(name, ("Other", name, "")), strict=True)),
             })
 
         history = session.execute(sa.text(

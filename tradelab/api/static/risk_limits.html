@@ -203,29 +203,14 @@ const escape = (s) => String(s ?? "").replace(/[&<>"']/g,
 
 let current = [];
 
-// Grouping and plain names for the editor only; the server's names and bounds are the truth.
-const GROUPS = [
-  ["Position size", "How large one position may be.", {
-    max_position_pct_equity: ["Largest position", "pct"],
-    min_position_pct_equity: ["Smallest position", "pct"],
-    max_position_notional: ["Largest position, USDT", "usd"],
-    min_position_notional: ["Smallest position, USDT", "usd"]}],
-  ["Exposure", "How much of the account may be in the market at once.", {
-    max_gross_exposure: ["Gross exposure", "x"],
-    max_net_exposure: ["Net exposure", "x"],
-    max_leverage: ["Leverage", "x"],
-    max_open_positions: ["Open positions", ""],
-    max_positions_per_cluster: ["Positions per correlated cluster", ""]}],
-  ["Losses", "These halt the run. A halt stops new buying; it never sells a position.", {
-    max_daily_loss: ["Daily loss, from the day's opening equity", "pct"],
-    max_drawdown_from_peak: ["Drawdown from the peak", "pct"]}],
-  ["Orders", "Guards against a runaway or broken loop.", {
-    min_seconds_between_entries: ["Seconds between entries", "s"],
-    max_open_orders: ["Open orders", ""],
-    max_orders_per_minute: ["Orders per minute", ""],
-    max_consecutive_errors: ["Consecutive errors", ""],
-    max_price_deviation_bps: ["Price deviation from mid, bp", "bp"]}],
-];
+// The engine names and groups each limit (`group`, `label`, `unit`); the page only says
+// what each group is for, so a new limit appears here without editing this file.
+const GROUP_WHY = {
+  "Position size": "How large one position may be.",
+  "Exposure": "How much of the account may be in the market at once.",
+  "Losses": "These halt the run. A halt stops new buying; it never sells a position.",
+  "Orders": "Guards against a runaway or broken loop.",
+};
 
 const NAME_OK = /^[A-Za-z0-9 _.-]{3,64}$/;
 const num = (text) => Number(String(text).trim().replace(",", "."));
@@ -252,22 +237,16 @@ function fieldHtml(l, label, kind) {
 
 function openEditor() {
   // Pre-filled with the limits in force; a config must include every field.
-  const placed = new Set();
-  const byName = Object.fromEntries(current.map((l) => [l.name, l]));
-  let html = GROUPS.map(([title, why, members]) => {
-    const items = Object.entries(members).filter(([n]) => byName[n]);
-    items.forEach(([n]) => placed.add(n));
-    return items.length ? `<fieldset class="group"><legend>${escape(title)}</legend>
-      <div class="why">${escape(why)}</div><div class="fields">${
-        items.map(([n, [label, kind]]) => fieldHtml(byName[n], label, kind)).join("")
-      }</div></fieldset>` : "";
-  }).join("");
-  const rest = current.filter((l) => !placed.has(l.name));
-  if (rest.length) {
-    html += `<fieldset class="group"><legend>Other</legend><div class="fields">${
-      rest.map((l) => fieldHtml(l, l.name, "")).join("")}</div></fieldset>`;
+  const groups = new Map();
+  for (const l of current) {
+    if (!groups.has(l.group)) groups.set(l.group, []);
+    groups.get(l.group).push(l);
   }
-  $("groups").innerHTML = html;
+  $("groups").innerHTML = [...groups].map(([title, items]) => `
+    <fieldset class="group"><legend>${escape(title)}</legend>${
+      GROUP_WHY[title] ? `<div class="why">${escape(GROUP_WHY[title])}</div>` : ""}
+      <div class="fields">${items.map((l) => fieldHtml(l, l.label, l.unit)).join("")}</div>
+    </fieldset>`).join("");
   for (const l of current) $(`f-${l.name}`).addEventListener("input", refresh);
   $("c-name").value = "";
   $("c-why").value = "";

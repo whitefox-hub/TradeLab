@@ -1199,6 +1199,11 @@ def test_the_risk_screen_lists_every_limit_the_engine_has(client: TestClient) ->
     assert set(STOPS) == fields, (
         f"undescribed: {sorted(fields - set(STOPS))}; "
         f"described but gone: {sorted(set(STOPS) - fields)}")
+    # And placed in the form under a plain name, or it lands in "Other" unlabelled.
+    from tradelab.risk.limits import PRESENTATION
+    assert set(PRESENTATION) == fields, (
+        f"unplaced: {sorted(fields - set(PRESENTATION))}; "
+        f"placed but gone: {sorted(set(PRESENTATION) - fields)}")
 
     markup = client.get("/static/risk_limits.html").text
     # None of the sixteen names is hardcoded in the page.
