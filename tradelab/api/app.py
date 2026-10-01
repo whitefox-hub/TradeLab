@@ -11,6 +11,7 @@ import os
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,14 @@ class ApprovalRequest(BaseModel):
     notes: str | None = None
 
 
+def _plain(value: Any) -> str:
+    """A limit as a person writes it: 0.25, 10000, 60. The database pads NUMERIC columns
+    with zeros (0.25000000), which reads as noise."""
+    number = Decimal(str(value))
+    text = format(number.normalize(), "f")
+    return text if "." not in text else text.rstrip("0").rstrip(".")
+
+
 def create_app(engine: sa.Engine | None = None, settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     engine = engine or sa.create_engine(settings.database_url)
@@ -124,9 +133,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
     @app.middleware("http")
     async def no_stale_chrome(request, call_next):
-        """Force revalidation of /static so a cached app.js cannot hide new sidebar entries."""
+        """Force revalidation of every screen and /static file, so a cached page or app.js
+        cannot show a form or sidebar older than the server."""
         response = await call_next(request)
-        if request.url.path.startswith("/static/"):
+        if not request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
@@ -671,6 +681,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         """Legacy path; redirects to /home."""
         return RedirectResponse("/home", status_code=308)
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:          # an icon, not a screen: the menu tests skip it
+        """Browsers ask the root for it even when a page links /static/favicon.png."""
+        return FileResponse(STATIC / "favicon.png", media_type="image/png")
+
     @app.get("/login", include_in_schema=False)
     def login_screen() -> FileResponse:
         """Sign-in page. Its `next` param must be honoured only for same-origin paths."""
@@ -857,9 +872,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 "price_deviation" if name.startswith("max_price_deviation") else name)
             limits.append({
                 "name": name,
-                "value": str(stored[name]) if stored is not None and name in stored
-                         else str(getattr(defaults, name)),
-                "default": str(getattr(defaults, name)),
+                "value": _plain(stored[name]) if stored is not None and name in stored
+                         else _plain(getattr(defaults, name)),
+                "default": _plain(getattr(defaults, name)),
                 "stops": STOPS.get(name, ""),
                 # Halts the whole run, not just this order.
                 "halts": breach in halting,
