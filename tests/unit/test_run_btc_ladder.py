@@ -226,3 +226,13 @@ def test_live_stays_refused_until_its_limits_are_decided(monkeypatch) -> None:
     monkeypatch.setattr("sys.argv", ["run_btc_ladder.py", "--venue", "live"])
     with pytest.raises(SystemExit, match="live is not enabled"):
         run.main()
+
+
+@pytest.mark.fast
+def test_one_book_is_run_by_one_process_at_a_time(tmp_path) -> None:
+    run = _runner()
+    first = run.hold_the_book(tmp_path)
+    with pytest.raises(SystemExit, match="another process already runs"):
+        run.hold_the_book(tmp_path)
+    first.close()
+    run.hold_the_book(tmp_path).close()

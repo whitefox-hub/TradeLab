@@ -25,6 +25,7 @@ audit trail.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import time
 from dataclasses import asdict
@@ -56,6 +57,21 @@ VENUES = {
              DEMO_BASE),
     "live": (ExecutionMode.LIVE, "BTC ladder (live)", Path("data/forward/btc-ladder-live"), REST),
 }
+
+
+def hold_the_book(state_dir: Path):
+    """An exclusive lock on the book's state directory, held for the life of the process.
+
+    Two processes on one book each keep their own parts in memory and would each act on
+    them: two buys for one decision, two sales of one part. The kernel drops the lock when
+    the process dies however it dies, so a crash never leaves the book locked."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    handle = (state_dir / ".lock").open("w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(f"another process already runs the book in {state_dir}") from None
+    return handle
 
 
 def database_url(settings) -> str:
@@ -410,6 +426,7 @@ def main() -> int:
                          "correction, and the live database has none yet. Decide the real "
                          "account's limits and create them there first.")
     configure(args.venue)
+    lock = hold_the_book(STATE_DIR)  # noqa: F841 - held until the process exits
     client = httpx.Client(timeout=30.0)
     store = Store(database_url(get_settings()))
     adapter = None
