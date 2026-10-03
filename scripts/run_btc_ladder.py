@@ -100,7 +100,7 @@ class Book:
             "config": asdict(cfg),
             "budget": cfg.budget, "capital_is_fake": True, "mode": str(MODE),
             "prices": REST},
-            CAPITAL, limits_id)
+            CAPITAL, limits_id, str(MODE))
         path = STATE_DIR / "state.json"
         raw = json.loads(path.read_text()) if path.exists() else {}
         s = raw.get("state", {})
@@ -379,7 +379,7 @@ def start(store: Store, inst: Instrument, adapter: VenueAdapter | None = None) -
         if adapter is not None:
             old = json.loads((STATE_DIR / "state.json").read_text())["state"]["config"]
             book_run = store.ensure_run(store.ensure_strategy("btc-ladder", IMPL), LABEL, {},
-                                        CAPITAL, store.active_limits()[0])
+                                        CAPITAL, store.active_limits()[0], str(MODE))
             store.end(book_run, f"configuration changed from {old} to {asdict(cfg)}; "
                                 "parts carried to the next run")
             return Book(store, inst, cfg, adapter, carry=True)

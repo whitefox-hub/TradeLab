@@ -76,28 +76,31 @@ class Store:
                 "SELECT id FROM cost_models WHERE name = 'binance-retail'")).scalar_one()))
 
     def ensure_run(self, strategy_id: uuid.UUID, label: str, params: dict[str, Any],
-                   capital: Decimal, limits_id: uuid.UUID) -> uuid.UUID:
-        """The open run for this label, or a new one; a restart resumes, never duplicates."""
+                   capital: Decimal, limits_id: uuid.UUID,
+                   mode: str = "simulator") -> uuid.UUID:
+        """The open run for this label and mode, or a new one; a restart resumes, never
+        duplicates."""
         with self.engine.begin() as db:
             found = db.execute(sa.text(
-                "SELECT id FROM runs WHERE strategy_id = :s AND mode = 'simulator' "
+                "SELECT id FROM runs WHERE strategy_id = :s AND mode = :m "
                 "AND status = 'running' AND params->>'label' = :l"),
-                {"s": strategy_id, "l": label}).scalar()
+                {"s": strategy_id, "l": label, "m": mode}).scalar()
             if found:
                 return uuid.UUID(str(found))
             db.execute(sa.text(
                 "UPDATE runs SET status = 'stopped', ended_at = now(), "
                 "halt_reason = 'superseded by a new version of the strategy' "
-                "WHERE mode = 'simulator' AND ended_at IS NULL AND params->>'label' = :l"),
-                {"l": label})
+                "WHERE mode = :m AND ended_at IS NULL AND params->>'label' = :l"),
+                {"l": label, "m": mode})
             rid = uuid.uuid4()
             db.execute(sa.text(
                 "INSERT INTO runs (id, strategy_id, mode, venue, params, initial_capital, "
                 "base_currency, risk_limit_config_id, cost_model_id, code_version, "
                 "image_digest, config_hash, status, started_at) VALUES "
-                "(:id, :s, 'simulator', 'binance', CAST(:p AS jsonb), :c, 'USDT', :r, :cm, "
+                "(:id, :s, :m, 'binance', CAST(:p AS jsonb), :c, 'USDT', :r, :cm, "
                 ":v, 'unpinned', :h, 'running', :t)"),
-                {"id": rid, "s": strategy_id, "p": json.dumps({**params, "label": label}),
+                {"id": rid, "s": strategy_id, "m": mode,
+                 "p": json.dumps({**params, "label": label}),
                  "c": capital, "r": limits_id, "cm": self.cost_model_id(),
                  "v": _git_head(), "h": hashlib.sha256(json.dumps(params, sort_keys=True)
                                                        .encode()).hexdigest(),
