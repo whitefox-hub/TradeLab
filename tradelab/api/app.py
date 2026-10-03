@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -33,11 +32,7 @@ from tradelab.api.security import (
 from tradelab.api.settings_rules import RULES
 from tradelab.api.settings_rules import Invalid as InvalidSetting
 from tradelab.api.settings_rules import validate as validate_setting
-from tradelab.collectors.sentiment import CMC_SOURCE
-from tradelab.collectors.sentiment import SOURCE as FNG_SOURCE
 from tradelab.config import Settings
-from tradelab.scenario import run as scenario_run
-from tradelab.scenario.tilt import direction as trend_direction
 
 STATIC = Path(__file__).parent / "static"
 
@@ -55,18 +50,6 @@ class SettingRequest(BaseModel):
     value: dict[str, Any]
     rationale: str = Field(min_length=8)
 
-
-class ScenarioRequest(BaseModel):
-    """The market conditions a scenario simulation runs under. Plan.md §20.
-
-    Deliberately no asset or date. `extra="forbid"`: unknown fields error, not dropped.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    trend: int = Field(ge=1, le=10)
-    sentiment: int = Field(ge=1, le=100)
-    source: str = Field(default="manual", pattern="^(manual|derived|adopted)$")
 
 class RiskConfigRequest(BaseModel):
     """A new risk limit configuration. Plan.md §14.1, §12.4, §20.
@@ -155,24 +138,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
             "VALUES (:a, :ac, :k, :s, CAST(:p AS jsonb))"
         ), {"a": actor, "ac": action, "k": kind, "s": subject,
             "p": None if payload is None else json.dumps(payload)})
-
-    def _before_payload(before: Any) -> dict[str, Any] | None:
-        return None if before is None else {
-            "trend": before["trend"], "sentiment": before["sentiment"]}
-
-    def _run_payload(run_id: uuid.UUID, outcome: Any,
-                     seconds: float) -> dict[str, Any]:
-        return {
-            "id": str(run_id), "reference": outcome.reference,
-            "bars": outcome.bars,
-            "long_multiplier": outcome.long_multiplier,
-            "short_multiplier": outcome.short_multiplier,
-            "sentiment_bucket": outcome.sentiment_bucket,
-            "baseline": outcome.baseline, "conditioned": outcome.conditioned,
-            "reached_step": outcome.reached_step,
-            "stopped_because": outcome.stopped_because,
-            "notes": outcome.notes, "seconds": seconds,
-        }
 
 
     @app.post("/api/session")
@@ -450,209 +415,6 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return FileResponse(STATIC / "parameters.html")
 
 
-    @app.get("/api/scenario")
-    def read_scenario(who: Operator = operator,
-                      session: Session = session_dep) -> dict[str, Any]:
-        """The single market_conditions row (id=1, seeded by migration 0013)."""
-        row = session.execute(sa.text(
-            "SELECT trend, sentiment, source FROM market_conditions WHERE id = 1"
-        )).mappings().first()
-        if row is None:
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                "the conditions row is missing; migration 0013 seeds it")
-        return {"trend": row["trend"],
-                "direction": trend_direction(row["trend"]),
-                "sentiment": row["sentiment"], "source": row["source"]}
-
-    @app.put("/api/scenario")
-    def set_scenario(body: ScenarioRequest, who: Operator = operator,
-                     session: Session = session_dep) -> dict[str, Any]:
-        """Update the single conditions row (idempotent PUT); a real change starts a run."""
-        before = session.execute(sa.text(
-            "SELECT trend, sentiment FROM market_conditions WHERE id = 1 FOR UPDATE"
-        )).mappings().first()
-
-        row = session.execute(sa.text(
-            "UPDATE market_conditions SET trend = :t, sentiment = :s, "
-            "source = :src WHERE id = 1 AND ("
-            "  trend IS DISTINCT FROM :t OR sentiment IS DISTINCT FROM :s) "
-            "RETURNING trend, sentiment, source"
-        ), {"t": body.trend, "s": body.sentiment,
-            "src": body.source}).mappings().first()
-
-        if row is None:
-            current = session.execute(sa.text(
-                "SELECT trend, sentiment, source FROM market_conditions WHERE id = 1"
-            )).mappings().first()
-            if current is None:
-                raise HTTPException(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    "the conditions row is missing; migration 0013 seeds it")
-            return {"trend": current["trend"],
-                    "direction": trend_direction(current["trend"]),
-                    "sentiment": current["sentiment"],
-                    "source": current["source"], "changed": False}
-
-        started = time.perf_counter()
-        try:
-            outcome = scenario_run.execute(
-                body.trend, body.sentiment)
-        except FileNotFoundError as missing:
-            audit(session, who.email, "scenario.set", "scenario", "market",
-                  {"trend": body.trend, "sentiment": body.sentiment,
-                   "source": body.source,
-                   "from": _before_payload(before)})
-            session.commit()
-            return {"trend": row["trend"],
-                    "direction": trend_direction(row["trend"]),
-                    "sentiment": row["sentiment"], "changed": True,
-                    "run": None, "run_error": str(missing)}
-
-        run_id = uuid.uuid4()
-        session.execute(sa.text(
-            "INSERT INTO scenario_runs (id, actor, trend, "
-            "  sentiment, sentiment_bucket, long_multiplier, short_multiplier, "
-            "  reference, bars, baseline, conditioned, reached_step, "
-            "  stopped_because, source) "
-            "VALUES (:i, :a, :t, :s, :b, :lm, :sm, :r, :n, "
-            "  CAST(:base AS jsonb), CAST(:cond AS jsonb), :step, :why, :src)"
-        ), {"i": run_id, "a": who.email, "t": body.trend, "s": body.sentiment,
-            "b": outcome.sentiment_bucket, "lm": outcome.long_multiplier,
-            "sm": outcome.short_multiplier, "r": outcome.reference,
-            "n": outcome.bars, "base": json.dumps(outcome.baseline),
-            "cond": json.dumps(outcome.conditioned),
-            "step": outcome.reached_step, "why": outcome.stopped_because,
-            "src": body.source})
-
-        audit(session, who.email, "scenario.set", "scenario", "market",
-              {"trend": body.trend, "sentiment": body.sentiment,
-               "source": body.source,
-               "from": _before_payload(before), "run": str(run_id)})
-        session.commit()
-        return {"trend": row["trend"],
-                "direction": trend_direction(row["trend"]),
-                "sentiment": row["sentiment"], "source": row["source"],
-                "changed": True,
-                "run": _run_payload(run_id, outcome,
-                                    round(time.perf_counter() - started, 3))}
-
-    @app.get("/api/scenario/history")
-    def scenario_history(response: Response, limit: int = PER_PAGE, page: int = 1,
-                         who: Operator = operator,
-                         session: Session = session_dep) -> list[dict[str, Any]]:
-        """Scenario changes, newest first, read from `audit_log` (no second history table).
-
-        `from` is null on older entries; the screen treats those as changing both dials.
-        """
-        rows = session.execute(sa.text(
-            "SELECT actor, occurred_at, payload FROM audit_log "
-            "WHERE subject_kind = 'scenario' AND action = 'scenario.set' "
-            "ORDER BY occurred_at DESC, id DESC LIMIT :n OFFSET :o"
-        ), {"n": max(1, min(limit, PER_PAGE)),
-            "o": (max(1, page) - 1) * max(1, min(limit, PER_PAGE))}).mappings().all()
-        response.headers["X-Total-Count"] = str(session.execute(sa.text(
-            "SELECT count(*) FROM audit_log WHERE subject_kind = 'scenario' "
-            "AND action = 'scenario.set'")).scalar())
-
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            payload = row["payload"] or {}
-            out.append({
-                "at": row["occurred_at"].isoformat(),
-                "actor": row["actor"],
-                "trend": payload.get("trend"),
-                "sentiment": payload.get("sentiment"),
-                "from": payload.get("from"),
-            })
-        return out
-
-    @app.get("/api/scenario/runs")
-    def scenario_runs(response: Response, limit: int = PER_PAGE, page: int = 1,
-                      who: Operator = operator,
-                      session: Session = session_dep) -> list[dict[str, Any]]:
-        """Scenario runs, newest first. Conditions stored per run; never join market_conditions."""
-        rows = session.execute(sa.text(
-            "SELECT id, ran_at, actor, trend, sentiment, "
-            "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
-            "  bars, baseline, conditioned, reached_step, stopped_because "
-            "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT :n OFFSET :o"
-        ), {"n": max(1, min(limit, PER_PAGE)),
-            "o": (max(1, page) - 1) * max(1, min(limit, PER_PAGE))}).mappings().all()
-        response.headers["X-Total-Count"] = str(session.execute(
-            sa.text("SELECT count(*) FROM scenario_runs")).scalar())
-        return [{
-            "id": str(r["id"]), "at": r["ran_at"].isoformat(), "actor": r["actor"],
-            "trend": r["trend"], "direction": trend_direction(r["trend"]),
-            "sentiment": r["sentiment"], "sentiment_bucket": r["sentiment_bucket"],
-            "long_multiplier": float(r["long_multiplier"]),
-            "short_multiplier": float(r["short_multiplier"]),
-            "reference": r["reference"], "bars": r["bars"],
-            "baseline": r["baseline"], "conditioned": r["conditioned"],
-            "reached_step": r["reached_step"],
-            "stopped_because": r["stopped_because"],
-        } for r in rows]
-
-    @app.get("/api/fear-greed")
-    def read_fear_greed(who: Operator = operator,
-                        session: Session = session_dep) -> dict[str, Any]:
-        """CMC and alternative.me fear/greed side by side (never averaged), plus stored history
-        points from the deeper series. Read back only (§20.1)."""
-        def latest(source: str) -> dict[str, Any] | None:
-            row = session.execute(sa.text(
-                "SELECT day, value, classification, source, available_at "
-                "FROM sentiment_readings WHERE source = :s "
-                "ORDER BY day DESC LIMIT 1"
-            ), {"s": source}).mappings().first()
-            if row is None:
-                return None
-            return {
-                "source": row["source"], "day": row["day"].isoformat(),
-                "value": row["value"], "classification": row["classification"],
-                "available_at": row["available_at"].isoformat(),
-                "days_old": (datetime.now(UTC).date() - row["day"]).days,
-            }
-
-        primary = latest(CMC_SOURCE) or latest(FNG_SOURCE)
-        if primary is None:
-            return {"available": False}
-        other = latest(FNG_SOURCE if primary["source"] == CMC_SOURCE else CMC_SOURCE)
-
-        deep = session.execute(sa.text(
-            "SELECT source, count(*) AS n, max(day) AS newest "
-            "FROM sentiment_readings GROUP BY source ORDER BY n DESC LIMIT 1"
-        )).mappings().first()
-        history: dict[str, Any] = {"source": deep["source"], "entries": deep["n"]}
-
-        def at(offset: int) -> dict[str, Any] | None:
-            row = session.execute(sa.text(
-                "SELECT day, value, classification FROM sentiment_readings "
-                "WHERE source = :s AND day <= :d ORDER BY day DESC LIMIT 1"
-            ), {"s": deep["source"],
-                "d": deep["newest"] - timedelta(days=offset)}).mappings().first()
-            return None if row is None else {
-                "day": row["day"].isoformat(), "value": row["value"],
-                "classification": row["classification"]}
-
-        history |= {"yesterday": at(1), "last_week": at(7), "last_month": at(30)}
-
-        extremes = session.execute(sa.text(
-            "SELECT "
-            " (SELECT json_build_object('day', day, 'value', value, "
-            "         'classification', classification) FROM sentiment_readings "
-            "   WHERE source = :s AND day > :from_day "
-            "   ORDER BY value DESC, day DESC LIMIT 1) AS high, "
-            " (SELECT json_build_object('day', day, 'value', value, "
-            "         'classification', classification) FROM sentiment_readings "
-            "   WHERE source = :s AND day > :from_day "
-            "   ORDER BY value ASC, day DESC LIMIT 1) AS low"
-        ), {"s": deep["source"],
-            "from_day": deep["newest"] - timedelta(days=365)}).mappings().first()
-        history |= {"year_high": extremes["high"], "year_low": extremes["low"]}
-
-        return {"available": True, "primary": primary, "other": other,
-                "history": history}
-
-
     @app.get("/trade_lab", include_in_schema=False)
     def old_home() -> RedirectResponse:
         """Legacy path; redirects to /home."""
@@ -673,141 +435,9 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         """Home screen."""
         return FileResponse(STATIC / "index.html")
 
-    @app.get("/market-sentiment", include_in_schema=False)
-    def market_sentiment_screen() -> FileResponse:
-        """Operator's market trend and the measured fear/greed index on one page. §20."""
-        return FileResponse(STATIC / "market_sentiment.html")
-
     @app.get("/audit", include_in_schema=False)
     def audit_screen() -> FileResponse:
         return FileResponse(STATIC / "audit.html")
-
-    ALGORITHM = [
-        {
-            "phase": "Research · one study",
-            "steps": [
-                {"n": 1, "name": "Load bars",
-                 "does": "Read OHLCV for the asset and timeframe, from a "
-                         "materialised view when one is fresh.",
-                 "rule": "A bar's timestamp is its own close, not the moment it "
-                         "was ingested. Three columns keep that separate: "
-                         "event_time, ingest_time, available_at."},
-                {"n": 2, "name": "Check power, before anything is spent",
-                 "does": "Estimate the independent observations this design "
-                         "will produce and compare against the effect it is "
-                         "looking for.",
-                 "rule": "A study that cannot resolve its own target is refused "
-                         "here rather than discovered afterwards. The trial "
-                         "counter is monotonic, so an underpowered search still "
-                         "raises the bar for every study after it.",
-                 "cost": "Two campaigns were spent before this existed. Their "
-                         "negative results could only have confirmed a Sharpe "
-                         "above 3.5 — a formality, not a test."},
-                {"n": 3, "name": "Materialise features",
-                 "does": "Compute every feature in the set over the whole series.",
-                 "rule": "A value computed from bar t may only act from bar t+1. "
-                         "The shift is applied centrally, once, rather than left "
-                         "to each strategy to remember."},
-                {"n": 4, "name": "Score each configuration",
-                 "does": "For every parameter and threshold, build the position "
-                         "series and evaluate it.",
-                 "rule": "Scored on the TRAINING window only, and net of costs "
-                         "and funding.",
-                 "cost": "Both halves were defects. Selection saw the whole "
-                         "series while the comment above it claimed otherwise — "
-                         "BTCUSDT 4h went from 2.68 to 0.03 when fixed. And "
-                         "selection scored gross, promoting a configuration at "
-                         "+1.10 gross and -7.55 net over one at +0.94 net."},
-                {"n": 5, "name": "Select on the smoothed surface",
-                 "does": "Take the neighbourhood median of the score surface "
-                         "rather than its highest single point.",
-                 "rule": "The centre of the best region, not the luckiest draw. "
-                         "A peak found by searching is mostly the noise that "
-                         "made it a peak."},
-                {"n": 6, "name": "Evaluate on the held-out window",
-                 "does": "Run the chosen configuration on bars selection never "
-                         "touched.",
-                 "rule": "Net returns, and the effective observation count — "
-                         "not the bar count.",
-                 "cost": "Overlapping positions inflated the count 30 to 218 "
-                         "times. On identical returns the deflated Sharpe went "
-                         "from 1.000 to 0.024 once corrected."},
-                {"n": 7, "name": "Deflate and judge",
-                 "does": "Deflated Sharpe, PBO, minimum track record and "
-                         "parameter stability, against a recorded threshold set.",
-                 "rule": "Every trial raises the bar, including the discarded "
-                         "ones. A positive result below what the sample can "
-                         "resolve is inconclusive, not a pass.",
-                 "cost": "The gate returned PASS on a Sharpe it had itself just "
-                         "declared indistinguishable from chance."},
-            ],
-        },
-        {
-            "phase": "Execution · one order",
-            "steps": [
-                {"n": 8, "name": "Reconcile before anything is sent",
-                 "does": "Compare the position we believe we hold against what "
-                         "the venue says.",
-                 "rule": "Mandatory at startup. A discrepancy halts and is never "
-                         "silently corrected — adopting the venue's number hides "
-                         "the bug that produced the gap, and the gap is the only "
-                         "evidence it exists."},
-                {"n": 9, "name": "Strategy asks",
-                 "does": "The decision code produces a target position. It does "
-                         "not know which mode it is running in.",
-                 "rule": "Byte-identical across backtest, simulator, testnet and "
-                         "live. Only the data feed and the venue adapter change."},
-                {"n": 10, "name": "The scenario conditions the size",
-                 "does": "In a scenario run, scale the intended position by the "
-                         "market trend set on Market Sentiment: positions "
-                         "agreeing with it up, positions disagreeing down, by up "
-                         "to half at magnitude 10. **Not yet on the execution "
-                         "path.** The tilt is imported by the scenario runner "
-                         "and by nothing else, and the event damping written for "
-                         "this step — half under a live regime shift, seven "
-                         "tenths inside a scheduled one's anticipation window — "
-                         "is constructed only in a test. Both are described here "
-                         "as what this step will do, and marked so, because a "
-                         "step described by how it ought to work reads as how it "
-                         "does.",
-                 "rule": "The market trend conditions, it does not signal. §11.3 puts "
-                         "direction as an input to an expected-reaction model "
-                         "and never a signal in itself — what is tradeable is "
-                         "the residual, observed minus expected, and trading a "
-                         "view everyone can read trades the half already priced. "
-                         "So it scales a position and never creates one: applied "
-                         "to a flat book it is still flat, and it cannot change "
-                         "a sign.",
-                 "cost": "The ceiling of half is chosen to bound the damage, not "
-                         "because anything measured it. An operator who could "
-                         "turn a systematic book into a directional bet with one "
-                         "slider would have the slider as the strategy. Whether "
-                         "the tilt helps at all is untested, which is why a run "
-                         "reports it against the same run without it."},
-                {"n": 11, "name": "Risk engine vetoes",
-                 "does": "Sixteen limits, evaluated by a component independent "
-                         "of the strategy.",
-                 "rule": "Positions and orders are counted here, from observed "
-                         "fills — never from what the strategy reports. A "
-                         "strategy that miscounts its own state is the case "
-                         "these limits exist for. Enforced in every mode, so "
-                         "the limiter's first real execution is never with real "
-                         "money."},
-                {"n": 12, "name": "Write the intent, then send",
-                 "does": "Record what was wanted, with a deterministic order id, "
-                         "before calling the venue.",
-                 "rule": "Written before, never after. A process that dies on "
-                         "the next line leaves a record that startup can resolve "
-                         "by asking about a known id rather than guessing from a "
-                         "position delta."},
-                {"n": 13, "name": "Fold the fill",
-                 "does": "Update the position from the fill the venue reported.",
-                 "rule": "Positions move from fills and nothing else. A view "
-                         "derived from a second source can agree with the venue "
-                         "while both are wrong."},
-            ],
-        },
-    ]
 
     @app.get("/api/risk-limits")
     def risk_limits(history_page: int = 1, events_page: int = 1, who: Operator = operator,
@@ -1032,70 +662,10 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         age = (datetime.now(UTC) - datetime.fromisoformat(status_["as_of"])).total_seconds()
         return {"available": True, "age_seconds": round(age), **status_}
 
-    @app.get("/api/algorithm")
-    def algorithm(who: Operator = operator,
-                  session: Session = session_dep) -> dict:
-        """The decision sequence with stored counts and the last scenario run (§20.1)."""
-        def scalar(query: str) -> int:
-            try:
-                return int(session.execute(sa.text(query)).scalar() or 0)
-            except Exception:
-                session.rollback()
-                return 0
-
-        last = session.execute(sa.text(
-            "SELECT id, ran_at, trend, sentiment, "
-            "  sentiment_bucket, long_multiplier, short_multiplier, reference, "
-            "  bars, baseline, conditioned, reached_step, stopped_because, source "
-            "FROM scenario_runs ORDER BY ran_at DESC, id DESC LIMIT 1"
-        )).mappings().first()
-
-        return {
-            "phases": ALGORITHM,
-            "observed": {
-                "trials": scalar("SELECT coalesce(sum(executed_trials),0) FROM studies"),
-                "experiments": scalar("SELECT count(*) FROM experiments"),
-                "verdicts": scalar("SELECT count(*) FROM validation_reports"),
-                "passed": scalar(
-                    "SELECT count(*) FROM validation_reports WHERE verdict='pass'"),
-                "scenario_runs": scalar("SELECT count(*) FROM scenario_runs"),
-                "runs": scalar("SELECT count(*) FROM runs"),
-                "risk_events": scalar("SELECT count(*) FROM risk_events"),
-            },
-            "scenario_steps": {
-                "executed": list(scenario_run.EXECUTED_STEPS),
-                "substituted": list(scenario_run.SUBSTITUTED_STEPS),
-                "gate": scenario_run.GATE_STEP,
-            },
-            "last_run": None if last is None else {
-                "id": str(last["id"]), "at": last["ran_at"].isoformat(),
-                "trend": last["trend"],
-                "direction": trend_direction(last["trend"]),
-                "sentiment": last["sentiment"],
-                "sentiment_bucket": last["sentiment_bucket"],
-                "long_multiplier": float(last["long_multiplier"]),
-                "short_multiplier": float(last["short_multiplier"]),
-                "reference": last["reference"], "bars": last["bars"],
-                "baseline": last["baseline"], "conditioned": last["conditioned"],
-                "reached_step": last["reached_step"],
-                "stopped_because": last["stopped_because"],
-                "source": last["source"],
-            },
-        }
-
     @app.get("/risk-limits", include_in_schema=False)
     def risk_limits_screen() -> FileResponse:
         """Risk limits screen; limits are versioned configs, not editable settings (§12.4)."""
         return FileResponse(STATIC / "risk_limits.html")
-
-    @app.get("/algorithm", include_in_schema=False)
-    def algorithm_screen() -> FileResponse:
-        return FileResponse(STATIC / "algorithm.html")
-
-    @app.get("/pipeline", include_in_schema=False)
-    def old_pipeline() -> RedirectResponse:
-        """Legacy path; redirects to /algorithm."""
-        return RedirectResponse("/algorithm", status_code=308)
 
     @app.get("/api/health")
     def health() -> dict:

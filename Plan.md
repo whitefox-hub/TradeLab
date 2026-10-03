@@ -25,7 +25,7 @@ parts (now 20), each bought at its own price and sold on its own, and never sell
 | Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
 | Screen | `http://127.0.0.1:8010/home`: the position and its P&L; the **BTC ladder** card (price, the high since the last buy, the next buy down and on a correction, and every part's cost, gain, minimum, cap and sell point, published by the book every 10 s and read by `/api/ladder`); a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours |
 | Parameters | `http://127.0.0.1:8010/parameters`: budget, parts, step, correction and pullback (now $2,000, 20, 1.5%, 5%, 2%), validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
-| Other screens | Audit, Risk limits and the scenario history page their lists, 100 records at a time. Algorithm and Market Sentiment belonged to the removed trend book; the ladder reads neither |
+| Other screens | Audit and Risk limits, which page their lists 100 records at a time |
 
 **What the history says about it** (BTC spot hourly closes, $10,000, the settings now in force:
 20 parts, 1.5% step, 5% correction, 2% pullback): 2018-01 → 2026-09, $56,557 against $61,242
@@ -47,6 +47,10 @@ whose run is ended in the database.
   history before commit `3335646`. PREREG-001 to 006 and the FINDINGs are kept;
 * the macro screen and its catalogue (§20.6, retired 2026-09-28): no strategy used them. The
   tables remain;
+* the Algorithm and Market Sentiment screens, 2026-10-03, with their APIs (`/api/algorithm`,
+  `/api/scenario`, `/api/fear-greed`) and the trend and fear/greed cards on Home: they belonged
+  to the removed trend book and the ladder reads neither. The tables (`market_conditions`,
+  `scenario_runs`, `sentiment_readings`) and the `tradelab/scenario` package remain;
 * dead code, 2026-10-01: modules nothing imported (`engines/tier_b`, `orchestration/persist`,
   `storage/dataset`, `validation/baselines`, `validation/splits`), the 5-minute dataset
   pipeline of the Flash Strike studies, and unused functions. Comments were removed from the

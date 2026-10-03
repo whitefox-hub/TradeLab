@@ -36,21 +36,6 @@ def test_the_bands_are_the_ones_the_index_actually_uses() -> None:
 
 
 @pytest.mark.fast
-def test_the_screen_and_the_engine_agree_on_the_bands() -> None:
-    """Two copies of the boundaries, one in Python and one in the page. The one
-    nobody checks is the one that drifts, and a screen labelling 50 'Greed'
-    while the engine files the run under 'Neutral' is a disagreement no result
-    would reveal."""
-    from pathlib import Path
-
-    page = (Path(__file__).resolve().parents[2]
-            / "tradelab/api/static/market_sentiment.html").read_text()
-    for ceiling, name in SENTIMENT_BUCKETS[:-1]:
-        assert f'if (value <= {ceiling}) return "{name}";' in page, (
-            f"the page does not put {name} at {ceiling}")
-
-
-@pytest.mark.fast
 def test_the_sentiment_does_not_reach_a_position() -> None:
     """§11.4 has market state conditioning a model that does not exist yet.
     Applying a number whose method is not auditable would be inventing a market
@@ -162,7 +147,6 @@ def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
     rather than against the prose: the day the tilt reaches the execution path,
     this fails and the sentence gets rewritten.
     """
-    import inspect
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "tradelab"
@@ -183,12 +167,6 @@ def test_step_ten_does_not_claim_a_path_it_has_not_reached() -> None:
         and ("tilt import apply" in f.read_text() or "tilt.apply" in f.read_text())
     ]
     assert appliers == [], f"the tilt is applied in {appliers}"
-
-    from tradelab.api.app import create_app
-
-    source = inspect.getsource(create_app)
-    assert "Not yet on the execution " in source
-    assert "is constructed only in a test" in source
 
 
 @pytest.mark.fast
@@ -225,16 +203,12 @@ def test_the_study_counts_only_what_a_person_set() -> None:
     hypothesis, and nothing afterwards could separate them."""
     from pathlib import Path
 
-    from tradelab.api.app import ScenarioRequest
     from tradelab.registry.models import MarketConditions, ScenarioRun
     from tradelab.scenario import study
 
     assert study.SOURCE == "manual"
-    assert "source" in ScenarioRequest.model_fields
     assert "source" in MarketConditions.__table__.columns
     assert "source" in ScenarioRun.__table__.columns
-
-    assert ScenarioRequest(trend=6, sentiment=50).source == "manual"
 
     text = (Path(__file__).resolve().parents[2]
             / "research/PREREG-005-operator-trend.md").read_text()

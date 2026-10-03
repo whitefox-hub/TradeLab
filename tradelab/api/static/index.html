@@ -76,7 +76,7 @@
       <tbody id="book"></tbody>
     </table>
 
-    <h2 class="section">Market<span class="note">Read back, never computed.</span></h2>
+    <h2 class="section">Data<span class="note">Read back, never computed.</span></h2>
     <div class="cards context" id="cards"></div>
 
     <footer>
@@ -131,8 +131,7 @@ function renderBook(book) {
         ? `${book.runs_live} forward book(s) run in the simulator on fake capital
            (BTC +1%) and hold nothing at this moment.`
         : "No forward book is running."}
-      Nothing has been promoted through §15 (see the
-      <a href="/algorithm">sequence</a>), so no book here is a validated
+      Nothing has been promoted through §15, so no book here is a validated
       strategy.</p></td></tr>`;
     return;
   }
@@ -241,25 +240,14 @@ async function load() {
   ladder();
   clearInterval(load.ladder);
   load.ladder = setInterval(ladder, 15000);
-  const [book, scenario, sentiment, quality] = await Promise.all([
+  const [book, quality] = await Promise.all([
     api("/api/positions"),
-    api("/api/scenario"),
-    api("/api/fear-greed"),
     api("/api/data-quality").catch(() => []),
   ]);
 
   renderBook(book);
 
-  const pressure = scenario.direction === "NEUTRAL"
-    ? "NEUTRAL" : `${scenario.direction} ${scenario.trend}/10`;
-  const fg = sentiment.available ? sentiment.primary : null;
-
   $("cards").innerHTML = [
-    { n: pressure, k: "market trend",
-      d: `Sentiment assumed at ${scenario.sentiment}. Set on Market Sentiment.` },
-    { n: fg ? fg.value : "—", k: "fear and greed",
-      d: fg ? `${fg.classification}, ${fg.source}, as of ${fg.day}.`
-            : "No readings stored yet." },
     { n: quality.length, k: "open data-quality issues",
       d: "Anomalies are recorded, never silently corrected." },
   ].map((c) => `

@@ -357,80 +357,13 @@ def test_the_content_area_is_not_capped(client: TestClient) -> None:
 
 
 @pytest.mark.fast
-def test_the_algorithm_screen_is_served_and_in_the_menu(client: TestClient) -> None:
-    assert client.get("/algorithm").status_code == 200
-    assert 'href: "/algorithm"' in client.get("/static/app.js").text
-
-
-@pytest.mark.fast
-def test_the_old_pipeline_path_redirects(client: TestClient) -> None:
-    """It showed project status; the question it was asked was about the
-    decision sequence. A bookmark should not meet a 404."""
-    response = client.get("/pipeline", follow_redirects=False)
-    assert response.status_code == 308
-    assert response.headers["location"] == "/algorithm"
-
-
-def _algorithm_source() -> str:
-    """The ALGORITHM literal alone.
-
-    Ended at the list's own closing bracket rather than at whatever route
-    follows it. The first version sliced up to `@app.get("/api/algorithm")` and
-    broke the moment another endpoint was written above that one — counting
-    `"name":` out of a SQL row as though it were a step.
-    """
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    start = source.index("ALGORITHM = [")
-    end = source.index("\n    ]\n", start) + len("\n    ]\n")
-    return source[start:end]
-
-
-@pytest.mark.fast
-def test_every_step_carries_the_rule_that_must_hold() -> None:
-    """A sequence without its invariants is a list of function names. What makes
-    it the algorithm is what has to be true when each step runs."""
-    block = _algorithm_source()
-    assert block.count('"rule":') == block.count('"name":')
-    assert block.count('"does":') == block.count('"name":')
-
-
-@pytest.mark.fast
-def test_the_steps_are_numbered_in_the_order_they_run() -> None:
-    """The screen's whole claim is the ordering, so a gap or a repeat in the
-    numbering is the one defect it cannot be allowed to have."""
-    import re
-
-    block = _algorithm_source()
-    numbers = [int(n) for n in re.findall(r'"n": (\d+)', block)]
-    assert numbers == list(range(1, len(numbers) + 1))
-
-
-@pytest.mark.fast
-def test_the_steps_that_were_defects_say_what_they_cost() -> None:
-    """A rule with no story behind it reads as a preference, and the next person
-    reorders it. These four were real defects in this codebase."""
-    block = _algorithm_source()
-    assert block.count('"cost":') >= 4
-    assert "2.68" in block and "0.03" in block
-    assert "1.000 to 0.024" in block
-
-
-@pytest.mark.fast
-def test_the_algorithm_screen_computes_nothing() -> None:
-    source = Path(__import__("tradelab.api.app", fromlist=["x"]).__file__).read_text()
-    block = source[source.index('def algorithm('):source.index('def algorithm_screen(')]
-    assert "SELECT count(*)" in block or "sum(executed_trials)" in block
-    assert "session.rollback()" in block, "a missing table would take the view down"
-
-
-@pytest.mark.fast
 def test_the_chrome_is_revalidated_rather_than_cached(client: TestClient) -> None:
     """The sidebar lives in one file, so a cached app.js means a screen that
     exists is missing from the navigation — which reads as the screen not having
     been built rather than as a stale asset."""
     response = client.get("/static/app.js")
     assert "no-cache" in response.headers.get("cache-control", "")
-    assert client.get("/algorithm").status_code == 200
+    assert client.get("/parameters").status_code == 200
 
 
 @pytest.mark.fast
@@ -449,7 +382,6 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
         ("/api/approvals", "POST"),
         ("/api/positions/close", "POST"),
         ("/api/risk-limits", "POST"),
-        ("/api/scenario", "PUT"),
         ("/api/session", "DELETE"),
         ("/api/session", "POST"),
         ("/api/settings/{key}", "POST"),
@@ -505,108 +437,6 @@ def test_every_screen_mounts_the_shared_sidebar(client: TestClient) -> None:
         assert '<link rel="stylesheet" href="/static/app.css">' in page, path
         assert '<script src="/static/app.js"></script>' in page, path
         assert f'mount("{path}"' in page, f"{path} does not mark itself active"
-
-
-@pytest.mark.fast
-def test_reading_or_setting_the_scenario_requires_a_session(client: TestClient) -> None:
-    assert client.get("/api/scenario").status_code == 401
-    assert client.put("/api/scenario", json={
-        "trend": 2, "sentiment": 20}).status_code == 401
-    assert client.get("/api/fear-greed").status_code == 401
-
-
-@pytest.mark.fast
-def test_there_is_no_route_that_creates_a_second_scenario(client: TestClient) -> None:
-    """One set of conditions. A POST or a DELETE would imply otherwise, and an
-    API that implies a second scenario is one a client will eventually try to
-    make."""
-    paths = {route.path for route in client.app.routes}
-    assert "/api/scenario" in paths
-    assert not any(p.startswith("/api/trends") for p in paths)
-
-    methods = {
-        method
-        for route in client.app.routes
-        if getattr(route, "path", None) == "/api/scenario"
-        for method in getattr(route, "methods", set())
-    }
-    assert methods == {"GET", "PUT"}, f"the scenario answers to {methods}"
-
-
-@pytest.mark.fast
-def test_the_assumed_sentiment_is_not_the_measured_one(client: TestClient) -> None:
-    """The index printed today is a measurement: dated, published once, never
-    revised. The scenario's sentiment is an assumption with no date. Separate
-    fields, separate tables, and separate routes — holding both in one number
-    would make an opinion indistinguishable from a measurement, which is the
-    failure the hand-entered event corpus was kept apart from the collected one
-    to avoid.
-    """
-    from tradelab.registry.models import MarketConditions, SentimentReading
-
-    assert MarketConditions.__tablename__ != SentimentReading.__tablename__
-    dated = [c.name for c in MarketConditions.__table__.columns
-             if str(c.type).upper().startswith(("DATE", "TIMESTAMP"))]
-    assert not dated, f"the scenario grew a date column: {dated}"
-
-    paths = {route.path for route in client.app.routes}
-    assert "/api/fear-greed" in paths
-    assert "/api/sentiment" not in paths
-
-
-@pytest.mark.fast
-def test_a_sentiment_outside_one_to_a_hundred_is_refused() -> None:
-    """The scale is 1 to 100. A number outside it would be read downstream as a
-    position on a scale that does not exist, and nothing further along could
-    tell it from a real one."""
-    import pydantic
-
-    from tradelab.api.app import ScenarioRequest
-
-    for bad in (0, -1, 101, 1000):
-        with pytest.raises(pydantic.ValidationError):
-            ScenarioRequest(trend=5, sentiment=bad)
-    for good in (1, 50, 100):
-        assert ScenarioRequest(trend=5, sentiment=good).sentiment == good
-
-
-@pytest.mark.fast
-def test_a_magnitude_outside_the_scale_is_refused() -> None:
-    """The scale is defined as 1 to 10. A 70 is not a stronger market trend, it is a
-    number the engine would read as seven times the defined extreme — and
-    nothing downstream could tell it from a real one."""
-    import pydantic
-
-    from tradelab.api.app import ScenarioRequest
-
-    for bad in (-1, 11, 70, 1000):
-        with pytest.raises(pydantic.ValidationError):
-            ScenarioRequest(direction="UP", magnitude=bad, sentiment=50)
-
-
-@pytest.mark.fast
-def test_the_scenario_carries_no_field_beyond_what_it_needs() -> None:
-    """No asset, because there is one set of conditions and they are the
-    market's; no date, because none of this happened.
-
-    `source` is the fourth, and it earns its place: it says who decided, which
-    PREREG-005 filters on. Without it a value computed from a trade count and a
-    value a person read in the news are the same row, and a study measuring the
-    person would count both.
-
-    `extra="forbid"` matters as much as the field list. Without it a client
-    sending `asset` gets a 200 and the value is dropped, which is how an
-    operator comes to believe a setting took effect.
-    """
-    import pydantic
-
-    from tradelab.api.app import ScenarioRequest
-
-    assert set(ScenarioRequest.model_fields) == {
-        "trend", "sentiment", "source"}
-    for smuggled in ("asset", "happened_at", "duration_hours", "note", "mode"):
-        with pytest.raises(pydantic.ValidationError):
-            ScenarioRequest(trend=6, sentiment=50, **{smuggled: 1})
 
 
 @pytest.mark.fast
@@ -708,98 +538,10 @@ def test_the_menu_offers_no_screen_that_is_gone(client: TestClient) -> None:
     menu = client.get("/static/app.js").text
     assert "/news" not in menu
     assert "/trends" not in menu
+    assert "/algorithm" not in menu
+    assert "/market-sentiment" not in menu
     for href in set(re.findall(r'href: "(/[a-z_-]+)"', menu)):
         assert client.get(href).status_code == 200, f"{href} is in the menu but 404s"
-
-
-@pytest.mark.fast
-def test_the_scenario_screen_flags_unsaved_changes(client: TestClient) -> None:
-    """The Save button sits with the title, away from the sliders it governs, so
-    a change made at the bottom of the page can be forgotten on the way up.
-
-    Without the flag the move trades a tidier header for a setting the operator
-    believes took effect — which is the same failure as a silently dropped field,
-    arriving through the layout instead.
-    """
-    markup = client.get("/static/market_sentiment.html").text
-    assert "Unsaved changes" in markup
-    assert "function paintDirty" in markup
-    assert "stored = {trend: saved.trend" in markup
-
-
-@pytest.mark.fast
-def test_each_pane_shows_the_history_of_its_own_dial(client: TestClient) -> None:
-    """A change to the sentiment listed under the market trend would read as the market trend
-    having been set to the value it already held, which is the repetition the
-    write path exists to avoid."""
-    markup = client.get("/static/market_sentiment.html").text
-    assert 'id="t-history"' in markup
-    assert 'id="s-history"' in markup
-    assert "/api/scenario/history" in markup
-    assert "e.from ?? (raw[i + 1]" in markup
-
-
-@pytest.mark.integration
-def test_saving_the_same_scenario_twice_records_it_once(monkeypatch) -> None:
-    """A log that records non-changes cannot answer when something was last
-    changed, which is the only question it exists for.
-
-    The no-op test lives in the UPDATE's WHERE rather than in a read-then-
-    compare, because between those two statements another request can change the
-    value and the comparison would be against something no longer there. Tested
-    through the API, since that is the path an operator takes.
-    """
-    import sqlalchemy as sa_
-
-    from tradelab.config import Settings
-
-    monkeypatch.setenv("TRADELAB_ADMIN_SALT", SALT)
-    monkeypatch.setenv("TRADELAB_ADMIN_HASH", hash_password(PASSWORD, SALT))
-    monkeypatch.setenv("TRADELAB_SESSION_SECRET", new_secret())
-    engine = sa_.create_engine(Settings().database_url)
-    client = TestClient(create_app(engine=engine))
-
-    email = engine.connect().execute(
-        sa_.text("SELECT email FROM users LIMIT 1")).scalar()
-    if email is None:
-        pytest.skip("no operator row")
-    assert client.post(
-        "/api/session", json={"email": email, "password": PASSWORD}).status_code == 200
-
-    def entries() -> int:
-        with engine.connect() as conn:
-            return conn.execute(sa_.text(
-                "SELECT count(*) FROM audit_log WHERE action = 'scenario.set'"
-            )).scalar_one()
-
-    before = entries()
-    body = {"direction": "DOWN", "magnitude": 4, "sentiment": 33}
-
-    first = client.put("/api/scenario", json=body)
-    assert first.status_code == 200, first.text
-    assert first.json()["changed"] is True
-    assert entries() == before + 1
-
-    for _ in range(3):
-        repeat = client.put("/api/scenario", json=body)
-        assert repeat.status_code == 200, repeat.text
-        assert repeat.json()["changed"] is False
-        assert repeat.json()["magnitude"] == 4
-    assert entries() == before + 1, "a repeated save added a log entry"
-
-    moved = client.put("/api/scenario", json={**body, "sentiment": 34})
-    assert moved.json()["changed"] is True
-    assert entries() == before + 2
-
-    with engine.connect() as conn:
-        payload = conn.execute(sa_.text(
-            "SELECT payload FROM audit_log WHERE action = 'scenario.set' "
-            "ORDER BY id DESC LIMIT 1")).scalar_one()
-    assert payload["from"] == {"direction": "DOWN", "magnitude": 4, "sentiment": 33}
-
-    history = client.get("/api/scenario/history?limit=5").json()
-    assert history[0]["sentiment"] == 34
-    assert history[0]["from"]["sentiment"] == 33
 
 
 @pytest.mark.integration
@@ -840,121 +582,6 @@ def test_an_unchanged_reading_is_not_rewritten(monkeypatch) -> None:
     with engine.begin() as conn:
         conn.execute(sa_.text("DELETE FROM sentiment_readings WHERE day = :d"),
                      {"d": day.date()})
-
-
-@pytest.mark.fast
-def test_the_bars_show_what_is_applied_and_save_is_what_moves_them(
-    client: TestClient,
-) -> None:
-    """The sliders show what is being considered; the coloured bars show what is
-    in force. Between a drag and a save the two disagree on purpose, and that
-    disagreement is the whole reason there is a button.
-
-    Pinned because it is easy to undo by accident: wiring a pin to the slider
-    is the obvious thing to write, and it would make the screen say a value was
-    applied the moment it was dragged.
-    """
-    markup = client.get("/static/market_sentiment.html").text
-
-    assert "function paintApplied" in markup
-    assert '$("s-pin").style.left = `${stored.sentiment}%`' in markup
-    assert '$("t-pin").style.left = `${trackPct(stored.trend)}%`' in markup
-
-    body = markup[markup.index('$("save").onclick'):]
-    assert "paintApplied();" in body, "a save does not move the bars"
-
-
-@pytest.mark.fast
-def test_the_index_and_the_assumption_share_one_bar_but_not_one_mark(
-    client: TestClient,
-) -> None:
-    """The separate 'Test under' scale is gone: two gradients for one concept
-    read as two concepts. One bar now, with two marks — the thin one is what the
-    index printed, the solid one is what a simulation is told to assume.
-
-    They stay distinguishable because that is the distinction the whole screen
-    rests on. A single mark would put a measurement and an opinion in the same
-    place, which is what separate tables and separate routes exist to prevent.
-    """
-    markup = client.get("/static/market_sentiment.html").text
-
-    pane = markup[markup.index("<h2>Fear and Greed</h2>"):markup.index('id="s-history"')]
-    assert pane.count('class="scale"') == 1, "the pane has more than one gradient"
-    assert 'class="mark" id="fg-pin"' in pane, "the measured mark is missing"
-    assert 'class="pin" id="s-pin"' in pane, "the applied pin is missing"
-    assert ">index<" in pane and ">applied<" in pane
-
-    assert pane.index('id="s-range"') < pane.index('class="scale"')
-
-
-@pytest.mark.fast
-def test_saving_the_scenario_is_what_starts_a_run(client: TestClient) -> None:
-    """The Save button activates the algorithm, so the run hangs off the write
-    rather than off a second route the screen has to remember to call. There is
-    still no new write route: a run is recorded by the save that caused it.
-    """
-    import inspect
-
-    from tradelab.api.app import create_app as factory
-
-    source = inspect.getsource(factory)
-    put = source[source.index('@app.put("/api/scenario")'):]
-    put = put[:put.index('@app.get("/api/scenario/runs")')]
-    assert "scenario_run.execute" in put, "saving does not start a run"
-    assert put.index('"changed": False') < put.index("scenario_run.execute")
-
-    paths = {route.path for route in client.app.routes}
-    assert "/api/scenario/runs" in paths
-    methods = {
-        method
-        for route in client.app.routes
-        if getattr(route, "path", None) == "/api/scenario/runs"
-        for method in getattr(route, "methods", set())
-    }
-    assert methods == {"GET"}
-
-
-@pytest.mark.fast
-def test_the_algorithm_screen_no_longer_credits_news_for_the_sizing(
-    client: TestClient,
-) -> None:
-    """Step 10 named a screen that has been deleted. A sequence describing a
-    step by a mechanism that no longer exists is worse than one that omits it,
-    because it reads as current."""
-    import inspect
-
-    from tradelab.api.app import create_app as factory
-
-    source = inspect.getsource(factory)
-    assert "News conditions the size" not in source
-    assert "The scenario conditions the size" in source
-    assert "it does not signal" in source
-
-
-@pytest.mark.fast
-def test_the_algorithm_screen_reports_a_run_rather_than_describing_a_path(
-    client: TestClient,
-) -> None:
-    """The sequence used to be a static list. Saving the scenario now runs it,
-    so the screen marks what each step actually did — and the marking is
-    derived, never asserted in the page.
-
-    A screen that decides for itself which steps ran keeps saying so after they
-    stop.
-    """
-    markup = client.get("/static/algorithm.html").text
-
-    assert "function verdictFor" in markup
-    assert "data.scenario_steps" in markup
-    assert "steps.substituted.includes(n)" in markup
-
-    assert "data.observed.runs === 0" in markup
-    assert "never run" in markup
-
-    import re
-
-    assert not re.search(r'step\.n\s*(===|==)\s*\d', markup), (
-        "a step's status is decided by its number rather than by what happened")
 
 
 @pytest.mark.fast
@@ -1058,12 +685,11 @@ def test_the_book_says_why_it_is_empty(client: TestClient) -> None:
     """A blank table reads as a quiet day. Forward books now run in the
     simulator (PREREG-008, 009), so an empty table may be a flat book rather
     than an empty registry, and either way nothing has been promoted. The empty
-    state says both and points at the sequence."""
+    state says both."""
     markup = client.get("/static/index.html").text
     assert "empty-why" in markup
     assert "Nothing has been promoted through §15" in markup
     assert "fake capital" in markup
-    assert "/algorithm" in markup
 
 
 @pytest.mark.fast
@@ -1281,28 +907,6 @@ def test_the_screen_marks_one_active_and_the_rest_inactive(
 
 
 @pytest.mark.fast
-def test_the_screen_offers_one_scale_with_five_in_the_middle(
-    client: TestClient,
-) -> None:
-    """The three direction buttons are gone. Five is neutral, and the scale runs
-    bearish-left to bullish-right like the sentiment scale beneath it, so the
-    two cannot disagree about which way is which.
-
-    A date is still not offered: the trend is a condition to test under and not
-    a record of something that happened.
-    """
-    markup = client.get("/static/market_sentiment.html").text
-
-    for absent in ('id="t-up"', 'id="t-normal"', 'id="t-down"',
-                   'type="date"', 'type="datetime-local"', 'id="t-when"'):
-        assert absent not in markup, f"the screen still offers {absent}"
-
-    assert 'id="t-mag" min="1" max="10"' in markup
-    assert 'id="t-neutral"' in markup
-    assert "nothing new" in markup
-
-
-@pytest.mark.fast
 def test_the_menu_is_the_working_loop_and_nothing_else(client: TestClient) -> None:
     """Set the conditions, run the algorithm, see where it stops, see what would
     stop it if it ran — plus the record. Everything else that was on the menu
@@ -1319,8 +923,7 @@ def test_the_menu_is_the_working_loop_and_nothing_else(client: TestClient) -> No
     linked = re.findall(r'href: "(/[a-z_-]+)"', menu)
 
     assert linked == [
-        "/home", "/algorithm", "/market-sentiment", "/parameters",
-        "/audit", "/risk-limits",
+        "/home", "/parameters", "/audit", "/risk-limits",
     ], f"the menu is now {linked}"
 
     assert "soon: true" not in menu
@@ -1339,27 +942,6 @@ def test_a_removed_screen_leaves_its_data_behind(client: TestClient) -> None:
         assert endpoint in paths, f"{endpoint} went with its screen"
 
     assert "data-quality" in client.get("/static/index.html").text
-    assert "experiments" in client.get("/static/algorithm.html").text
-
-
-@pytest.mark.fast
-def test_the_home_page_reads_only_fields_the_scenario_returns(client: TestClient) -> None:
-    """Home showed "NEUTRAL undefined" for as long as it outlived b3f90ee: the
-    trend became one 1-10 scale, `magnitude` left the response, and the card
-    went on reading it — and on testing for a "NORMAL" that no longer exists."""
-    import inspect
-    import re
-
-    route = next(r for r in client.app.routes
-                 if getattr(r, "path", None) == "/api/scenario"
-                 and "GET" in getattr(r, "methods", set()))
-    returned = set(re.findall(r'"(\w+)":', inspect.getsource(route.endpoint)))
-    page = client.get("/home").text
-    read = set(re.findall(r"scenario\.(\w+)", page))
-
-    assert read, "the home page no longer reads the scenario; update this test"
-    assert read <= returned, f"home reads {sorted(read - returned)}, which is never sent"
-    assert '"NORMAL"' not in page, "NORMAL is not a direction the scale produces"
 
 
 @pytest.mark.fast
