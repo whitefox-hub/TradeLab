@@ -215,7 +215,7 @@ class Book:
             if action == "ladder.buy_request":
                 refused = self.buy(price, now, manual=True)
                 outcome = ({"result": "refused", "why": refused} if refused else
-                           {"result": "bought", "price": str(price),
+                           {"result": "bought", "price": str(self.parts[-1].price),
                             "part": now.isoformat()})
             else:
                 part = next((p for p in self.parts
@@ -223,9 +223,9 @@ class Book:
                 if part is None:
                     outcome = {"result": "refused", "why": "that part is no longer held"}
                 else:
-                    gain = lad.net(part, float(price), float(FEE), SLIP)
                     sold = self.sell(part, price, now, "manual")
-                    outcome = ({"result": "sold", "price": str(price), "gain": f"{gain:.4f}"}
+                    outcome = ({"result": "sold", "price": str(self.sales[-1]["sold_at"]),
+                                "gain": f"{self.sales[-1]['gain']:.4f}"}
                                if sold else {"result": "refused",
                                              "why": "refused by the risk limits"})
             self.store.answer_manual(request, self.run_id, outcome)

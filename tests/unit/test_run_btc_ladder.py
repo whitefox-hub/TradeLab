@@ -68,6 +68,7 @@ def test_a_manual_buy_is_one_part_marked_manual(book) -> None:
     store.requests.append((1, "ladder.buy_request", {}))
     assert b.manual_requested(None)
     assert store.answers[1]["result"] == "bought"
+    assert store.answers[1]["price"] == str(b.parts[0].price), "the fill price, not the ticker"
     assert len(b.parts) == 1 and b.parts[0].spent == pytest.approx(100, abs=1)
     status = json.loads((run.STATE_DIR / "status.json").read_text())
     assert status["parts"][0]["manual"] is True
@@ -84,6 +85,7 @@ def test_a_manual_sale_may_realise_a_loss_and_says_so(book) -> None:
                            {"part": b.parts[0].opened.isoformat()}))
     b.manual_requested(None)
     assert store.answers[2]["result"] == "sold"
+    assert store.answers[2]["price"] == str(b.sales[-1]["sold_at"])
     assert not b.parts
     sale = b.sales[-1]
     assert sale["entry"] == "rule" and sale["exit"] == "manual"
