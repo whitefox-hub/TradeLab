@@ -2,18 +2,17 @@
 const SCREENS = [
   { href: "/home", label: "Home" },
   { href: "/parameters", label: "Parameters" },
-  { group: "Operations" },
-  { href: "/audit", label: "Audit" },
+  { href: "/audit", label: "Audit", bottom: true },
   { href: "/risk-limits", label: "Risk limits" },
 ];
 
 function renderSidebar(active) {
   const items = SCREENS.map((entry) => {
-    if (entry.group) return `<div class="group">${entry.group}</div>`;
     if (entry.soon) {
       return `<span class="soon">${entry.label}<span class="tag">soon</span></span>`;
     }
-    const on = entry.href === active ? ' class="on"' : "";
+    const classes = [entry.href === active && "on", entry.bottom && "bottom"].filter(Boolean);
+    const on = classes.length ? ` class="${classes.join(" ")}"` : "";
     return `<a href="${entry.href}"${on}>${entry.label}</a>`;
   }).join("");
 
