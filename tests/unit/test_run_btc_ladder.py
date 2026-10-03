@@ -192,3 +192,37 @@ def test_rounding_never_turns_a_decided_gain_into_a_loss(venue_book) -> None:
     decided = lad.net(part, 80_000, 0.001, 0)
     b.sell(part, Decimal(80_000), datetime.now(UTC), "pullback")
     assert b.sales[-1]["gain"] >= decided - 1e-9
+
+
+@pytest.mark.fast
+def test_real_money_has_a_database_of_its_own(monkeypatch) -> None:
+    from tradelab.config import Settings
+    from tradelab.execution.types import ExecutionMode
+
+    run = _runner()
+    settings = Settings()
+    for venue, mode in (("sim", ExecutionMode.SIMULATOR), ("demo", ExecutionMode.TESTNET),
+                        ("live", ExecutionMode.LIVE)):
+        run.configure(venue)
+        assert run.MODE is mode
+        url = run.database_url(settings)
+        expected = settings.live_db if mode is ExecutionMode.LIVE else settings.postgres_db
+        assert url.endswith(f"/{expected}"), f"{venue} writes to {url.rsplit('/', 1)[-1]}"
+    assert settings.live_database_url != settings.database_url
+
+
+@pytest.mark.fast
+def test_the_live_database_cannot_be_the_laboratory(monkeypatch) -> None:
+    from tradelab.config import Settings
+
+    monkeypatch.setenv("TRADELAB_LIVE_DB", Settings().postgres_db)
+    with pytest.raises(ValueError, match="cannot be the laboratory"):
+        _ = Settings().live_database_url
+
+
+@pytest.mark.fast
+def test_live_stays_refused_until_its_limits_are_decided(monkeypatch) -> None:
+    run = _runner()
+    monkeypatch.setattr("sys.argv", ["run_btc_ladder.py", "--venue", "live"])
+    with pytest.raises(SystemExit, match="live is not enabled"):
+        run.main()

@@ -29,13 +29,26 @@ class Settings(BaseSettings):
     postgres_db: str = Field(default="tradelab", alias="POSTGRES_DB")
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
+    live_db: str = Field(default="tradelab_live", alias="TRADELAB_LIVE_DB")
+
+    def _url(self, database: str) -> str:
+        return (
+            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{database}"
+        )
 
     @property
     def database_url(self) -> str:
-        return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+        """The laboratory: research, the simulator and Binance Demo."""
+        return self._url(self.postgres_db)
+
+    @property
+    def live_database_url(self) -> str:
+        """Real money only, in a database of its own, so nothing the laboratory runs or tests
+        can write to its records."""
+        if self.live_db == self.postgres_db:
+            raise ValueError(f"the live database cannot be the laboratory's ({self.postgres_db})")
+        return self._url(self.live_db)
 
 
 def get_settings() -> Settings:

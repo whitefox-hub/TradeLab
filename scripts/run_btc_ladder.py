@@ -54,7 +54,13 @@ VENUES = {
     "sim": (ExecutionMode.SIMULATOR, "BTC ladder", Path("data/forward/btc-ladder"), REST),
     "demo": (ExecutionMode.TESTNET, "BTC ladder (demo)", Path("data/forward/btc-ladder-demo"),
              DEMO_BASE),
+    "live": (ExecutionMode.LIVE, "BTC ladder (live)", Path("data/forward/btc-ladder-live"), REST),
 }
+
+
+def database_url(settings) -> str:
+    """Real money in the live database, everything else in the laboratory's; never crossed."""
+    return settings.live_database_url if MODE is ExecutionMode.LIVE else settings.database_url
 IMPL = Path("tradelab/strategy/btc_ladder.py")
 POLL_S = 10
 SNAPSHOT_S = 300
@@ -396,15 +402,16 @@ def start(store: Store, inst: Instrument, adapter: VenueAdapter | None = None) -
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--venue", choices=[*VENUES, "live"], default="sim")
+    parser.add_argument("--venue", choices=VENUES, default="sim")
     args = parser.parse_args()
     if args.venue == "live":
-        raise SystemExit("live is not enabled: the active risk limits were set for a $10,000 "
-                         "fake account and would stop a real $2,000 one at its first "
-                         "correction. Decide how they apply to the real account first.")
+        raise SystemExit("live is not enabled: the laboratory's risk limits were set for a "
+                         "$10,000 fake account and would stop a real $2,000 one at its first "
+                         "correction, and the live database has none yet. Decide the real "
+                         "account's limits and create them there first.")
     configure(args.venue)
     client = httpx.Client(timeout=30.0)
-    store = Store(get_settings().database_url)
+    store = Store(database_url(get_settings()))
     adapter = None
     if MODE is not ExecutionMode.SIMULATOR:
         adapter = BinanceSpotAdapter.from_environment(MODE, symbols=[SYMBOL])
