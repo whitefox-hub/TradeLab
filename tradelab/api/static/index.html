@@ -130,14 +130,15 @@ const qty = (v) => v === null || v === undefined ? "—"
 
 function renderBook(book) {
   const ccy = book.positions[0]?.currency || "";
+  const pnl = Object.entries(book.totals || {}).flatMap(([mode, t]) => [
+    { n: money(t.unrealised_pnl, ccy), k: `unrealised P&L · ${mode}`,
+      cls: sign(t.unrealised_pnl) },
+    { n: money(t.realised_pnl, ccy), k: `realised P&L · ${mode}`,
+      cls: sign(t.realised_pnl) },
+  ]);
   $("book-cards").innerHTML = [
     { n: book.open_count, k: "open positions", cls: "" },
-    { n: money(book.unrealised_pnl, ccy), k: "unrealised P&L",
-      cls: sign(book.unrealised_pnl) },
-    { n: money(book.realised_pnl, ccy), k: "realised P&L",
-      cls: sign(book.realised_pnl) },
-    { n: money(-book.funding_paid, ccy), k: "funding",
-      cls: sign(-book.funding_paid) },
+    ...pnl,
     { n: `${book.runs_live} / ${book.runs_total}`, k: "runs open" },
     { n: book.risk_events, k: "risk limits fired" },
   ].map((c) => `

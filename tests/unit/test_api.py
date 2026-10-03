@@ -608,7 +608,8 @@ def test_the_book_shows_the_latest_snapshot_of_each_open_position(monkeypatch) -
     Taking every row counts a position once per snapshot ever written. Taking
     the newest row overall reports one asset as the whole book. And a flat
     position is not an open one — but its realised P&L does not stop counting
-    when the position closed.
+    when the position closed. The tables are shared by every mode, so totals are
+    per mode: a demo book's P&L is not the simulator's.
     """
     import uuid as uuid_
 
@@ -636,7 +637,7 @@ def test_the_book_shows_the_latest_snapshot_of_each_open_position(monkeypatch) -
         "/api/session", json={"email": email, "password": PASSWORD}).status_code == 200
 
     before = client.get("/api/positions").json()
-    run_id, limit_id = uuid_.uuid4(), uuid_.uuid4()
+    run_id, demo_id, limit_id = uuid_.uuid4(), uuid_.uuid4(), uuid_.uuid4()
     try:
         with engine.begin() as conn:
             conn.execute(sa_.text(
@@ -651,6 +652,18 @@ def test_the_book_shows_the_latest_snapshot_of_each_open_position(monkeypatch) -
                 "VALUES (:i,:s,'simulator',:v,CAST('{}' AS jsonb),10000,'USDT',"
                 "  :l,:c,'zzprobe','zzprobe','zzprobe','running',now())"),
                 {"i": run_id, "s": strategy, "v": venue, "l": limit_id, "c": cost})
+            conn.execute(sa_.text(
+                "INSERT INTO runs (id, strategy_id, mode, venue, params, "
+                "  initial_capital, base_currency, risk_limit_config_id, "
+                "  cost_model_id, code_version, image_digest, config_hash, "
+                "  status, started_at) "
+                "VALUES (:i,:s,'testnet',:v,CAST('{}' AS jsonb),10000,'USDT',"
+                "  :l,:c,'zzprobe','zzprobe','zzprobe','running',now())"),
+                {"i": demo_id, "s": strategy, "v": venue, "l": limit_id, "c": cost})
+            conn.execute(sa_.text(
+                "INSERT INTO positions (run_id, asset, as_of, qty, avg_entry, "
+                "  unrealised_pnl, realised_pnl, funding_paid) "
+                "VALUES (:r,'ZZDEMO',now(),1,100,1000,1000,0)"), {"r": demo_id})
             for asset, quantity, realised in (
                 ("ZZLONG", 2, 0), ("ZZSHORT", -3, 10), ("ZZFLAT", 0, 40),
             ):
@@ -665,19 +678,25 @@ def test_the_book_shows_the_latest_snapshot_of_each_open_position(monkeypatch) -
         mine = {p["asset"]: p for p in book["positions"]
                 if p["asset"].startswith("ZZ")}
 
-        assert set(mine) == {"ZZLONG", "ZZSHORT"}, (
+        assert set(mine) - {"ZZDEMO"} == {"ZZLONG", "ZZSHORT"}, (
             "a flat position is open, or a snapshot was counted twice")
         assert mine["ZZLONG"]["side"] == "LONG"
         assert mine["ZZSHORT"]["side"] == "SHORT"
         assert mine["ZZLONG"]["mode"] == "simulator"
 
-        assert book["realised_pnl"] - before["realised_pnl"] == pytest.approx(50)
-        assert book["unrealised_pnl"] - before["unrealised_pnl"] == pytest.approx(15)
+        def total(b, mode, key):
+            return b.get("totals", {}).get(mode, {}).get(key, 0)
+        assert total(book, "simulator", "realised_pnl") - total(
+            before, "simulator", "realised_pnl") == pytest.approx(50)
+        assert total(book, "simulator", "unrealised_pnl") - total(
+            before, "simulator", "unrealised_pnl") == pytest.approx(15)
+        assert total(book, "testnet", "realised_pnl") - total(
+            before, "testnet", "realised_pnl") == pytest.approx(1000)
     finally:
         with engine.begin() as conn:
-            conn.execute(sa_.text("DELETE FROM positions WHERE run_id = :r"),
-                         {"r": run_id})
-            conn.execute(sa_.text("DELETE FROM runs WHERE id = :r"), {"r": run_id})
+            for r in (run_id, demo_id):
+                conn.execute(sa_.text("DELETE FROM positions WHERE run_id = :r"), {"r": r})
+                conn.execute(sa_.text("DELETE FROM runs WHERE id = :r"), {"r": r})
             conn.execute(sa_.text("DELETE FROM risk_limit_configs WHERE id = :i"),
                          {"i": limit_id})
 
@@ -702,7 +721,8 @@ def test_the_home_screen_computes_no_figure(client: TestClient) -> None:
     markup = client.get("/static/index.html").text
     for derived in ("* price", "mark_price", "qty *", "- avg_entry", "avg_entry -"):
         assert derived not in markup, f"the home screen computes: {derived}"
-    assert "money(-book.funding_paid" in markup
+    assert "book.totals" in markup and "book.realised_pnl" not in markup, (
+        "P&L totals are per mode, never summed across the simulator and a venue")
 
 
 @pytest.mark.fast
