@@ -11,7 +11,8 @@ budget, so a run is only ever under one configuration. The budget (the setting's
 `budget`) grows with every realised profit; it sits inside a $10,000 fake account so the parts stay
 within the active risk limits. The price is checked every 10 seconds; the screen is written
 every 5 minutes and on every trade. Close sells every part at market, even at a loss,
-and pauses buying 24 h.
+and pauses buying 24 h. The operator can also buy one part or sell one part by hand; those
+are marked manual on the part, the sale, the order's intent and the audit trail.
 """
 
 from __future__ import annotations
@@ -89,6 +90,8 @@ class Book:
         self.paused_until = s.get("paused_until")
         self.day = s.get("day")
         self.trades = int(s.get("trades", 0))
+        self.manual = set(s.get("manual", []))
+        self.sales = list(s.get("sales", []))
         self.adapter = SimulatedAdapter(instruments={SYMBOL: inst}, prices={},
                                         half_spread_bps=HALF_SPREAD_BPS, taker_fee=FEE)
         self.adapter._fills.extend(
@@ -117,12 +120,13 @@ class Book:
         p = self.engine.account.positions.get(SYMBOL)
         return CAPITAL + ((p.realised_pnl + p.unrealised(price)) if p else Decimal(0))
 
-    def order(self, side: Side, quantity: float, price: Decimal, now: datetime) -> Fill | None:
+    def order(self, side: Side, quantity: float, price: Decimal, now: datetime,
+              note: str = "") -> Fill | None:
         self.adapter.prices[SYMBOL] = price
         before = len(self.adapter.fills)
         decision = self.engine.submit(Order(SYMBOL, side, Decimal(str(quantity)),
                                             reduce_only=side is Side.SELL),
-                                      price, {SYMBOL: price}, now, mid_price=price)
+                                      price, {SYMBOL: price}, now, mid_price=price, note=note)
         self.engine.apply_fills(now)
         if not decision.allowed or len(self.adapter.fills) == before:
             print(f"  {side.value} refused: {decision.breach}: {decision.detail}", flush=True)
@@ -130,7 +134,8 @@ class Book:
         return self.adapter.fills[-1]
 
     def sell(self, part: lad.Part, price: Decimal, now: datetime, why: str) -> bool:
-        fill = self.order(Side.SELL, part.quantity, price, now)
+        """Sell one part. `why`: cap, pullback or manual."""
+        fill = self.order(Side.SELL, part.quantity, price, now, why)
         if fill is None:
             return False
         got = float(fill.quantity * fill.price - fill.fee)
@@ -138,9 +143,16 @@ class Book:
         self.parts.remove(part)
         self.trades += 1
         days = (now - part.opened).total_seconds() / 86_400
+        entry = "manual" if part.opened.isoformat() in self.manual else "rule"
+        self.manual.discard(part.opened.isoformat())
+        self.sales.append({"bought_at": part.price, "sold_at": float(fill.price),
+                           "opened": part.opened.isoformat(), "closed": now.isoformat(),
+                           "days": round(days, 2), "spent": round(part.spent, 2),
+                           "got": round(got, 2), "gain": got / part.spent - 1,
+                           "entry": entry, "exit": why})
         print(f"{now:%Y-%m-%d %H:%M:%S} SELL part bought at {part.price:,.2f} after {days:.1f} d "
-              f"at {fill.price}: {got - part.spent:+.2f} ({got / part.spent - 1:+.2%}) [{why}]",
-              flush=True)
+              f"at {fill.price}: {got - part.spent:+.2f} ({got / part.spent - 1:+.2%}) "
+              f"[{entry} entry, {why}]", flush=True)
         if not self.parts:
             self.armed, self.high = False, float(fill.price)
         return True
@@ -164,21 +176,63 @@ class Book:
         self.track(px)
         paused = self.paused_until and now.isoformat() < self.paused_until
         if not paused and lad.buy_now(self.parts, px, self.armed, self.cfg):
-            size = lad.part_size(self.cash, self.parts, self.cfg)
-            quantity = size / (px * (1 + SLIP)) / (1 + float(FEE))
-            fill = self.order(Side.BUY, quantity, price, now) if size >= 10 else None
-            if fill is not None:
-                spent = float(fill.quantity * fill.price + fill.fee)
-                self.cash -= spent
-                self.parts.append(lad.Part(float(fill.price), float(fill.quantity), spent, now))
-                self.armed, self.high = False, float(fill.price)
-                lowest = min(p.price for p in self.parts)
-                print(f"{now:%Y-%m-%d %H:%M:%S} BUY part {len(self.parts)}/{self.cfg.parts} at "
-                      f"{fill.price} (${spent:,.2f}); next part at or below "
-                      f"{lowest * (1 - self.cfg.step):,.2f}, or after a "
-                      f"{self.cfg.reentry:.1%} correction from the high", flush=True)
-                traded = True
+            traded |= self.buy(price, now, manual=False) is None
         return traded
+
+    def buy(self, price: Decimal, now: datetime, manual: bool) -> str | None:
+        """Buy one part at market. None if bought, else why not."""
+        if len(self.parts) >= self.cfg.parts:
+            return "all parts are held"
+        px = float(price)
+        size = lad.part_size(self.cash, self.parts, self.cfg)
+        if size < 10:
+            return f"a part would be ${size:,.2f}, under the $10 the venue accepts"
+        quantity = size / (px * (1 + SLIP)) / (1 + float(FEE))
+        fill = self.order(Side.BUY, quantity, price, now, "manual" if manual else "rule")
+        if fill is None:
+            return "refused by the risk limits; see the book's log"
+        spent = float(fill.quantity * fill.price + fill.fee)
+        self.cash -= spent
+        self.parts.append(lad.Part(float(fill.price), float(fill.quantity), spent, now))
+        if manual:
+            self.manual.add(now.isoformat())
+        self.armed, self.high = False, float(fill.price)
+        lowest = min(p.price for p in self.parts)
+        print(f"{now:%Y-%m-%d %H:%M:%S} BUY{' (manual)' if manual else ''} part "
+              f"{len(self.parts)}/{self.cfg.parts} at {fill.price} (${spent:,.2f}); next part "
+              f"at or below {lowest * (1 - self.cfg.step):,.2f}, or after a "
+              f"{self.cfg.reentry:.1%} correction from the high", flush=True)
+        return None
+
+    def manual_requested(self, client: httpx.Client) -> bool:
+        """The operator's manual buys and sells of one part, answered in the audit trail. A
+        manual sale may realise a loss; the screen showed the gain before it was confirmed."""
+        requests = self.store.pending_manual(self.run_id)
+        if not requests:
+            return False
+        now, price = datetime.now(UTC), ticker(client)
+        for request, action, payload in requests:
+            if action == "ladder.buy_request":
+                refused = self.buy(price, now, manual=True)
+                outcome = ({"result": "refused", "why": refused} if refused else
+                           {"result": "bought", "price": str(price),
+                            "part": now.isoformat()})
+            else:
+                part = next((p for p in self.parts
+                             if p.opened.isoformat() == payload.get("part")), None)
+                if part is None:
+                    outcome = {"result": "refused", "why": "that part is no longer held"}
+                else:
+                    gain = lad.net(part, float(price), float(FEE), SLIP)
+                    sold = self.sell(part, price, now, "manual")
+                    outcome = ({"result": "sold", "price": str(price), "gain": f"{gain:.4f}"}
+                               if sold else {"result": "refused",
+                                             "why": "refused by the risk limits"})
+            self.store.answer_manual(request, self.run_id, outcome)
+            print(f"{now:%Y-%m-%d %H:%M:%S} manual {action}: {outcome}", flush=True)
+        self.persist(now, price)
+        self.publish(price, now)
+        return True
 
     def close_requested(self, client: httpx.Client) -> bool:
         requests = self.store.pending_closes(self.run_id)
@@ -214,6 +268,7 @@ class Book:
                 "value": round(x.quantity * px * (1 - SLIP) * (1 - fee), 2),
                 "gain": lad.net(x, px, fee, SLIP), "minimum": floor, "minimum_price": at(floor),
                 "cap": top, "cap_price": at(top), "peak": x.peak,
+                "manual": x.opened.isoformat() in self.manual,
                 "sells_at": max(x.peak * (1 - self.cfg.trail), at(floor)) if x.peak else None})
         full = len(self.parts) >= self.cfg.parts
         cheapest = min((x.price for x in self.parts), default=None)
@@ -228,7 +283,8 @@ class Book:
             "correction_price": None if self.high is None else self.high * (1 - self.cfg.reentry),
             "next_down_price": None if full or cheapest is None
             else cheapest * (1 - self.cfg.step),
-            "full": full, "paused": paused, "parts": parts}
+            "full": full, "paused": paused, "parts": parts,
+            "sales": self.sales[::-1][:20]}
 
     def publish(self, price: Decimal, now: datetime) -> None:
         partial = STATE_DIR / "status.partial"
@@ -249,7 +305,7 @@ class Book:
             return value.isoformat() if isinstance(value, datetime) else str(value)
         state = {"config": asdict(self.cfg), "cash": self.cash, "armed": self.armed,
                  "high": self.high, "paused_until": self.paused_until, "day": self.day,
-                 "trades": self.trades,
+                 "trades": self.trades, "manual": sorted(self.manual), "sales": self.sales,
                  "parts": [{**asdict(x), "opened": x.opened.isoformat()} for x in self.parts]}
         payload = {"state": state, "fills": [asdict(f) for f in self.adapter.fills],
                    "held": {k: str(v) for k, v in self.adapter._held.items()},
@@ -298,6 +354,7 @@ def main() -> int:
                     book.persist(datetime.now(UTC), ticker(client))
                     book = start(store, inst)
             book.close_requested(client)
+            book.manual_requested(client)
             now, price = datetime.now(UTC), ticker(client)
             today = now.strftime("%Y-%m-%d")
             if book.day != today:

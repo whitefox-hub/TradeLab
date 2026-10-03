@@ -151,9 +151,10 @@ class ExecutionEngine:
 
     def submit(
         self, order: Order, price: Decimal, prices: dict[str, Decimal],
-        at: datetime, mid_price: Decimal | None = None,
+        at: datetime, mid_price: Decimal | None = None, note: str = "",
     ) -> Decision:
-        """One order through the whole path. Returns why, when it does not go."""
+        """One order through the whole path. Returns why, when it does not go. `note` is
+        recorded on the WANTED intent: who or what asked for the order."""
         if not self._reconciled:
             raise NotReconciled(
                 f"{self.run_id}: reconcile() must run before the first order (§14.2)"
@@ -163,7 +164,7 @@ class ExecutionEngine:
         order = order.with_id(self.run_id, self._sequence)
         instrument = self.instruments.get(order.asset)
 
-        self.intents.record(order, self.run_id, self._sequence, IntentState.WANTED, at)
+        self.intents.record(order, self.run_id, self._sequence, IntentState.WANTED, at, note)
 
         if instrument is None:
             decision = Decision(allowed=False, detail=f"no instrument for {order.asset}")

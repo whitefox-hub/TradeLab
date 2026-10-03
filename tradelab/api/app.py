@@ -73,6 +73,14 @@ class CloseRequest(BaseModel):
     asset: str = Field(min_length=1, max_length=40)
 
 
+class LadderSellRequest(BaseModel):
+    """The operator's manual sale of one part of the ladder, named by when it was bought."""
+
+    model_config = {"extra": "forbid"}
+
+    part: datetime
+
+
 class ApprovalRequest(BaseModel):
     subject_kind: str = Field(pattern="^(strategy|capital_tier|gate_change)$")
     subject_id: uuid.UUID
@@ -652,15 +660,70 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
                 sa.text("SELECT count(*) FROM positions")).scalar() or 0),
         }
 
+    def _pending_manual(session: Session, run_id: str) -> list[dict[str, Any]]:
+        return [{"action": a, "part": p} for a, p in session.execute(sa.text(
+            "SELECT q.action, q.payload->>'part' FROM audit_log q "
+            "WHERE q.action IN ('ladder.buy_request', 'ladder.sell_request') "
+            "AND q.payload->>'run_id' = :run "
+            "AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'ladder.answered' "
+            "AND a.payload->>'request' = q.id::text) ORDER BY q.id"), {"run": run_id}).all()]
+
     @app.get("/api/ladder")
-    def ladder(who: Operator = operator) -> dict[str, Any]:
-        """The BTC ladder as its book last published it: read, never computed (§20.1)."""
+    def ladder(who: Operator = operator, session: Session = session_dep) -> dict[str, Any]:
+        """The BTC ladder as its book last published it: read, never computed (§20.1), with
+        the manual buys and sells it has not answered yet."""
         path = LADDER_STATUS
         if not path.exists():
             return {"available": False}
         status_ = json.loads(path.read_text())
         age = (datetime.now(UTC) - datetime.fromisoformat(status_["as_of"])).total_seconds()
-        return {"available": True, "age_seconds": round(age), **status_}
+        return {"available": True, "age_seconds": round(age), **status_,
+                "pending": _pending_manual(session, status_["run_id"])}
+
+    def _ladder_run(session: Session) -> dict[str, Any]:
+        """The ladder's published status, if its run is the one running."""
+        if not LADDER_STATUS.exists():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "the ladder has not published")
+        status_ = json.loads(LADDER_STATUS.read_text())
+        state = session.execute(sa.text("SELECT status FROM runs WHERE id = :r"),
+                                {"r": status_["run_id"]}).scalar()
+        if state != "running":
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"the ladder's run is {state}; nothing will act on it")
+        return status_
+
+    @app.post("/api/ladder/buy", status_code=status.HTTP_202_ACCEPTED)
+    def ladder_buy(who: Operator = operator, session: Session = session_dep) -> dict[str, Any]:
+        """Ask the ladder to buy one part at market now, marked manual. Accepted, not done:
+        the book answers with a `ladder.answered` audit row within seconds."""
+        status_ = _ladder_run(session)
+        if status_["full"]:
+            raise HTTPException(status.HTTP_409_CONFLICT, "all parts are held")
+        pending = _pending_manual(session, status_["run_id"])
+        if any(p["action"] == "ladder.buy_request" for p in pending):
+            return {"pending": True, "duplicate": True}
+        audit(session, who.email, "ladder.buy_request", "ladder", status_["run_id"],
+              {"run_id": status_["run_id"], "manual": True})
+        session.commit()
+        return {"pending": True, "duplicate": False}
+
+    @app.post("/api/ladder/sell", status_code=status.HTTP_202_ACCEPTED)
+    def ladder_sell(body: LadderSellRequest, who: Operator = operator,
+                    session: Session = session_dep) -> dict[str, Any]:
+        """Ask the ladder to sell one part at market now, marked manual, even at a loss."""
+        status_ = _ladder_run(session)
+        part = next((p for p in status_["parts"]
+                     if datetime.fromisoformat(p["opened"]) == body.part), None)
+        if part is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such part is held")
+        pending = _pending_manual(session, status_["run_id"])
+        if any(p["part"] == part["opened"] for p in pending):
+            return {"pending": True, "duplicate": True}
+        audit(session, who.email, "ladder.sell_request", "ladder", status_["run_id"],
+              {"run_id": status_["run_id"], "part": part["opened"], "manual": True,
+               "gain_shown": part["gain"]})
+        session.commit()
+        return {"pending": True, "duplicate": False}
 
     @app.get("/risk-limits", include_in_schema=False)
     def risk_limits_screen() -> FileResponse:

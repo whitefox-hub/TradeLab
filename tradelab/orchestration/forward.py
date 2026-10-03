@@ -158,6 +158,27 @@ class Store:
                  "p": json.dumps({"request": str(request), "run_id": str(run_id),
                                   "asset": asset, **outcome})})
 
+    def pending_manual(self, run_id: uuid.UUID) -> list[tuple[int, str, dict[str, Any]]]:
+        """The operator's manual buys and sells for this run, not yet answered: (request id,
+        action, payload). Like closes, the queue is the audit trail."""
+        with self.engine.begin() as db:
+            rows = db.execute(sa.text(
+                "SELECT q.id, q.action, q.payload FROM audit_log q "
+                "WHERE q.action IN ('ladder.buy_request', 'ladder.sell_request') "
+                "AND q.payload->>'run_id' = :run "
+                "AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'ladder.answered' "
+                "AND a.payload->>'request' = q.id::text) ORDER BY q.id"),
+                {"run": str(run_id)}).all()
+        return [(int(i), str(a), dict(p or {})) for i, a, p in rows]
+
+    def answer_manual(self, request: int, run_id: uuid.UUID, outcome: dict[str, Any]) -> None:
+        with self.engine.begin() as db:
+            db.execute(sa.text(
+                "INSERT INTO audit_log (actor, action, subject_kind, subject_id, payload) "
+                "VALUES ('forward-runner', 'ladder.answered', 'ladder', :s, CAST(:p AS jsonb))"),
+                {"s": str(run_id),
+                 "p": json.dumps({"request": str(request), "run_id": str(run_id), **outcome})})
+
     def end(self, run_id: uuid.UUID, reason: str) -> None:
         """Close a run for good: it stops showing positions, and its history stays."""
         with self.engine.begin() as db:

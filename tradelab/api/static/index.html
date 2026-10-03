@@ -39,6 +39,17 @@
   button.exit:hover { background:var(--down); color:var(--bg); }
   button.exit:disabled { border-color:var(--line); color:var(--muted); cursor:default;
     background:transparent; }
+  .origin { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11.5px;
+    font-weight:650; letter-spacing:.05em; border:1px solid currentColor; color:var(--muted); }
+  .origin.manual { color:var(--warn); }
+  button.act { padding:6px 14px; border-radius:6px; border:1px solid var(--accent);
+    background:transparent; color:var(--accent); font:inherit; font-size:14px;
+    font-weight:600; cursor:pointer; }
+  button.act:hover { background:var(--accent); color:var(--bg); }
+  button.act:disabled { border-color:var(--line); color:var(--muted); cursor:default;
+    background:transparent; }
+  .actions { margin-top:16px; display:flex; gap:14px; align-items:center; }
+  .actions .note { color:var(--muted); font-size:13.5px; }
   .empty-why { color:var(--muted); font-size:14.5px; line-height:1.6;
     max-width:74ch; }
   footer { margin-top:44px; padding-top:20px; border-top:1px solid var(--line);
@@ -53,13 +64,28 @@
 
     <h2 class="section">BTC ladder<span class="note" id="ladder-note"></span></h2>
     <div class="cards context" id="ladder-cards"></div>
+    <div class="actions">
+      <button class="act" id="buy-part">Buy one part now</button>
+      <span class="note" id="manual-note">At market, marked MANUAL; it then sells by the
+        same rules as any part.</span>
+    </div>
     <table class="book" id="ladder-table">
       <thead><tr>
-        <th>#</th><th class="num">Bought at</th><th class="num">Days</th><th class="num">Cost</th>
-        <th class="num">Value</th><th class="num">Gain</th><th class="num">Minimum</th>
-        <th class="num">Cap</th><th>State</th>
+        <th>#</th><th>Entry</th><th class="num">Bought at</th><th class="num">Days</th>
+        <th class="num">Cost</th><th class="num">Value</th><th class="num">Gain</th>
+        <th class="num">Minimum</th><th class="num">Cap</th><th>State</th><th></th>
       </tr></thead>
       <tbody id="ladder"></tbody>
+    </table>
+
+    <h2 class="section">Ladder sales<span class="note" id="sales-note"></span></h2>
+    <table class="book">
+      <thead><tr>
+        <th>Sold</th><th>Entry</th><th>Exit</th><th class="num">Bought at</th>
+        <th class="num">Sold at</th><th class="num">Days</th><th class="num">Cost</th>
+        <th class="num">Got</th><th class="num">Gain</th>
+      </tr></thead>
+      <tbody id="sales"></tbody>
     </table>
 
 
@@ -170,7 +196,8 @@ function renderBook(book) {
 async function closePosition(button) {
   const { run, asset, side } = button.dataset;
   if (!confirm(`Close the ${side} position in ${asset} at market now?\n\n` +
-               "The book keeps it flat until it next changes its decision.")) return;
+               "Every part is sold, even at a loss, marked MANUAL, and buying pauses " +
+               "24 hours.")) return;
   button.disabled = true;
   button.textContent = "Closing…";
   try {
@@ -216,9 +243,18 @@ async function renderLadder() {
       k: "next part, on a correction", d: correction[0].toUpperCase() + correction.slice(1) + "." },
   ].map((x) => `<div class="card"><div class="n">${x.n}</div><div class="k">${x.k}</div>
     <div class="d">${x.d}</div></div>`).join("");
+  const origin = (manual) => manual ? `<span class="origin manual">MANUAL</span>`
+    : `<span class="origin">rule</span>`;
+  const pending = l.pending || [];
+  const buying = pending.some((x) => x.action === "ladder.buy_request");
+  const buy = $("buy-part");
+  buy.disabled = buying || l.full;
+  buy.textContent = buying ? "Buying…" : "Buy one part now";
+  buy.onclick = () => manualBuy(l);
   $("ladder").innerHTML = l.parts.length ? l.parts.map((p, i) => `
     <tr>
       <td>${i + 1}</td>
+      <td>${origin(p.manual)}</td>
       <td class="num">${usd(p.bought_at)}</td>
       <td class="num">${p.days.toFixed(1)}</td>
       <td class="num">${usd(p.spent)}</td>
@@ -229,8 +265,63 @@ async function renderLadder() {
       <td>${p.peak
         ? `following: peak ${usd(p.peak)}, sells at ${usd(p.sells_at)}`
         : `waiting for ${usd(p.minimum_price)}`}</td>
+      <td>${pending.some((x) => x.part === p.opened)
+        ? `<button class="exit" disabled>Selling…</button>`
+        : `<button class="exit" data-part="${escape(p.opened)}">Sell</button>`}</td>
     </tr>`).join("")
-    : `<tr><td colspan="9"><p class="empty-why">No part is held.</p></td></tr>`;
+    : `<tr><td colspan="11"><p class="empty-why">No part is held.</p></td></tr>`;
+  document.querySelectorAll("button.exit[data-part]").forEach((b) => b.addEventListener(
+    "click", () => manualSell(b, l.parts.find((p) => p.opened === b.dataset.part))));
+
+  const sales = l.sales || [];
+  $("sales-note").textContent = `${l.realised_sales} in this run`
+    + (l.realised_sales > sales.length ? `, the last ${sales.length} shown` : "");
+  $("sales").innerHTML = sales.length ? sales.map((x) => `
+    <tr>
+      <td class="num">${escape(x.closed.slice(0, 16).replace("T", " "))}</td>
+      <td>${origin(x.entry === "manual")}</td>
+      <td>${x.exit === "manual" ? `<span class="origin manual">MANUAL</span>`
+        : `<span class="origin">${escape(x.exit)}</span>`}</td>
+      <td class="num">${usd(x.bought_at)}</td>
+      <td class="num">${usd(x.sold_at)}</td>
+      <td class="num">${x.days.toFixed(1)}</td>
+      <td class="num">${usd(x.spent)}</td>
+      <td class="num">${usd(x.got)}</td>
+      <td class="num money ${sign(x.gain)}">${pct(x.gain)}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="9"><p class="empty-why">Nothing sold in this run yet.</p></td></tr>`;
+
+  clearTimeout(renderLadder.poll);
+  if (pending.length) renderLadder.poll = setTimeout(renderLadder, 3000);
+}
+
+async function manualBuy(l) {
+  if (!confirm(`Buy one part now at market?\n\nAbout ${usd(l.next_part_size)} at BTC `
+      + `${usd(l.price)}. Marked MANUAL; it then sells by the same rules as any part.`)) return;
+  $("buy-part").disabled = true;
+  try {
+    await api("/api/ladder/buy", { method: "POST" });
+  } catch (failed) {
+    alert(`Not bought: ${failed.message}`);
+  }
+  renderLadder();
+}
+
+async function manualSell(button, p) {
+  if (!p) return;
+  const loss = p.gain < 0 ? "\n\nThis realises a LOSS." : "";
+  if (!confirm(`Sell the part bought at ${usd(p.bought_at)} at market now?\n\n`
+      + `Net now: ${pct(p.gain)} (${usd(p.value)} for ${usd(p.spent)} spent).${loss}`
+      + "\n\nMarked MANUAL. Buying is not paused.")) return;
+  button.disabled = true;
+  button.textContent = "Selling…";
+  try {
+    await api("/api/ladder/sell", { method: "POST",
+      body: JSON.stringify({ part: p.opened }) });
+  } catch (failed) {
+    alert(`Not sold: ${failed.message}`);
+  }
+  renderLadder();
 }
 
 async function load() {

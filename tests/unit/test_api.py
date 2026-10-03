@@ -380,6 +380,8 @@ def test_there_is_no_route_that_changes_a_run_mode(client: TestClient) -> None:
     ]
     assert sorted(writable) == [
         ("/api/approvals", "POST"),
+        ("/api/ladder/buy", "POST"),
+        ("/api/ladder/sell", "POST"),
         ("/api/positions/close", "POST"),
         ("/api/risk-limits", "POST"),
         ("/api/session", "DELETE"),
