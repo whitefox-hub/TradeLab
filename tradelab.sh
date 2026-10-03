@@ -21,7 +21,7 @@ case "${1:-}" in
     ;;
   status)
     docker compose ps --format '{{.Service}}: {{.Status}}'
-    for name in uvicorn btc_ladder; do
+    for name in uvicorn btc_ladder btc_ladder_demo; do
       if running "$name"; then echo "$name: running, pid $(cat "logs/$name.pid")"
       else echo "$name: stopped"; fi
     done

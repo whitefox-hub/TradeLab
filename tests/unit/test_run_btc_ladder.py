@@ -121,3 +121,74 @@ def test_the_mark_and_the_sales_survive_a_restart(book) -> None:
     b.manual_requested(None)
     again = run.Book(store, b.adapter.instruments["BTCUSDT"], b.cfg)
     assert again.manual == b.manual and again.parts[0].opened == b.parts[0].opened
+
+
+@pytest.fixture
+def venue_book(tmp_path, monkeypatch):
+    """The book on the spot adapter, against the mocked venue of test_binance_spot."""
+    from test_binance_spot import Venue, _adapter
+
+    from tradelab.execution.types import ExecutionMode
+
+    run = _runner()
+    monkeypatch.setattr(run, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(run, "MODE", ExecutionMode.TESTNET)
+    venue = Venue()
+    adapter = _adapter(venue)
+    store = FakeStore()
+    store.setting = lambda key: {"budget": 2_000, "parts": 20, "step_pct": 1.5,
+                                 "correction_pct": 5, "trail_pct": 2}
+    b = run.start(store, adapter.instruments["BTCUSDT"], adapter)
+    return run, b, store, venue, adapter
+
+
+@pytest.mark.fast
+def test_on_a_venue_a_part_is_the_whole_lots_that_arrived(venue_book) -> None:
+    _, b, _, venue, _ = venue_book
+    b.buy(Decimal(80_000), datetime.now(UTC), manual=False)
+    part = b.parts[0]
+    assert float(venue.btc) < 0.00124, "the commission was taken in BTC"
+    assert part.quantity == pytest.approx(0.00123), "a part is only the lots a sale can deliver"
+    assert part.spent == pytest.approx(0.00124 * 80_000, rel=1e-9)
+
+
+@pytest.mark.fast
+def test_a_sale_takes_the_rounding_left_over_by_earlier_ones(venue_book) -> None:
+    _, b, _, venue, _ = venue_book
+    for _ in range(2):
+        b.buy(Decimal(80_000), datetime.now(UTC) - timedelta(days=1), manual=False)
+        b.parts[-1].price -= 10_000
+    b.sell(b.parts[0], Decimal(80_000), datetime.now(UTC), "manual")
+    assert float(venue.btc) >= b.parts[0].quantity, "the part still held is still there"
+    b.sell(b.parts[0], Decimal(80_000), datetime.now(UTC), "manual")
+    assert float(venue.btc) < 0.00001, "what is left is under one lot"
+    assert b.held() == pytest.approx(float(venue.btc))
+
+
+@pytest.mark.fast
+def test_on_a_venue_a_configuration_change_carries_the_parts(venue_book) -> None:
+    run, b, store, _, adapter = venue_book
+    b.buy(Decimal(80_000), datetime.now(UTC), manual=False)
+    b.persist(datetime.now(UTC), Decimal(80_000))
+    cash = b.cash
+    ended = []
+    store.end = lambda run_id, why: ended.append(why)
+    store.setting = lambda key: {"budget": 2_500, "parts": 10, "step_pct": 1.5,
+                                 "correction_pct": 5, "trail_pct": 2}
+    again = run.start(store, adapter.instruments["BTCUSDT"], adapter)
+    assert ended and "carried" in ended[0]
+    assert len(again.parts) == 1 and again.parts[0].quantity == b.parts[0].quantity
+    assert again.cash == pytest.approx(cash + 500)
+    assert again.cfg.parts == 10
+
+
+@pytest.mark.fast
+def test_rounding_never_turns_a_decided_gain_into_a_loss(venue_book) -> None:
+    """The sale delivers what the decision was made on: the realised gain is never under
+    the one `exit_now` saw, apart from the swept remainders, which only add."""
+    _, b, _, _, _ = venue_book
+    b.buy(Decimal(80_000), datetime.now(UTC), manual=False)
+    part = b.parts[0]
+    decided = lad.net(part, 80_000, 0.001, 0)
+    b.sell(part, Decimal(80_000), datetime.now(UTC), "pullback")
+    assert b.sales[-1]["gain"] >= decided - 1e-9

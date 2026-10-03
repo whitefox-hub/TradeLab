@@ -24,6 +24,7 @@ start() {
 
 stop uvicorn
 stop btc_ladder
+stop btc_ladder_demo
 [[ "${1:-}" == "stop" ]] && exit 0
 
 docker compose up -d capture
@@ -35,3 +36,4 @@ fi
 start uvicorn .venv/bin/uvicorn "tradelab.api.app:create_app" --factory \
   --host 127.0.0.1 --port 8010
 start btc_ladder .venv/bin/python scripts/run_btc_ladder.py
+start btc_ladder_demo .venv/bin/python scripts/run_btc_ladder.py --venue demo
