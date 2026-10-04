@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -149,7 +149,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
 
 
     @app.post("/api/session")
-    def sign_in(body: SignIn, response: Response, session: Session = session_dep) -> dict:
+    def sign_in(body: SignIn, request: Request, response: Response,
+                session: Session = session_dep) -> dict:
         row = session.execute(
             sa.text("SELECT email, role FROM users WHERE email = :e"), {"e": body.email}
         ).first()
@@ -160,6 +161,7 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         response.set_cookie(
             SESSION_COOKIE, sessions.issue(row.email), httponly=True, samesite="strict",
             max_age=int(SESSION_MAX_AGE.total_seconds()),
+            secure=request.headers.get("x-forwarded-proto", request.url.scheme) == "https",
         )
         audit(session, row.email, "sign_in", "session", row.email)
         session.commit()

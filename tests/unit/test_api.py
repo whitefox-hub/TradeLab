@@ -994,3 +994,31 @@ def test_a_paged_load_is_not_handed_the_session_as_its_page() -> None:
         markup = page.read_text()
         if re.search(r"async function load\(\s*\w", markup):
             assert "onReady: load }" not in markup, f"{page.name} passes the session as a page"
+
+
+@pytest.mark.fast
+def test_the_session_cookie_is_secure_behind_https(monkeypatch) -> None:
+    """Behind the server's HTTPS proxy the cookie must be Secure, or a request typed as
+    http:// sends it in clear before the redirect. Locally, on http://localhost, it cannot be."""
+    from sqlalchemy.pool import StaticPool
+
+    monkeypatch.setenv("TRADELAB_SESSION_SECRET", new_secret())
+    monkeypatch.setenv("TRADELAB_ADMIN_SALT", SALT)
+    monkeypatch.setenv("TRADELAB_ADMIN_HASH", hash_password(PASSWORD, SALT))
+    engine = sa.create_engine("sqlite://", poolclass=StaticPool,
+                              connect_args={"check_same_thread": False})
+    with engine.begin() as db:
+        db.execute(sa.text("CREATE TABLE users (email TEXT, role TEXT)"))
+        db.execute(sa.text("CREATE TABLE audit_log (actor TEXT, action TEXT, subject_kind TEXT, "
+                           "subject_id TEXT, payload TEXT)"))
+        db.execute(sa.text("INSERT INTO users VALUES ('op@example.com', 'operator')"))
+    client = TestClient(create_app(engine=engine))
+    body = {"email": "op@example.com", "password": PASSWORD}
+
+    behind_https = client.post("/api/session", json=body, headers={"X-Forwarded-Proto": "https"})
+    assert behind_https.status_code == 200
+    assert "secure" in behind_https.headers["set-cookie"].lower()
+
+    plain = client.post("/api/session", json=body)
+    assert plain.status_code == 200
+    assert "secure" not in plain.headers["set-cookie"].lower()
