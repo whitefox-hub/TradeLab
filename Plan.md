@@ -7,6 +7,14 @@
 
 ## Current state — 2026-10-01
 
+**Real money since 2026-10-04 17:56 UTC.** The ladder runs live on Binance spot (sub-account,
+$2,000 in 20 parts of $100), on the Contabo server as `tradelab-ladder@live`, with its own
+database `tradelab_live`, its own risk limits (`real-btc-ladder-2000`: up to 100% of the budget
+in BTC, no drawdown or daily-loss halt, $5,000 absolute cap, the technical limits unchanged) and
+a key that can trade but not withdraw, held to the server's IP. The simulator and Demo books
+were stopped the same day, their runs ended and their history kept. The operator app at
+https://tradelab.odenis-corp.com serves the live book (`TRADELAB_APP_BOOK=live`).
+
 **One strategy runs: the BTC ladder**, designed by the operator. It splits its budget into
 parts (now 20), each bought at its own price and sold on its own, and never sells at a loss.
 
