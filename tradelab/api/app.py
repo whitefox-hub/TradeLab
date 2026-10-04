@@ -425,6 +425,11 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         return FileResponse(STATIC / "parameters.html")
 
 
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        """The app starts at /home; a bare domain lands there instead of on a 404."""
+        return RedirectResponse("/home", status_code=302)
+
     @app.get("/trade_lab", include_in_schema=False)
     def old_home() -> RedirectResponse:
         """Legacy path; redirects to /home."""

@@ -1022,3 +1022,10 @@ def test_the_session_cookie_is_secure_behind_https(monkeypatch) -> None:
     plain = client.post("/api/session", json=body)
     assert plain.status_code == 200
     assert "secure" not in plain.headers["set-cookie"].lower()
+
+
+@pytest.mark.fast
+def test_the_bare_domain_lands_on_home(client: TestClient) -> None:
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/home"
