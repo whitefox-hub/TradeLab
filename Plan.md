@@ -50,6 +50,11 @@ whose run is ended in the database.
   history before commit `3335646`. PREREG-001 to 006 and the FINDINGs are kept;
 * the macro screen and its catalogue (§20.6, retired 2026-09-28): no strategy used them. The
   tables remain;
+* the research archive and live capture, 2026-10-04, at the operator's instruction: the 7.1 GB
+  Parquet archive under `data/parquet` (Binance history, all re-downloadable) was deleted, and
+  the `capture` service is stopped and no longer started by `./tradelab.sh start`. The ladder
+  needs neither; the historical figures above can be reproduced only after downloading BTC
+  hourly closes again;
 * the Algorithm and Market Sentiment screens, 2026-10-03, with their APIs (`/api/algorithm`,
   `/api/scenario`, `/api/fear-greed`) and the trend and fear/greed cards on Home: they belonged
   to the removed trend book and the ladder reads neither. The tables (`market_conditions`,

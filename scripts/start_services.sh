@@ -27,7 +27,9 @@ stop btc_ladder
 stop btc_ladder_demo
 [[ "${1:-}" == "stop" ]] && exit 0
 
-docker compose up -d capture
+# capture (live research data) stopped 2026-10-04 with the research archive; the app needs
+# only the database. Start it by hand with `docker compose up -d capture` if research resumes.
+docker compose up -d postgres
 set -a; . secrets/api.env; set +a
 if ss -ltn | grep -q "127.0.0.1:8010 "; then
   echo "port 8010 is taken by another program; the app cannot start" >&2

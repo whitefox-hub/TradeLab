@@ -16,7 +16,7 @@ case "${1:-}" in
     ;;
   stop)
     ./scripts/start_services.sh stop
-    echo "stopping docker (capture flushes its buffer first, up to 90 s)..."
+    echo "stopping docker..."
     docker compose stop
     ;;
   status)
