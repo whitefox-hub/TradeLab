@@ -37,7 +37,7 @@ research = ["numpy>=1.26", "scipy>=1.13", "statsmodels>=0.14", "scikit-learn>=1.
 # Phase 1+ — orchestration
 orchestration = ["dagster>=1.7", "dagster-postgres>=0.23", "dagster-webserver>=1.7"]
 # Phase 4 — API
-api = ["fastapi>=0.111", "uvicorn[standard]>=0.30"]
+api = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "itsdangerous>=2.2"]
 # Phase 4+ — tier B, simulator, testnet, live
 exec = ["nautilus_trader>=1.190"]
 # Phase 6+ — news
