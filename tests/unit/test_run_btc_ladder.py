@@ -221,11 +221,46 @@ def test_the_live_database_cannot_be_the_laboratory(monkeypatch) -> None:
 
 
 @pytest.mark.fast
-def test_live_stays_refused_until_its_limits_are_decided(monkeypatch) -> None:
+def test_live_needs_its_own_limits_and_setting() -> None:
+    """Real money starts only once the live database holds its own risk limits and its own
+    strategy setting; nothing is borrowed from the laboratory."""
+    from sqlalchemy.exc import NoResultFound
+
     run = _runner()
-    monkeypatch.setattr("sys.argv", ["run_btc_ladder.py", "--venue", "live"])
-    with pytest.raises(SystemExit, match="live is not enabled"):
-        run.main()
+
+    class Empty(FakeStore):
+        def active_limits(self):
+            raise NoResultFound
+
+        def setting(self, key):
+            return None
+
+    class NoSetting(FakeStore):
+        def setting(self, key):
+            return None
+
+    class Ready(FakeStore):
+        def setting(self, key):
+            return {"budget": 2_000, "parts": 20, "step_pct": 1.5, "correction_pct": 5,
+                    "trail_pct": 2}
+
+    assert "risk limits" in run.live_missing(Empty())
+    assert "btc_ladder" in run.live_missing(NoSetting())
+    assert run.live_missing(Ready()) is None
+
+
+@pytest.mark.fast
+def test_real_money_is_measured_against_the_real_budget() -> None:
+    from tradelab.execution.types import ExecutionMode
+
+    run = _runner()
+    cfg = lad.Config(budget=2_000, parts=20)
+    for venue, expected in (("sim", 10_000), ("demo", 10_000), ("live", 2_000)):
+        run.configure(venue)
+        assert run.MODE is not None
+        assert run.capital(cfg) == expected, f"{venue} measures limits against {run.capital(cfg)}"
+    run.configure("live")
+    assert run.MODE is ExecutionMode.LIVE
 
 
 @pytest.mark.fast

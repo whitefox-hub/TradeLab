@@ -1029,3 +1029,26 @@ def test_the_bare_domain_lands_on_home(client: TestClient) -> None:
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["location"] == "/home"
+
+
+@pytest.mark.fast
+def test_the_app_serving_the_real_book_uses_only_the_live_database(monkeypatch) -> None:
+    """Its buttons must reach the book they show: the real book's requests go to the live
+    database, which is the one that book reads, and the laboratory is not touched."""
+    from tradelab.config import Settings
+
+    monkeypatch.setenv("TRADELAB_APP_BOOK", "live")
+    s = Settings()
+    assert s.app_database_url == s.live_database_url != s.database_url
+    monkeypatch.setenv("TRADELAB_APP_BOOK", "sim")
+    assert Settings().app_database_url == Settings().database_url
+    monkeypatch.setenv("TRADELAB_APP_BOOK", "real")
+    with pytest.raises(ValueError):
+        Settings()
+
+
+@pytest.mark.fast
+def test_the_ladder_screen_says_when_it_is_real_money(client: TestClient) -> None:
+    markup = client.get("/static/index.html").text
+    assert "REAL MONEY" in markup
+    assert client.get("/api/ladder").status_code == 401

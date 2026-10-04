@@ -62,7 +62,7 @@
     <h1>Home</h1>
     <p class="sub">Quantitative research laboratory · single operator</p>
 
-    <h2 class="section">BTC ladder<span class="note" id="ladder-note"></span></h2>
+    <h2 class="section">BTC ladder <span id="ladder-book"></span><span class="note" id="ladder-note"></span></h2>
     <div class="cards context" id="ladder-cards"></div>
     <div class="actions">
       <button class="act" id="buy-part">Buy one part now</button>
@@ -147,7 +147,9 @@ function renderBook(book) {
       <div class="k">${c.k}</div>
     </div>`).join("");
 
-  $("book-note").textContent = book.snapshots
+  $("book-note").textContent = book.positions.some((p) => p.mode === "live")
+    ? "REAL MONEY on Binance. Nothing here has been validated (§15)."
+    : book.snapshots
     ? "Simulator, fake capital. Nothing here has been validated (§15)."
     : book.fills === 0 ? "Nothing has executed."
     : `${book.fills.toLocaleString()} fills folded.`;
@@ -184,7 +186,7 @@ function renderBook(book) {
       <td>${!p.can_close ? "" : p.close_pending
         ? `<button class="exit" disabled>Closing…</button>`
         : `<button class="exit" data-run="${escape(p.run_id)}" data-asset="${escape(p.asset)}"
-             data-side="${escape(p.side)}">Close</button>`}</td>
+             data-side="${escape(p.side)}" data-mode="${escape(p.mode)}">Close</button>`}</td>
     </tr>`).join("");
   document.querySelectorAll("button.exit[data-run]").forEach((b) =>
     b.addEventListener("click", () => closePosition(b)));
@@ -195,8 +197,9 @@ function renderBook(book) {
 }
 
 async function closePosition(button) {
-  const { run, asset, side } = button.dataset;
-  if (!confirm(`Close the ${side} position in ${asset} at market now?\n\n` +
+  const { run, asset, side, mode } = button.dataset;
+  if (!confirm(`${mode === "live" ? "REAL MONEY on Binance.\n\n" : ""}` +
+               `Close the ${side} position in ${asset} at market now?\n\n` +
                "Every part is sold, even at a loss, marked MANUAL, and buying pauses " +
                "24 hours.")) return;
   button.disabled = true;
@@ -218,6 +221,9 @@ const pct = (v, d = 2) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(d)
 
 async function renderLadder() {
   const l = await api("/api/ladder");
+  const BOOK = { live: ["live", "REAL MONEY"], demo: ["testnet", "DEMO"], sim: ["simulator", "SIMULATOR"] };
+  const [badge, label] = BOOK[l.book] || BOOK.sim;
+  $("ladder-book").innerHTML = `<span class="mode ${badge}">${label}</span>`;
   if (!l.available) {
     $("ladder-note").textContent = "The book has not published yet.";
     $("ladder-cards").innerHTML = ""; $("ladder").innerHTML = "";
@@ -272,7 +278,7 @@ async function renderLadder() {
     </tr>`).join("")
     : `<tr><td colspan="11"><p class="empty-why">No part is held.</p></td></tr>`;
   document.querySelectorAll("button.exit[data-part]").forEach((b) => b.addEventListener(
-    "click", () => manualSell(b, l.parts.find((p) => p.opened === b.dataset.part))));
+    "click", () => manualSell(b, l.parts.find((p) => p.opened === b.dataset.part), l.book)));
 
   const sales = l.sales || [];
   $("sales-note").textContent = `${l.realised_sales} in this run`
@@ -296,8 +302,10 @@ async function renderLadder() {
   if (pending.length) renderLadder.poll = setTimeout(renderLadder, 3000);
 }
 
+const realMoney = (book) => book === "live" ? "REAL MONEY on Binance.\n\n" : "";
+
 async function manualBuy(l) {
-  if (!confirm(`Buy one part now at market?\n\nAbout ${usd(l.next_part_size)} at BTC `
+  if (!confirm(`${realMoney(l.book)}Buy one part now at market?\n\nAbout ${usd(l.next_part_size)} at BTC `
       + `${usd(l.price)}. Marked MANUAL; it then sells by the same rules as any part.`)) return;
   $("buy-part").disabled = true;
   try {
@@ -308,10 +316,10 @@ async function manualBuy(l) {
   renderLadder();
 }
 
-async function manualSell(button, p) {
+async function manualSell(button, p, book) {
   if (!p) return;
   const loss = p.gain < 0 ? "\n\nThis realises a LOSS." : "";
-  if (!confirm(`Sell the part bought at ${usd(p.bought_at)} at market now?\n\n`
+  if (!confirm(`${realMoney(book)}Sell the part bought at ${usd(p.bought_at)} at market now?\n\n`
       + `Net now: ${pct(p.gain)} (${usd(p.value)} for ${usd(p.spent)} spent).${loss}`
       + "\n\nMarked MANUAL. Buying is not paused.")) return;
   button.disabled = true;

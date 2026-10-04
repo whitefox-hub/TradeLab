@@ -89,7 +89,8 @@ class ApprovalRequest(BaseModel):
     notes: str | None = None
 
 
-LADDER_STATUS = Path(__file__).resolve().parents[2] / "data/forward/btc-ladder/status.json"
+FORWARD = Path(__file__).resolve().parents[2] / "data/forward"
+LADDER_DIRS = {"sim": "btc-ladder", "demo": "btc-ladder-demo", "live": "btc-ladder-live"}
 
 
 PER_PAGE = 100
@@ -110,7 +111,8 @@ def _plain(value: Any) -> str:
 
 def create_app(engine: sa.Engine | None = None, settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
-    engine = engine or sa.create_engine(settings.database_url)
+    engine = engine or sa.create_engine(settings.app_database_url)
+    ladder_status = FORWARD / LADDER_DIRS[settings.app_book] / "status.json"
     make_session = sessionmaker(engine, expire_on_commit=False)
 
     secret = os.environ.get("TRADELAB_SESSION_SECRET", "")
@@ -680,19 +682,18 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
     def ladder(who: Operator = operator, session: Session = session_dep) -> dict[str, Any]:
         """The BTC ladder as its book last published it: read, never computed (§20.1), with
         the manual buys and sells it has not answered yet."""
-        path = LADDER_STATUS
-        if not path.exists():
-            return {"available": False}
-        status_ = json.loads(path.read_text())
+        if not ladder_status.exists():
+            return {"available": False, "book": settings.app_book}
+        status_ = json.loads(ladder_status.read_text())
         age = (datetime.now(UTC) - datetime.fromisoformat(status_["as_of"])).total_seconds()
-        return {"available": True, "age_seconds": round(age), **status_,
-                "pending": _pending_manual(session, status_["run_id"])}
+        return {"available": True, "age_seconds": round(age), "book": settings.app_book,
+                **status_, "pending": _pending_manual(session, status_["run_id"])}
 
     def _ladder_run(session: Session) -> dict[str, Any]:
         """The ladder's published status, if its run is the one running."""
-        if not LADDER_STATUS.exists():
+        if not ladder_status.exists():
             raise HTTPException(status.HTTP_404_NOT_FOUND, "the ladder has not published")
-        status_ = json.loads(LADDER_STATUS.read_text())
+        status_ = json.loads(ladder_status.read_text())
         state = session.execute(sa.text("SELECT status FROM runs WHERE id = :r"),
                                 {"r": status_["run_id"]}).scalar()
         if state != "running":

@@ -34,6 +34,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import httpx
+from sqlalchemy.exc import NoResultFound
 
 from tradelab.config import get_settings
 from tradelab.execution.adapters import SimulatedAdapter, VenueAdapter
@@ -77,6 +78,26 @@ def hold_the_book(state_dir: Path):
 def database_url(settings) -> str:
     """Real money in the live database, everything else in the laboratory's; never crossed."""
     return settings.live_database_url if MODE is ExecutionMode.LIVE else settings.database_url
+
+
+def live_missing(store: Store) -> str | None:
+    """What the live database lacks before real money can trade, or None. Its own risk limits
+    and its own strategy setting: nothing is borrowed from the laboratory."""
+    try:
+        store.active_limits()
+    except NoResultFound:
+        return "the live database has no risk limits (risk_limit_configs)"
+    if store.setting(SETTING) is None:
+        return f"the live database has no '{SETTING}' setting (budget, parts, step...)"
+    return None
+
+
+def capital(cfg: lad.Config) -> Decimal:
+    """The account the risk limits are measured against: the $10,000 fake one in the simulator
+    and on Demo; with real money, the real budget, nothing invented."""
+    return Decimal(str(cfg.budget)) if MODE is ExecutionMode.LIVE else CAPITAL
+
+
 IMPL = Path("tradelab/strategy/btc_ladder.py")
 POLL_S = 10
 SNAPSHOT_S = 300
@@ -112,6 +133,7 @@ class Book:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         self.store = store
         self.cfg = cfg
+        self.capital = capital(cfg)
         limits_id, self.limits = store.active_limits()
         strategy = store.ensure_strategy("btc-ladder", IMPL)
         self.run_id = store.ensure_run(strategy, LABEL, {
@@ -120,9 +142,9 @@ class Book:
                     f"held; each sells on a {cfg.trail:.2%} pullback once at its "
                     "time-scaled minimum, at its cap at the latest; never at a loss",
             "config": asdict(cfg),
-            "budget": cfg.budget, "capital_is_fake": True, "mode": str(MODE),
-            "prices": REST},
-            CAPITAL, limits_id, str(MODE))
+            "budget": cfg.budget, "capital_is_fake": MODE is not ExecutionMode.LIVE,
+            "mode": str(MODE), "prices": REST},
+            self.capital, limits_id, str(MODE))
         path = STATE_DIR / "state.json"
         raw = json.loads(path.read_text()) if path.exists() else {}
         s = raw.get("state", {})
@@ -147,8 +169,9 @@ class Book:
                      venue_trade_id=f.get("venue_trade_id", "")) for f in raw.get("fills", []))
             adapter._held.update({k: Decimal(v) for k, v in raw.get("held", {}).items()})
         self.adapter = adapter
-        account = AccountState(equity=CAPITAL, peak_equity=Decimal(raw.get("peak", CAPITAL)),
-                               day_start_equity=Decimal(raw.get("day_start", CAPITAL)))
+        account = AccountState(equity=self.capital,
+                               peak_equity=Decimal(raw.get("peak", self.capital)),
+                               day_start_equity=Decimal(raw.get("day_start", self.capital)))
         self.engine = ExecutionEngine(run_id=str(self.run_id)[:8], mode=MODE,
                                       adapter=self.adapter, risk=RiskEngine(self.limits, account),
                                       instruments={SYMBOL: inst},
@@ -169,7 +192,7 @@ class Book:
 
     def equity(self, price: Decimal) -> Decimal:
         p = self.engine.account.positions.get(SYMBOL)
-        return CAPITAL + ((p.realised_pnl + p.unrealised(price)) if p else Decimal(0))
+        return self.capital + ((p.realised_pnl + p.unrealised(price)) if p else Decimal(0))
 
     def order(self, side: Side, quantity: float, price: Decimal, now: datetime,
               note: str = "") -> Fill | None:
@@ -401,7 +424,7 @@ def start(store: Store, inst: Instrument, adapter: VenueAdapter | None = None) -
         if adapter is not None:
             old = json.loads((STATE_DIR / "state.json").read_text())["state"]["config"]
             book_run = store.ensure_run(store.ensure_strategy("btc-ladder", IMPL), LABEL, {},
-                                        CAPITAL, store.active_limits()[0], str(MODE))
+                                        capital(cfg), store.active_limits()[0], str(MODE))
             store.end(book_run, f"configuration changed from {old} to {asdict(cfg)}; "
                                 "parts carried to the next run")
             return Book(store, inst, cfg, adapter, carry=True)
@@ -420,15 +443,12 @@ def main() -> int:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--venue", choices=VENUES, default="sim")
     args = parser.parse_args()
-    if args.venue == "live":
-        raise SystemExit("live is not enabled: the laboratory's risk limits were set for a "
-                         "$10,000 fake account and would stop a real $2,000 one at its first "
-                         "correction, and the live database has none yet. Decide the real "
-                         "account's limits and create them there first.")
     configure(args.venue)
     lock = hold_the_book(STATE_DIR)  # noqa: F841 - held until the process exits
     client = httpx.Client(timeout=30.0)
     store = Store(database_url(get_settings()))
+    if MODE is ExecutionMode.LIVE and (missing := live_missing(store)):
+        raise SystemExit(f"live cannot start: {missing}")
     adapter = None
     if MODE is not ExecutionMode.SIMULATOR:
         adapter = BinanceSpotAdapter.from_environment(MODE, symbols=[SYMBOL])
