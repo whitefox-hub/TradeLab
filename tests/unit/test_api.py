@@ -88,7 +88,9 @@ def test_every_read_requires_a_session(client: TestClient) -> None:
     for path in ("/api/me", "/api/strategies", "/api/runs", "/api/gates",
                  "/api/approvals", "/api/audit", "/api/universe"):
         response = client.get(path)
-        assert response.status_code == 401, f"{path} answered without a session"
+        assert response.status_code == 403, f"{path} answered without a session"
+        # Never 401: behind Nginx's basic auth it makes the browser ask that password again.
+        assert response.headers["X-Sign-In"] == "required"
 
 
 @pytest.mark.fast
@@ -97,7 +99,7 @@ def test_recording_an_approval_requires_a_session(client: TestClient) -> None:
         "subject_kind": "strategy", "subject_id": str(uuid.uuid4()),
         "decision": "approve", "gate_config_id": str(uuid.uuid4()),
     })
-    assert response.status_code == 401
+    assert response.status_code == 403
 
 
 @pytest.mark.fast
@@ -172,7 +174,7 @@ def test_signing_in_with_the_wrong_password_says_nothing_useful(
     Distinguishing them tells an attacker which half they got right."""
     response = live_client.post(
         "/api/session", json={"email": "nobody@example.com", "password": "wrong"})
-    assert response.status_code == 401
+    assert response.status_code == 403
     assert response.json()["detail"] == "invalid credentials"
 
 
@@ -1051,4 +1053,4 @@ def test_the_app_serving_the_real_book_uses_only_the_live_database(monkeypatch) 
 def test_the_ladder_screen_says_when_it_is_real_money(client: TestClient) -> None:
     markup = client.get("/static/index.html").text
     assert "REAL MONEY" in markup
-    assert client.get("/api/ladder").status_code == 401
+    assert client.get("/api/ladder").status_code == 403

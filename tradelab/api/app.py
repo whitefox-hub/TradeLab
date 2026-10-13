@@ -159,7 +159,8 @@ def create_app(engine: sa.Engine | None = None, settings: Settings | None = None
         expected = os.environ.get("TRADELAB_ADMIN_HASH", "")
         salt = os.environ.get("TRADELAB_ADMIN_SALT", "")
         if row is None or not expected or not verify_password(body.password, salt, expected):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+            # 403, not 401: a 401 would drop the browser's Nginx password (security.py).
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid credentials")
         response.set_cookie(
             SESSION_COOKIE, sessions.issue(row.email), httponly=True, samesite="strict",
             max_age=int(SESSION_MAX_AGE.total_seconds()),

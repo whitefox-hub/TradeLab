@@ -16,6 +16,8 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 SESSION_COOKIE = "tradelab_session"
 SESSION_MAX_AGE = timedelta(hours=8)
+# Marks a 403 that means "no session" (send to the sign-in page), not "not allowed".
+SIGN_IN_HEADER = "X-Sign-In"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +68,12 @@ def operator_dependency(sessions: Sessions):
     ) -> Operator:
         operator = sessions.read(token) if token else None
         if operator is None:
+            # Not 401: behind Nginx's basic auth a 401 makes the browser drop the first
+            # lock's password and ask for it again on the next page.
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="sign in required before a decision can be recorded",
+                headers={SIGN_IN_HEADER: "required"},
             )
         return operator
 

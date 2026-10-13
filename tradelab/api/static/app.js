@@ -53,7 +53,7 @@ async function api(path, options = {}) {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" }, ...options,
   });
-  if (response.status === 401) {
+  if (response.headers.get("X-Sign-In") === "required") {
     location.replace("/login?next=" + encodeURIComponent(location.pathname));
     throw new Error("unauthenticated");
   }
@@ -74,7 +74,7 @@ const PER_PAGE = 100;
 
 async function apiPage(path) {
   const response = await fetch(path, { credentials: "same-origin" });
-  if (response.status === 401) {
+  if (response.headers.get("X-Sign-In") === "required") {
     location.replace("/login?next=" + encodeURIComponent(location.pathname));
     throw new Error("unauthenticated");
   }
