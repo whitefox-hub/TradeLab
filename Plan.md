@@ -8,7 +8,7 @@
 ## Current state — 2026-10-01
 
 **Real money since 2026-10-04 17:56 UTC.** The ladder runs live on Binance spot (sub-account,
-$2,000 in 20 parts of $100), on the Contabo server as `tradelab-ladder@live`, with its own
+$2,000, since 2026-10-22 in 10 parts of ~$200 with a 1.25% step; 20 parts of $100 and 1.5% before), on the Contabo server as `tradelab-ladder@live`, with its own
 database `tradelab_live`, its own risk limits (`real-btc-ladder-2000`: up to 100% of the budget
 in BTC, no drawdown or daily-loss halt, $5,000 absolute cap, the technical limits unchanged) and
 a key that can trade but not withdraw, held to the server's IP. The simulator and Demo books
@@ -16,14 +16,14 @@ were stopped the same day, their runs ended and their history kept. The operator
 https://tradelab.odenis-corp.com serves the live book (`TRADELAB_APP_BOOK=live`).
 
 **One strategy runs: the BTC ladder**, designed by the operator. It splits its budget into
-parts (now 20), each bought at its own price and sold on its own, and never sells at a loss.
+parts (now 10), each bought at its own price and sold on its own, and never sells at a loss.
 
 | Rule | |
 |---|---|
-| Entry | the ladder adapts both ways. Down: a new part each time the price is **1.5%** below the cheapest part held. On a correction: a new part each time the price falls **5%** from its high since the last buy (or the last full exit), at least 1.5% from every part held. The first part is bought at once on the first start |
+| Entry | the ladder adapts both ways. Down: a new part each time the price is **1.25%** below the cheapest part held. On a correction: a new part each time the price falls **5%** from its high since the last buy (or the last full exit), at least 1.25% from every part held. The first part is bought at once on the first start |
 | Exit | a part's minimum net gain grows with the days held: under 15 days +1%, 15–29 +3%, 30–44 +5%, 45–59 +8%, 60–89 +12%, 90 and over +20%. Once there it follows its high and sells on a 2% pullback, never below the minimum, and always at its cap (twice the minimum, at least +10%) |
 | Never at a loss | a part below its minimum waits, however long it takes |
-| Size | one part is the budget divided by the number of parts (now **$2,000 in 20 parts of $100**), grown by every realised profit, inside a $10,000 fake account so the parts stay within the active risk limits (§14.1); a part must be at least $50 |
+| Size | one part is the budget divided by the number of parts (now **$2,000 in 10 parts of ~$200**), grown by every realised profit, inside a $10,000 fake account so the parts stay within the active risk limits (§14.1); a part must be at least $50 |
 | Costs | Binance spot: 0.10% fee and 1.5 bp slippage on each side, checked every 10 seconds |
 
 | Where | |
@@ -35,16 +35,24 @@ parts (now 20), each bought at its own price and sold on its own, and never sell
 | Start / stop / status | `./tradelab.sh start` · `stop` · `status` (database, capture, the app, the book) |
 | Where it runs | since 2026-10-04 the books (simulator and Demo) and the app run on the Contabo server, not on the development machine, so a reboot or a sleeping laptop no longer stops them: user `trade_lab`, `/home/trade_lab/TradeLab`, systemd units `tradelab-app` and `tradelab-ladder@sim` / `@demo` (restart on failure and at boot), Postgres in Docker on 127.0.0.1 (`/home/trade_lab/deploy`), nightly dumps of both databases and the books state to `/var/backups/tradelab` (30 days). The app is reached through `ssh -L 8010:localhost:8010`. Locally `./tradelab.sh start` no longer starts the books unless `TRADELAB_RUN_BOOKS=1`: two copies on one Demo account would each act on their own parts |
 | Screen | `http://127.0.0.1:8010/home`: the position and its P&L; the **BTC ladder** card (price, the high since the last buy, the next buy down and on a correction, and every part's cost, gain, minimum, cap and sell point, published by the book every 10 s and read by `/api/ladder`); a **Close** button that sells every part at market, even at a loss, and pauses buying for 24 hours; **Buy one part now** and a **Sell** button on each part, at market, the sale even at a loss after a confirmation that shows the gain, without pausing anything; the ladder's sales with how each part came in and went out. Whatever the operator does by hand is marked **MANUAL** on the part, the sale, the order's intent and the audit trail, and a part bought by hand then sells by the same rules as any other |
-| Parameters | `http://127.0.0.1:8010/parameters`: budget, parts, step, correction and pullback (now $2,000, 20, 1.5%, 5%, 2%), validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
+| Parameters | `http://127.0.0.1:8010/parameters`: budget, parts, step, correction and pullback (now $2,000, 10, 1.25%, 5%, 2%), validated as typed and on the server. Saving ends the run and starts a new one under the new numbers within a minute; the time-scaled minimums are fixed in the code. The screen offers nothing else |
 | Other screens | Audit and Risk limits, which page their lists 100 records at a time |
 
-**What the history says about it** (BTC spot hourly closes, $10,000, the settings now in force:
+**What the history says about it** (BTC spot hourly closes, $10,000, the settings in force until 2026-10-22:
 20 parts, 1.5% step, 5% correction, 2% pullback): 2018-01 → 2026-09, $56,557 against $61,242
 for holding BTC, with a worst drawdown of −65% against −77%; 2022-01 → 2026-09, $19,424
 against $18,176, with −54% against −67%; 813 sales in 8.7 years, on average 64% of the money
 in BTC. Sales rarely coincide. The parameters were tuned with the operator on these same
 years, so these figures flatter it; a walk-forward of the tuning (choosing each year
 from the years before it) earned less than any fixed choice. The forward run is the test.
+
+**Why 10 parts and 1.25% since 2026-10-22** (BTCUSDT 1-minute candles 2020-01 → 2026-10, chosen on
+2020-23 and checked on 2024-26, simulator outside the repository in `../TradeLab-sim`): over
+4-month windows of 2024-26 it ended positive as often as 20 × 1.5% (73%) with a typical window of
++8.8% against +4.8%, at the cost of a worst window of −22% against −13% and a shallower ladder
+(full at about −11%). Over the whole history, without restarting, $2,000 became $11,980 against
+$7,390. A buyback after each sale (1% under the sale price) earned more in sideways weeks but
+trapped much more money in falls, so it was left out.
 
 The ladder replaced the **BTC +1%** book (one position, sold at +1%, bought again at once),
 whose run is ended in the database.
