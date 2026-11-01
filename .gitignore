@@ -13,3 +13,5 @@ Run.md
 .env
 *.duckdb
 logs/
+# Local strategy simulations (data and results, not part of the app).
+simulator/
