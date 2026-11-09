@@ -3,7 +3,9 @@
 The budget is split into PARTS equal parts, each bought at its own price and sold on its own:
 
 The numbers in `Config` are the operator's, set on the Parameters screen; the time-scaled
-minimums are fixed here.
+minimums are fixed here. SIZES, when set, makes the parts unequal: the n-th part held is
+bought with the n-th size's share of the budget, so the deeper rungs can be bigger. Parts sell
+from the cheapest up, so a rung bought again gets its own size back.
 
 * **Entry.** The ladder adapts to the price both ways. Down: a new part each time the price is
   STEP below the cheapest part held. Up: a new part after each REENTRY correction from the high
@@ -30,6 +32,7 @@ class Config:
     step: float = 0.015
     reentry: float = 0.05
     trail: float = 0.02
+    sizes: tuple[float, ...] = ()
 
     @classmethod
     def from_setting(cls, value: dict | None) -> Config:
@@ -37,7 +40,12 @@ class Config:
             return cls()
         return cls(float(value.get("budget", cls.budget)), int(value["parts"]),
                    value["step_pct"] / 100, value["correction_pct"] / 100,
-                   value["trail_pct"] / 100)
+                   value["trail_pct"] / 100, tuple(float(s) for s in value.get("sizes", ())))
+
+    @classmethod
+    def from_saved(cls, value: dict) -> Config:
+        """The config as a book's state file saved it (sizes come back from JSON as a list)."""
+        return cls(**{**value, "sizes": tuple(value.get("sizes", ()))})
 
 
 DEFAULT = Config()
@@ -95,5 +103,10 @@ def buy_now(parts: list[Part], price: float, armed: bool, cfg: Config = DEFAULT)
 
 
 def part_size(cash: float, parts: list[Part], cfg: Config = DEFAULT) -> float:
-    """One part: a `parts`-th of the budget (cash plus the cost of the parts held)."""
-    return min(cash, (cash + sum(p.spent for p in parts)) / cfg.parts)
+    """One part: a `parts`-th of the budget (cash plus the cost of the parts held), or with
+    SIZES the next rung's share of it."""
+    budget = cash + sum(p.spent for p in parts)
+    if cfg.sizes:
+        return min(cash, budget * cfg.sizes[min(len(parts), len(cfg.sizes) - 1)]
+                   / sum(cfg.sizes))
+    return min(cash, budget / cfg.parts)

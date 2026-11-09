@@ -26,6 +26,7 @@ class Rule:
     fields: tuple[str, ...]
     check: Callable[[dict], None]
     describes: str
+    optional: tuple[str, ...] = ()
 
 
 def max_history_years(now: datetime | None = None) -> int:
@@ -129,8 +130,17 @@ def _number(value: dict, name: str, low: float, high: float, whole: bool = False
 def _btc_ladder(value: dict) -> None:
     budget = _number(value, "budget", 100, 10_000)
     _number(value, "parts", 1, 50, whole=True)
-    if budget / value["parts"] < 50:
-        raise Invalid(f"a part would be ${budget / value['parts']:,.2f}; the risk limits refuse "
+    smallest = budget / value["parts"]
+    if "sizes" in value:
+        sizes = value["sizes"]
+        if not isinstance(sizes, list) or not all(
+                isinstance(s, int | float) and not isinstance(s, bool) and s > 0 for s in sizes):
+            raise Invalid("sizes must be a list of positive amounts, one per part")
+        if len(sizes) != value["parts"]:
+            raise Invalid(f"sizes has {len(sizes)} amounts for {value['parts']} parts")
+        smallest = budget * min(sizes) / sum(sizes)
+    if smallest < 50:
+        raise Invalid(f"a part would be ${smallest:,.2f}; the risk limits refuse "
                       "positions under $50 (0.5% of the $10,000 account): raise the budget "
                       "or use fewer parts")
     step = _number(value, "step_pct", 0.5, 20)
@@ -144,7 +154,9 @@ RULES: dict[str, Rule] = {
     "btc_ladder": Rule(("budget", "parts", "step_pct", "correction_pct", "trail_pct"),
                        _btc_ladder,
                        "budget 100-10000 USDT; parts 1-50 (at least $50 each); "
-                       "step_pct 0.5-20; correction_pct 0.5-30; trail_pct 0.5-20"),
+                       "step_pct 0.5-20; correction_pct 0.5-30; trail_pct 0.5-20; "
+                       "optionally sizes, one amount per part (their shares of the budget)",
+                       optional=("sizes",)),
     "history_years": Rule(("years",), _history_years,
                           "a whole number of years, 1 to what the archive holds"),
     "research_universe": Rule(("assets",), _research_universe,
@@ -169,8 +181,9 @@ def validate(key: str, value: Any) -> None:
     missing = [f for f in rule.fields if f not in value]
     if missing:
         raise Invalid(f"missing {missing}; expected {rule.describes}")
-    extra = sorted(set(value) - set(rule.fields))
+    extra = sorted(set(value) - set(rule.fields) - set(rule.optional))
     if extra:
-        raise Invalid(f"unknown fields {extra}; expected only {list(rule.fields)}")
+        raise Invalid(f"unknown fields {extra}; expected only "
+                      f"{list(rule.fields + rule.optional)}")
 
     rule.check(value)

@@ -137,7 +137,9 @@ class Book:
         limits_id, self.limits = store.active_limits()
         strategy = store.ensure_strategy("btc-ladder", IMPL)
         self.run_id = store.ensure_run(strategy, LABEL, {
-            "rule": f"{cfg.parts} parts, a new one every {cfg.step:.2%} lower or after each "
+            "rule": f"{cfg.parts} parts"
+                    f"{' sized ' + ', '.join(f'{s:g}' for s in cfg.sizes) if cfg.sizes else ''}"
+                    f", a new one every {cfg.step:.2%} lower or after each "
                     f"{cfg.reentry:.2%} correction at least {cfg.step:.2%} from every part "
                     f"held; each sells on a {cfg.trail:.2%} pullback once at its "
                     "time-scaled minimum, at its cap at the latest; never at a loss",
@@ -178,7 +180,7 @@ class Book:
                                       intents=IntentLog.load(STATE_DIR / "intents.jsonl"))
         divergences = self.engine.recover(datetime.now(UTC))
         held = sum(p.quantity for p in self.parts)
-        if s.get("config") and s["config"] != asdict(cfg):
+        if s.get("config") and lad.Config.from_saved(s["config"]) != cfg:
             if not carry:
                 raise ConfigChanged
             self.cash = max(0.0, self.cash + cfg.budget - s["config"]["budget"])

@@ -126,8 +126,11 @@ function fill(values) {
   refresh();
 }
 
+// Unequal parts (sizes) are set outside this form; they are kept while the number of parts is.
 function read() {
-  return Object.fromEntries(FIELDS.map((f) => [f, num($(`f-${f}`).value)]));
+  const v = Object.fromEntries(FIELDS.map((f) => [f, num($(`f-${f}`).value)]));
+  if (current.sizes && current.sizes.length === v.parts) v.sizes = current.sizes;
+  return v;
 }
 
 function refresh() {
@@ -143,14 +146,23 @@ function refresh() {
   }
   const ok = problems.length === 0;
   if (ok && v.step_pct * (v.parts - 1) >= 100) problems.push("the last part would be bought at zero");
-  if (ok && v.budget / v.parts < 50) {
-    problems.push(`a part would be $${(v.budget / v.parts).toFixed(2)}; the minimum is $50`);
+  const smallest = v.sizes
+    ? v.budget * Math.min(...v.sizes) / v.sizes.reduce((a, b) => a + b, 0) : v.budget / v.parts;
+  if (ok && smallest < 50) {
+    problems.push(`a part would be $${smallest.toFixed(2)}; the minimum is $50`);
   }
   if (ok) {
     const last = 1 - Math.pow(1 - v.step_pct / 100, v.parts - 1);
-    $("preview").innerHTML = `Each part is <strong>1/${v.parts}</strong> of the budget
+    const total = v.sizes && v.sizes.reduce((a, b) => a + b, 0);
+    $("preview").innerHTML = (v.sizes
+      ? `The parts are unequal, in order: <strong>${v.sizes.map((s) =>
+          "$" + (v.budget * s / total).toFixed(2)).join(", ")}</strong> of
+        $${v.budget.toLocaleString()} to start.`
+      : `Each part is <strong>1/${v.parts}</strong> of the budget
       (<strong>$${(v.budget / v.parts).toFixed(2)}</strong> of
-      $${v.budget.toLocaleString()} to start). Going down,
+      $${v.budget.toLocaleString()} to start).`)
+      + (current.sizes && !v.sizes ? " Changing the number of parts makes them equal again." : "")
+      + ` Going down,
       all ${v.parts} parts are held once BTC is <strong>${(last * 100).toFixed(1)}%</strong>
       below the first. A part sells on a <strong>${v.trail_pct}%</strong> pullback once at its
       minimum; a new part is also bought on every <strong>${v.correction_pct}%</strong>
@@ -190,8 +202,8 @@ async function history(page) {
   pager("pager", page, total, history);
   $("history").innerHTML = history.length ? history.map((h) => `
     <tr><td>${escape(h.valid_from.slice(0, 16).replace("T", " "))}</td>
-      <td>${escape(FIELDS.filter((f) => f in h.value).map((f) => `${f} ${h.value[f]}`)
-        .join(" · "))}</td>
+      <td>${escape([...FIELDS, "sizes"].filter((f) => f in h.value)
+        .map((f) => `${f} ${h.value[f]}`).join(" · "))}</td>
       <td>${escape(h.changed_by || "—")}</td><td>${escape(h.rationale)}</td></tr>`).join("")
     : `<tr><td colspan="4" class="empty">No change recorded: the strategy's defaults are in
         force ($1,000, 10 parts, 1.5% step, 5% correction, 2% pullback).</td></tr>`;

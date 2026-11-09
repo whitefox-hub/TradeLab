@@ -1,5 +1,6 @@
 """The BTC ladder's rules, one at a time."""
 
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
 from tradelab.strategy import btc_ladder as lad
@@ -67,6 +68,22 @@ def test_a_part_is_a_tenth_of_the_budget_including_what_is_held():
     assert lad.part_size(1_000.0, []) == 100.0
     assert lad.part_size(800.0, [part(spent=110.0), part(spent=110.0)]) == 102.0
     assert lad.part_size(50.0, [part(spent=100.0)] * 9) == 50.0
+
+
+def test_with_sizes_each_rung_takes_its_share_of_the_budget():
+    cfg = lad.Config(budget=1_500.0, parts=4, sizes=(250.0, 250.0, 500.0, 500.0))
+    assert lad.part_size(1_500.0, [], cfg) == 250.0
+    assert lad.part_size(1_000.0, [part(spent=250.0)] * 2, cfg) == 500.0
+    assert lad.part_size(900.0, [part(spent=300.0)] * 3, cfg) == 600.0
+    assert lad.part_size(400.0, [part(spent=300.0)] * 3, cfg) == 400.0
+
+
+def test_the_saved_config_compares_equal_after_json():
+    cfg = lad.Config(sizes=(1.0, 2.0))
+    saved = {**asdict(cfg), "sizes": [1.0, 2.0]}
+    assert lad.Config.from_saved(saved) == cfg
+    old = {k: v for k, v in asdict(lad.DEFAULT).items() if k != "sizes"}
+    assert lad.Config.from_saved(old) == lad.DEFAULT
 
 
 def test_the_ladder_also_climbs_on_a_correction_clear_of_every_part():

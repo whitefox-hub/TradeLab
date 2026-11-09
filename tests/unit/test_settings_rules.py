@@ -145,3 +145,13 @@ def test_the_ladder_settings_are_bounded() -> None:
                      ({"budget": 50}, "budget"), ({"budget": 1000, "parts": 25}, "under \\$50")):
         with pytest.raises(Invalid, match=why):
             validate("btc_ladder", {**good, **bad})
+
+
+@pytest.mark.fast
+def test_the_ladder_takes_one_size_per_part() -> None:
+    good = {"budget": 2000, "parts": 4, "step_pct": 1.5, "correction_pct": 5, "trail_pct": 2}
+    validate("btc_ladder", {**good, "sizes": [200, 200, 800, 800]})
+    for sizes, why in (([200, 200, 800], "3 amounts for 4"), ("big", "list"),
+                       ([200, 200, 800, -1], "positive"), ([10, 500, 500, 500], "under \\$50")):
+        with pytest.raises(Invalid, match=why):
+            validate("btc_ladder", {**good, "sizes": sizes})
