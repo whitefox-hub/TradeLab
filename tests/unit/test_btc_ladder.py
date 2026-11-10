@@ -86,6 +86,18 @@ def test_the_saved_config_compares_equal_after_json():
     assert lad.Config.from_saved(old) == lad.DEFAULT
 
 
+def test_a_part_sold_below_the_next_rung_is_not_bought_back_at_the_same_price():
+    # 2026-11-09: a part bought 2.7% under the next one sold at 75,519.95 and was bought
+    # again at 75,521.45, a round trip that only paid fees.
+    held = [part(76_578.01)]
+    cfg = lad.Config(step=0.0125)
+    assert lad.buy_now(held, 75_521.45, armed=False, cfg=cfg)
+    assert not lad.buy_now(held, 75_521.45, armed=False, cfg=cfg, last_sale=75_519.95)
+    assert not lad.buy_now(held, 74_600.0, armed=True, cfg=cfg, last_sale=75_519.95)
+    assert lad.buy_now(held, 74_575.0, armed=False, cfg=cfg, last_sale=75_519.95)
+    assert lad.buy_now(held, 75_600.0, armed=False, cfg=cfg, last_sale=80_000.0)
+
+
 def test_the_ladder_also_climbs_on_a_correction_clear_of_every_part():
     held = [part(100.0)]
     assert not lad.buy_now(held, 110.0, armed=False)

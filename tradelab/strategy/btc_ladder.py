@@ -10,7 +10,9 @@ from the cheapest up, so a rung bought again gets its own size back.
 * **Entry.** The ladder adapts to the price both ways. Down: a new part each time the price is
   STEP below the cheapest part held. Up: a new part after each REENTRY correction from the high
   since the last buy (or the last full exit), as long as it is at least STEP from every part
-  held. The very first part is bought at once on the first start.
+  held. The very first part is bought at once on the first start. The price of the last sale
+  counts as a part held for both: a part sold below the next rung up is not bought back at
+  the price it just sold at, only STEP under it.
 * **Exit.** A part's minimum net gain grows with the days it has been held (TIERS). Once it
   reaches that minimum it follows its highest price and sells when the price falls back TRAIL
   from it, never below the minimum, and always at its cap (twice the minimum, at least 10%).
@@ -89,16 +91,18 @@ def exit_now(part: Part, price: float, now: datetime, fee: float, slip: float,
     return price <= part.peak * (1 - cfg.trail) or (falling and gain <= floor + FLOOR_MARGIN)
 
 
-def buy_now(parts: list[Part], price: float, armed: bool, cfg: Config = DEFAULT) -> bool:
+def buy_now(parts: list[Part], price: float, armed: bool, cfg: Config = DEFAULT,
+            last_sale: float | None = None) -> bool:
     """Whether to buy a new part now. `armed`: the price has corrected REENTRY from its high
-    since the last buy or full exit."""
+    since the last buy or full exit. `last_sale`: the price the last part sold at."""
     if not parts:
         return armed
     if len(parts) >= cfg.parts:
         return False
-    if price <= min(p.price for p in parts) * (1 - cfg.step):
+    rungs = [p.price for p in parts] + ([last_sale] if last_sale else [])
+    if price <= min(rungs) * (1 - cfg.step):
         return True
-    clear = min(abs(price / p.price - 1) for p in parts) >= cfg.step
+    clear = min(abs(price / r - 1) for r in rungs) >= cfg.step
     return armed and clear
 
 

@@ -216,6 +216,9 @@ class Book:
                     / moved, sum((f.fee for f in new), Decimal(0)), new[-1].at,
                     new[-1].client_order_id)
 
+    def last_sale(self) -> float | None:
+        return self.sales[-1]["sold_at"] if self.sales else None
+
     def held(self) -> float:
         p = self.engine.account.positions.get(SYMBOL)
         return float(p.quantity) if p else 0.0
@@ -268,7 +271,7 @@ class Book:
                     (now - part.opened).total_seconds() / 86_400) else "pullback")
         self.track(px)
         paused = self.paused_until and now.isoformat() < self.paused_until
-        if not paused and lad.buy_now(self.parts, px, self.armed, self.cfg):
+        if not paused and lad.buy_now(self.parts, px, self.armed, self.cfg, self.last_sale()):
             traded |= self.buy(price, now, manual=False) is None
         return traded
 
@@ -366,6 +369,8 @@ class Book:
                 "sells_at": max(x.peak * (1 - self.cfg.trail), at(floor)) if x.peak else None})
         full = len(self.parts) >= self.cfg.parts
         cheapest = min((x.price for x in self.parts), default=None)
+        if cheapest is not None and self.last_sale():
+            cheapest = min(cheapest, self.last_sale())
         paused = bool(self.paused_until and now.isoformat() < self.paused_until)
         return {
             "as_of": now.isoformat(), "run_id": str(self.run_id), "price": px,
