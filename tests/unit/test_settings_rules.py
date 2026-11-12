@@ -155,3 +155,13 @@ def test_the_ladder_takes_one_size_per_part() -> None:
                        ([200, 200, 800, -1], "positive"), ([10, 500, 500, 500], "under \\$50")):
         with pytest.raises(Invalid, match=why):
             validate("btc_ladder", {**good, "sizes": sizes})
+
+
+@pytest.mark.fast
+def test_the_ladder_takes_one_drop_per_part_after_the_first() -> None:
+    good = {"budget": 2000, "parts": 4, "step_pct": 1.25, "correction_pct": 5, "trail_pct": 2}
+    validate("btc_ladder", {**good, "steps_pct": [1.25, 1.25, 5]})
+    for steps, why in (([1.25, 5], "2 drops for 4"), ([1.25, 1.25, 30], "0.5 and 20"),
+                       ("wide", "list")):
+        with pytest.raises(Invalid, match=why):
+            validate("btc_ladder", {**good, "steps_pct": steps})

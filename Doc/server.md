@@ -4,8 +4,8 @@ Where TradeLab runs, how it is reached, updated and stopped. No secrets here: th
 on the server, in the files named below.
 
 **Real money since 2026-10-04:** the BTC ladder trades on Binance spot (sub-account). Since
-2026-11-09, $3,725 in 14 parts with a 1.25% step: 10 of ~$182, then 3 of $500 and one of ~$458
-(a $1,725 deposit). Before: $2,000 in 10 parts of ~$200 from 2026-10-22, 20 of $100 and 1.5%
+2026-11-09, $3,725 in 14 parts: 10 of ~$182, then 3 of $500 and one of ~$458 (a $1,725
+deposit); the first 10 1.25% apart and, since 2026-11-12, the 4 big ones 5% apart. Before: $2,000 in 10 parts of ~$200 from 2026-10-22, 20 of $100 and 1.5%
 from 2026-10-04. The simulator and Demo books are stopped; their history is kept.
 
 

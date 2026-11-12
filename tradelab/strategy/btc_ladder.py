@@ -5,7 +5,9 @@ The budget is split into PARTS equal parts, each bought at its own price and sol
 The numbers in `Config` are the operator's, set on the Parameters screen; the time-scaled
 minimums are fixed here. SIZES, when set, makes the parts unequal: the n-th part held is
 bought with the n-th size's share of the budget, so the deeper rungs can be bigger. Parts sell
-from the cheapest up, so a rung bought again gets its own size back.
+from the cheapest up, so a rung bought again gets its own size back. STEPS, when set, makes
+the gaps unequal: with n parts held the next is bought the n-th step below the cheapest, so the
+deep rungs can be wider and the ladder reach further before it is full.
 
 * **Entry.** The ladder adapts to the price both ways. Down: a new part each time the price is
   STEP below the cheapest part held. Up: a new part after each REENTRY correction from the high
@@ -35,6 +37,7 @@ class Config:
     reentry: float = 0.05
     trail: float = 0.02
     sizes: tuple[float, ...] = ()
+    steps: tuple[float, ...] = ()
 
     @classmethod
     def from_setting(cls, value: dict | None) -> Config:
@@ -42,12 +45,14 @@ class Config:
             return cls()
         return cls(float(value.get("budget", cls.budget)), int(value["parts"]),
                    value["step_pct"] / 100, value["correction_pct"] / 100,
-                   value["trail_pct"] / 100, tuple(float(s) for s in value.get("sizes", ())))
+                   value["trail_pct"] / 100, tuple(float(s) for s in value.get("sizes", ())),
+                   tuple(s / 100 for s in value.get("steps_pct", ())))
 
     @classmethod
     def from_saved(cls, value: dict) -> Config:
-        """The config as a book's state file saved it (sizes come back from JSON as a list)."""
-        return cls(**{**value, "sizes": tuple(value.get("sizes", ()))})
+        """The config as a book's state file saved it (lists come back from JSON as lists)."""
+        return cls(**{**value, "sizes": tuple(value.get("sizes", ())),
+                      "steps": tuple(value.get("steps", ()))})
 
 
 DEFAULT = Config()
@@ -91,6 +96,11 @@ def exit_now(part: Part, price: float, now: datetime, fee: float, slip: float,
     return price <= part.peak * (1 - cfg.trail) or (falling and gain <= floor + FLOOR_MARGIN)
 
 
+def down_step(held: int, cfg: Config = DEFAULT) -> float:
+    """The drop under the cheapest rung that buys the next part when HELD parts are held."""
+    return cfg.steps[min(held, len(cfg.steps)) - 1] if cfg.steps and held else cfg.step
+
+
 def buy_now(parts: list[Part], price: float, armed: bool, cfg: Config = DEFAULT,
             last_sale: float | None = None) -> bool:
     """Whether to buy a new part now. `armed`: the price has corrected REENTRY from its high
@@ -100,7 +110,7 @@ def buy_now(parts: list[Part], price: float, armed: bool, cfg: Config = DEFAULT,
     if len(parts) >= cfg.parts:
         return False
     rungs = [p.price for p in parts] + ([last_sale] if last_sale else [])
-    if price <= min(rungs) * (1 - cfg.step):
+    if price <= min(rungs) * (1 - down_step(len(parts), cfg)):
         return True
     clear = min(abs(price / r - 1) for r in rungs) >= cfg.step
     return armed and clear

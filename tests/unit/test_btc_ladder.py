@@ -79,11 +79,23 @@ def test_with_sizes_each_rung_takes_its_share_of_the_budget():
 
 
 def test_the_saved_config_compares_equal_after_json():
-    cfg = lad.Config(sizes=(1.0, 2.0))
-    saved = {**asdict(cfg), "sizes": [1.0, 2.0]}
+    cfg = lad.Config(sizes=(1.0, 2.0), steps=(0.01, 0.05))
+    saved = {**asdict(cfg), "sizes": [1.0, 2.0], "steps": [0.01, 0.05]}
     assert lad.Config.from_saved(saved) == cfg
-    old = {k: v for k, v in asdict(lad.DEFAULT).items() if k != "sizes"}
+    old = {k: v for k, v in asdict(lad.DEFAULT).items() if k not in ("sizes", "steps")}
     assert lad.Config.from_saved(old) == lad.DEFAULT
+
+
+def test_with_steps_each_part_has_its_own_drop():
+    cfg = lad.Config(parts=4, step=0.0125, steps=(0.0125, 0.0125, 0.05))
+    assert lad.down_step(1, cfg) == 0.0125
+    assert lad.down_step(3, cfg) == 0.05
+    held = [part(100.0), part(98.75), part(97.52)]
+    assert not lad.buy_now(held, 96.30, armed=False, cfg=cfg)
+    assert lad.buy_now(held, 97.52 * 0.95, armed=False, cfg=cfg)
+    assert lad.Config.from_setting({"parts": 4, "step_pct": 1.25, "correction_pct": 5,
+                                    "trail_pct": 2, "steps_pct": [1.25, 1.25, 5]}).steps == \
+        (0.0125, 0.0125, 0.05)
 
 
 def test_a_part_sold_below_the_next_rung_is_not_bought_back_at_the_same_price():

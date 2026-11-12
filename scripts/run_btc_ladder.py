@@ -139,7 +139,9 @@ class Book:
         self.run_id = store.ensure_run(strategy, LABEL, {
             "rule": f"{cfg.parts} parts"
                     f"{' sized ' + ', '.join(f'{s:g}' for s in cfg.sizes) if cfg.sizes else ''}"
-                    f", a new one every {cfg.step:.2%} lower or after each "
+                    f", a new one every "
+                    f"{'/'.join(f'{s:.2%}' for s in cfg.steps) if cfg.steps else f'{cfg.step:.2%}'}"
+                    f" lower or after each "
                     f"{cfg.reentry:.2%} correction at least {cfg.step:.2%} from every part "
                     f"held; each sells on a {cfg.trail:.2%} pullback once at its "
                     "time-scaled minimum, at its cap at the latest; never at a loss",
@@ -294,10 +296,10 @@ class Book:
         if manual:
             self.manual.add(now.isoformat())
         self.armed, self.high = False, float(fill.price)
-        lowest = min(p.price for p in self.parts)
+        nxt = min(p.price for p in self.parts) * (1 - lad.down_step(len(self.parts), self.cfg))
         print(f"{now:%Y-%m-%d %H:%M:%S} BUY{' (manual)' if manual else ''} part "
               f"{len(self.parts)}/{self.cfg.parts} at {fill.price} (${spent:,.2f}); next part "
-              f"at or below {lowest * (1 - self.cfg.step):,.2f}, or after a "
+              f"at or below {nxt:,.2f}, or after a "
               f"{self.cfg.reentry:.1%} correction from the high", flush=True)
         return None
 
@@ -381,7 +383,7 @@ class Book:
             "high": self.high, "armed": self.armed, "paused_until": self.paused_until,
             "correction_price": None if self.high is None else self.high * (1 - self.cfg.reentry),
             "next_down_price": None if full or cheapest is None
-            else cheapest * (1 - self.cfg.step),
+            else cheapest * (1 - lad.down_step(len(self.parts), self.cfg)),
             "full": full, "paused": paused, "parts": parts,
             "sales": self.sales[::-1][:20]}
 

@@ -146,7 +146,17 @@ def _btc_ladder(value: dict) -> None:
     step = _number(value, "step_pct", 0.5, 20)
     _number(value, "correction_pct", 0.5, 30)
     _number(value, "trail_pct", 0.5, 20)
-    if step * (value["parts"] - 1) >= 100:
+    if "steps_pct" in value:
+        steps = value["steps_pct"]
+        if not isinstance(steps, list) or not all(
+                isinstance(s, int | float) and not isinstance(s, bool) and 0.5 <= s <= 20
+                for s in steps):
+            raise Invalid("steps_pct must be a list of drops between 0.5 and 20, one per part "
+                          "after the first")
+        if len(steps) != value["parts"] - 1:
+            raise Invalid(f"steps_pct has {len(steps)} drops for {value['parts']} parts; "
+                          f"it needs {value['parts'] - 1}, one per part after the first")
+    elif step * (value["parts"] - 1) >= 100:
         raise Invalid("the last part would be bought at or below zero: lower parts or step_pct")
 
 
@@ -155,8 +165,9 @@ RULES: dict[str, Rule] = {
                        _btc_ladder,
                        "budget 100-10000 USDT; parts 1-50 (at least $50 each); "
                        "step_pct 0.5-20; correction_pct 0.5-30; trail_pct 0.5-20; "
-                       "optionally sizes, one amount per part (their shares of the budget)",
-                       optional=("sizes",)),
+                       "optionally sizes, one amount per part (their shares of the budget), "
+                       "and steps_pct, the drop that buys each part after the first",
+                       optional=("sizes", "steps_pct")),
     "history_years": Rule(("years",), _history_years,
                           "a whole number of years, 1 to what the archive holds"),
     "research_universe": Rule(("assets",), _research_universe,

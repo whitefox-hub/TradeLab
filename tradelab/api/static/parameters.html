@@ -126,10 +126,12 @@ function fill(values) {
   refresh();
 }
 
-// Unequal parts (sizes) are set outside this form; they are kept while the number of parts is.
+// Unequal parts (sizes) and gaps (steps_pct) are set outside this form; they are kept while the
+// number of parts is.
 function read() {
   const v = Object.fromEntries(FIELDS.map((f) => [f, num($(`f-${f}`).value)]));
   if (current.sizes && current.sizes.length === v.parts) v.sizes = current.sizes;
+  if (current.steps_pct && current.steps_pct.length === v.parts - 1) v.steps_pct = current.steps_pct;
   return v;
 }
 
@@ -145,14 +147,17 @@ function refresh() {
     if (bad) problems.push(`${f}: ${lo} to ${hi}${whole ? ", whole number" : ""}`);
   }
   const ok = problems.length === 0;
-  if (ok && v.step_pct * (v.parts - 1) >= 100) problems.push("the last part would be bought at zero");
+  if (ok && !v.steps_pct && v.step_pct * (v.parts - 1) >= 100) {
+    problems.push("the last part would be bought at zero");
+  }
   const smallest = v.sizes
     ? v.budget * Math.min(...v.sizes) / v.sizes.reduce((a, b) => a + b, 0) : v.budget / v.parts;
   if (ok && smallest < 50) {
     problems.push(`a part would be $${smallest.toFixed(2)}; the minimum is $50`);
   }
   if (ok) {
-    const last = 1 - Math.pow(1 - v.step_pct / 100, v.parts - 1);
+    const last = 1 - (v.steps_pct || Array(v.parts - 1).fill(v.step_pct))
+      .reduce((p, s) => p * (1 - s / 100), 1);
     const total = v.sizes && v.sizes.reduce((a, b) => a + b, 0);
     $("preview").innerHTML = (v.sizes
       ? `The parts are unequal, in order: <strong>${v.sizes.map((s) =>
@@ -161,7 +166,9 @@ function refresh() {
       : `Each part is <strong>1/${v.parts}</strong> of the budget
       (<strong>$${(v.budget / v.parts).toFixed(2)}</strong> of
       $${v.budget.toLocaleString()} to start).`)
-      + (current.sizes && !v.sizes ? " Changing the number of parts makes them equal again." : "")
+      + (v.steps_pct ? ` The gaps are unequal: each next part ${v.steps_pct.join("%, ")}% lower.` : "")
+      + ((current.sizes && !v.sizes) || (current.steps_pct && !v.steps_pct)
+        ? " Changing the number of parts makes them equal again." : "")
       + ` Going down,
       all ${v.parts} parts are held once BTC is <strong>${(last * 100).toFixed(1)}%</strong>
       below the first. A part sells on a <strong>${v.trail_pct}%</strong> pullback once at its
@@ -202,7 +209,7 @@ async function history(page) {
   pager("pager", page, total, history);
   $("history").innerHTML = history.length ? history.map((h) => `
     <tr><td>${escape(h.valid_from.slice(0, 16).replace("T", " "))}</td>
-      <td>${escape([...FIELDS, "sizes"].filter((f) => f in h.value)
+      <td>${escape([...FIELDS, "sizes", "steps_pct"].filter((f) => f in h.value)
         .map((f) => `${f} ${h.value[f]}`).join(" · "))}</td>
       <td>${escape(h.changed_by || "—")}</td><td>${escape(h.rationale)}</td></tr>`).join("")
     : `<tr><td colspan="4" class="empty">No change recorded: the strategy's defaults are in
